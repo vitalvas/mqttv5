@@ -328,21 +328,21 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ### 11.1 Session Interface
 
-- [ ] Define Session interface
-- [ ] Define session state: client ID, subscriptions, pending messages, packet ID counter
-- [ ] Define session expiry handling
+- [x] Define Session interface
+- [x] Define session state: client ID, subscriptions, pending messages, packet ID counter
+- [x] Define session expiry handling
 
 ### 11.2 Subscription State
 
-- [ ] Define Subscription struct (filter, QoS, options, identifier)
-- [ ] Implement subscription matching
+- [x] Define Subscription struct (filter, QoS, options, identifier)
+- [x] Implement subscription matching
 
 ### 11.3 Session Store Interface
 
-- [ ] Define SessionStore interface (Create, Get, Update, Delete, List)
-- [ ] Define session expiry callback interface
-- [ ] Implement in-memory session store (reference implementation)
-- [ ] Write unit/benchmark tests for session store
+- [x] Define SessionStore interface (Create, Get, Update, Delete, List)
+- [x] Define session expiry callback interface
+- [x] Implement in-memory session store (reference implementation)
+- [x] Write unit/benchmark tests for session store
 
 ## 12. QoS State Machines
 

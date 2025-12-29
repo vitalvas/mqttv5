@@ -13,11 +13,12 @@ var (
 
 // Subscription represents a topic filter with subscription options.
 type Subscription struct {
-	TopicFilter     string
-	QoS             byte
-	NoLocal         bool
-	RetainAsPublish bool
-	RetainHandling  byte
+	TopicFilter      string
+	QoS              byte
+	NoLocal          bool
+	RetainAsPublish  bool
+	RetainHandling   byte
+	SubscriptionID   uint32 // Set from SUBSCRIBE properties, used in session state
 }
 
 // SubscribePacket represents an MQTT SUBSCRIBE packet.
