@@ -393,9 +393,9 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 15. Retained Messages
 
-- [ ] Define RetainedStore interface (Set, Get, Delete, Match)
-- [ ] Implement in-memory retained store (reference implementation)
-- [ ] Write unit/benchmark tests for retained store
+- [x] Define RetainedStore interface (Set, Get, Delete, Match)
+- [x] Implement in-memory retained store (reference implementation)
+- [x] Write unit/benchmark tests for retained store
 
 ## 16. Clustering Interface
 
