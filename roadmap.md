@@ -386,10 +386,10 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 14. Will Message
 
-- [ ] Define WillMessage struct
-- [ ] Implement will delay interval handling
-- [ ] Implement will message properties
-- [ ] Write unit tests for will message
+- [x] Define WillMessage struct
+- [x] Implement will delay interval handling
+- [x] Implement will message properties
+- [x] Write unit tests for will message
 
 ## 15. Retained Messages
 
