@@ -7,8 +7,8 @@ import (
 )
 
 var (
-	ErrInvalidPacketID   = errors.New("mqttv5: invalid packet identifier")
-	ErrProtocolViolation = errors.New("mqttv5: protocol violation")
+	ErrInvalidPacketID   = errors.New("invalid packet identifier")
+	ErrProtocolViolation = errors.New("protocol violation")
 )
 
 // Subscription represents a topic filter with subscription options.

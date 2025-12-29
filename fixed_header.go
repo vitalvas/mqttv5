@@ -72,9 +72,9 @@ func (p PacketType) Valid() bool {
 
 // Fixed header errors.
 var (
-	ErrInvalidPacketType       = errors.New("mqttv5: invalid packet type")
-	ErrInvalidPacketFlags      = errors.New("mqttv5: invalid packet flags")
-	ErrRemainingLengthTooLarge = errors.New("mqttv5: remaining length too large")
+	ErrInvalidPacketType       = errors.New("invalid packet type")
+	ErrInvalidPacketFlags      = errors.New("invalid packet flags")
+	ErrRemainingLengthTooLarge = errors.New("remaining length too large")
 )
 
 // FixedHeader represents the fixed header of an MQTT control packet.

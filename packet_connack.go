@@ -8,7 +8,7 @@ import (
 
 // CONNACK packet errors.
 var (
-	ErrInvalidConnackFlags = errors.New("mqttv5: invalid CONNACK flags")
+	ErrInvalidConnackFlags = errors.New("invalid CONNACK flags")
 )
 
 // ConnackPacket represents an MQTT CONNACK packet.
@@ -139,4 +139,4 @@ func (p *ConnackPacket) Validate() error {
 }
 
 // Error variable for invalid reason code
-var ErrInvalidReasonCode = errors.New("mqttv5: invalid reason code for packet type")
+var ErrInvalidReasonCode = errors.New("invalid reason code for packet type")

@@ -8,9 +8,9 @@ import (
 
 // PUBLISH packet errors.
 var (
-	ErrTopicNameEmpty   = errors.New("mqttv5: topic name cannot be empty")
-	ErrInvalidQoS       = errors.New("mqttv5: invalid QoS level")
-	ErrPacketIDRequired = errors.New("mqttv5: packet identifier required for QoS > 0")
+	ErrTopicNameEmpty   = errors.New("topic name cannot be empty")
+	ErrInvalidQoS       = errors.New("invalid QoS level")
+	ErrPacketIDRequired = errors.New("packet identifier required for QoS > 0")
 )
 
 // PublishPacket represents an MQTT PUBLISH packet.

@@ -7,9 +7,9 @@ import (
 )
 
 var (
-	ErrPacketIDExhausted = errors.New("mqttv5: no available packet IDs")
-	ErrPacketIDNotFound  = errors.New("mqttv5: packet ID not found")
-	ErrMessageNotFound   = errors.New("mqttv5: message not found")
+	ErrPacketIDExhausted = errors.New("no available packet IDs")
+	ErrPacketIDNotFound  = errors.New("packet ID not found")
+	ErrMessageNotFound   = errors.New("message not found")
 )
 
 // PacketIDManager manages allocation and release of packet IDs (1-65535).

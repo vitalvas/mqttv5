@@ -6,8 +6,8 @@ import (
 )
 
 var (
-	ErrSessionNotFound = errors.New("mqttv5: session not found")
-	ErrSessionExists   = errors.New("mqttv5: session already exists")
+	ErrSessionNotFound = errors.New("session not found")
+	ErrSessionExists   = errors.New("session already exists")
 )
 
 // Session represents an MQTT session state.

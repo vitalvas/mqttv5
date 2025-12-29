@@ -9,13 +9,13 @@ import (
 
 // Encoding errors.
 var (
-	ErrStringTooLong      = errors.New("mqttv5: string exceeds maximum length of 65535 bytes")
-	ErrBinaryTooLong      = errors.New("mqttv5: binary data exceeds maximum length of 65535 bytes")
-	ErrInvalidUTF8        = errors.New("mqttv5: invalid UTF-8 string")
-	ErrStringContainsNull = errors.New("mqttv5: string contains null character")
-	ErrVarintTooLarge     = errors.New("mqttv5: variable byte integer exceeds maximum value")
-	ErrVarintMalformed    = errors.New("mqttv5: malformed variable byte integer")
-	ErrVarintOverlong     = errors.New("mqttv5: variable byte integer uses more bytes than necessary")
+	ErrStringTooLong      = errors.New("string exceeds maximum length of 65535 bytes")
+	ErrBinaryTooLong      = errors.New("binary data exceeds maximum length of 65535 bytes")
+	ErrInvalidUTF8        = errors.New("invalid UTF-8 string")
+	ErrStringContainsNull = errors.New("string contains null character")
+	ErrVarintTooLarge     = errors.New("variable byte integer exceeds maximum value")
+	ErrVarintMalformed    = errors.New("malformed variable byte integer")
+	ErrVarintOverlong     = errors.New("variable byte integer uses more bytes than necessary")
 )
 
 const (

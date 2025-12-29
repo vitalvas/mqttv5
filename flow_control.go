@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	ErrQuotaExceeded = errors.New("mqttv5: receive quota exceeded")
+	ErrQuotaExceeded = errors.New("receive quota exceeded")
 )
 
 // FlowController manages flow control for MQTT v5.0 connections.

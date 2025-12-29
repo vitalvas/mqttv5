@@ -44,7 +44,7 @@ func TestConnectedEvent(t *testing.T) {
 
 	t.Run("Error returns string", func(t *testing.T) {
 		event := NewConnectedEvent(false, nil)
-		assert.Equal(t, "mqtt: connected", event.Error())
+		assert.Equal(t, "connected", event.Error())
 	})
 }
 
@@ -176,7 +176,7 @@ func TestConnectionLostError(t *testing.T) {
 
 	t.Run("Error without cause", func(t *testing.T) {
 		err := NewConnectionLostError(nil)
-		assert.Equal(t, "mqtt: connection lost", err.Error())
+		assert.Equal(t, "connection lost", err.Error())
 	})
 }
 

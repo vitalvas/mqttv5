@@ -23,11 +23,11 @@ const (
 
 // CONNECT packet errors.
 var (
-	ErrInvalidProtocolName    = errors.New("mqttv5: invalid protocol name")
-	ErrInvalidProtocolVersion = errors.New("mqttv5: unsupported protocol version")
-	ErrInvalidConnectFlags    = errors.New("mqttv5: invalid connect flags")
-	ErrClientIDTooLong        = errors.New("mqttv5: client ID too long")
-	ErrClientIDRequired       = errors.New("mqttv5: client ID required with clean start false")
+	ErrInvalidProtocolName    = errors.New("invalid protocol name")
+	ErrInvalidProtocolVersion = errors.New("unsupported protocol version")
+	ErrInvalidConnectFlags    = errors.New("invalid connect flags")
+	ErrClientIDTooLong        = errors.New("client ID too long")
+	ErrClientIDRequired       = errors.New("client ID required with clean start false")
 )
 
 // ConnectPacket represents an MQTT CONNECT packet.

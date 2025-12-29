@@ -93,9 +93,9 @@ func (p PropertyID) PropertyType() PropertyType {
 
 // Property errors.
 var (
-	ErrUnknownPropertyID   = errors.New("mqttv5: unknown property identifier")
-	ErrInvalidPropertyType = errors.New("mqttv5: invalid property type for identifier")
-	ErrDuplicateProperty   = errors.New("mqttv5: duplicate property not allowed")
+	ErrUnknownPropertyID   = errors.New("unknown property identifier")
+	ErrInvalidPropertyType = errors.New("invalid property type for identifier")
+	ErrDuplicateProperty   = errors.New("duplicate property not allowed")
 )
 
 // Properties represents a collection of MQTT v5.0 properties.

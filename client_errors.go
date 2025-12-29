@@ -11,61 +11,61 @@ type EventHandler func(client *Client, event error)
 // Sentinel events for client lifecycle - check with errors.Is().
 var (
 	// ErrConnected is emitted when the client successfully connects.
-	ErrConnected = errors.New("mqtt: connected")
+	ErrConnected = errors.New("connected")
 
 	// ErrDisconnected is emitted when the client disconnects gracefully.
-	ErrDisconnected = errors.New("mqtt: disconnected")
+	ErrDisconnected = errors.New("disconnected")
 
 	// ErrConnectionLost is emitted when the connection is lost unexpectedly.
-	ErrConnectionLost = errors.New("mqtt: connection lost")
+	ErrConnectionLost = errors.New("connection lost")
 
 	// ErrReconnecting is emitted when the client is attempting to reconnect.
-	ErrReconnecting = errors.New("mqtt: reconnecting")
+	ErrReconnecting = errors.New("reconnecting")
 
 	// ErrReconnectFailed is emitted when all reconnection attempts have failed.
-	ErrReconnectFailed = errors.New("mqtt: reconnect failed")
+	ErrReconnectFailed = errors.New("reconnect failed")
 )
 
 // Sentinel errors for authentication - check with errors.Is().
 var (
 	// ErrAuthFailed is returned when authentication fails.
-	ErrAuthFailed = errors.New("mqtt: authentication failed")
+	ErrAuthFailed = errors.New("authentication failed")
 
 	// ErrNotAuthorized is returned when the client is not authorized for an operation.
-	ErrNotAuthorized = errors.New("mqtt: not authorized")
+	ErrNotAuthorized = errors.New("not authorized")
 )
 
 // Sentinel errors for protocol issues - check with errors.Is().
 var (
 	// ErrProtocolError is returned when a protocol violation occurs.
-	ErrProtocolError = errors.New("mqtt: protocol error")
+	ErrProtocolError = errors.New("protocol error")
 
 	// ErrServerDisconnect is emitted when the server sends a DISCONNECT packet.
-	ErrServerDisconnect = errors.New("mqtt: server disconnect")
+	ErrServerDisconnect = errors.New("server disconnect")
 
 	// ErrKeepAliveTimeout is emitted when the server doesn't respond to PINGREQ.
-	ErrKeepAliveTimeout = errors.New("mqtt: keep-alive timeout")
+	ErrKeepAliveTimeout = errors.New("keep-alive timeout")
 )
 
 // Sentinel errors for operations - check with errors.Is().
 var (
 	// ErrPublishFailed is returned when a publish operation fails.
-	ErrPublishFailed = errors.New("mqtt: publish failed")
+	ErrPublishFailed = errors.New("publish failed")
 
 	// ErrSubscribeFailed is returned when a subscribe operation fails.
-	ErrSubscribeFailed = errors.New("mqtt: subscribe failed")
+	ErrSubscribeFailed = errors.New("subscribe failed")
 
 	// ErrUnsubscribeFailed is returned when an unsubscribe operation fails.
-	ErrUnsubscribeFailed = errors.New("mqtt: unsubscribe failed")
+	ErrUnsubscribeFailed = errors.New("unsubscribe failed")
 
 	// ErrClientClosed is returned when an operation is attempted on a closed client.
-	ErrClientClosed = errors.New("mqtt: client closed")
+	ErrClientClosed = errors.New("client closed")
 
 	// ErrNotConnected is returned when an operation requires an active connection.
-	ErrNotConnected = errors.New("mqtt: not connected")
+	ErrNotConnected = errors.New("not connected")
 
 	// ErrInvalidTopic is returned when a topic is invalid.
-	ErrInvalidTopic = errors.New("mqtt: invalid topic")
+	ErrInvalidTopic = errors.New("invalid topic")
 )
 
 // ConnectedEvent contains details about a successful connection.
@@ -99,9 +99,9 @@ type DisconnectError struct {
 
 func (e *DisconnectError) Error() string {
 	if e.Remote {
-		return "mqtt: server disconnect: " + e.ReasonCode.String()
+		return "server disconnect: " + e.ReasonCode.String()
 	}
-	return "mqtt: disconnected: " + e.ReasonCode.String()
+	return "disconnected: " + e.ReasonCode.String()
 }
 
 func (e *DisconnectError) Unwrap() error { return e.err }
@@ -161,7 +161,7 @@ type PublishError struct {
 }
 
 func (e *PublishError) Error() string {
-	return "mqtt: publish failed: " + e.ReasonCode.String()
+	return "publish failed: " + e.ReasonCode.String()
 }
 
 func (e *PublishError) Unwrap() error { return e.err }
@@ -185,7 +185,7 @@ type SubscribeError struct {
 }
 
 func (e *SubscribeError) Error() string {
-	return "mqtt: subscribe failed: " + e.ReasonCode.String()
+	return "subscribe failed: " + e.ReasonCode.String()
 }
 
 func (e *SubscribeError) Unwrap() error { return e.err }
@@ -208,9 +208,9 @@ type ConnectionLostError struct {
 
 func (e *ConnectionLostError) Error() string {
 	if e.Cause != nil {
-		return "mqtt: connection lost: " + e.Cause.Error()
+		return "connection lost: " + e.Cause.Error()
 	}
-	return "mqtt: connection lost"
+	return "connection lost"
 }
 
 func (e *ConnectionLostError) Unwrap() error { return e.err }
@@ -232,7 +232,7 @@ type ConnectError struct {
 }
 
 func (e *ConnectError) Error() string {
-	return "mqtt: connect failed: " + e.ReasonCode.String()
+	return "connect failed: " + e.ReasonCode.String()
 }
 
 func (e *ConnectError) Unwrap() error { return e.err }

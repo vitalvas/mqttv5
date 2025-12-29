@@ -6,8 +6,8 @@ import (
 )
 
 var (
-	ErrPacketTooLarge    = errors.New("mqttv5: packet exceeds maximum size")
-	ErrUnknownPacketType = errors.New("mqttv5: unknown packet type")
+	ErrPacketTooLarge    = errors.New("packet exceeds maximum size")
+	ErrUnknownPacketType = errors.New("unknown packet type")
 )
 
 // ReadPacket reads a complete MQTT packet from the reader.

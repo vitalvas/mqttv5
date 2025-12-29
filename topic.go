@@ -7,9 +7,9 @@ import (
 )
 
 var (
-	ErrInvalidTopicName   = errors.New("mqttv5: invalid topic name")
-	ErrInvalidTopicFilter = errors.New("mqttv5: invalid topic filter")
-	ErrEmptyTopic         = errors.New("mqttv5: topic cannot be empty")
+	ErrInvalidTopicName   = errors.New("invalid topic name")
+	ErrInvalidTopicFilter = errors.New("invalid topic filter")
+	ErrEmptyTopic         = errors.New("topic cannot be empty")
 )
 
 const (
