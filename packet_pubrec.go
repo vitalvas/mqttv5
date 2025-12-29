@@ -1,9 +1,8 @@
-//nolint:dupl // MQTT v5.0 requires separate packet types
+//nolint:dupl // MQTT v5.0 requires separate packet types with same structure
 package mqttv5
 
 import "io"
 
-// PubrecPacket represents an MQTT PUBREC packet.
 type PubrecPacket struct {
 	PacketID   uint16
 	ReasonCode ReasonCode
