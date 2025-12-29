@@ -441,13 +441,13 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 22. Examples
 
-- [ ] Create simple client example
-- [ ] Create simple broker example
-- [ ] Create TLS client example
-- [ ] Create WebSocket client example
-- [ ] Create embedded WebSocket handler example (net/http)
-- [ ] Create embedded WebSocket handler example (gorilla/mux)
-- [ ] Create shared subscription example
+- [x] Create simple client example
+- [x] Create simple broker example
+- [x] Create TLS client example
+- [x] Create WebSocket client example
+- [x] Create embedded WebSocket handler example (net/http)
+- [x] Create embedded WebSocket handler example (gorilla/mux)
+- [x] Create shared subscription example
 
 ## 23. Documentation
 
