@@ -81,13 +81,13 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 5. Fixed Header
 
-- [ ] Implement fixed header struct (packet type, flags, remaining length)
-- [ ] Implement fixed header encoder
-- [ ] Implement fixed header decoder
-- [ ] Add flag validation per packet type
-- [ ] Write unit tests for fixed header (all packet types, flag validation)
-- [ ] Write benchmarks for fixed header encoding/decoding
-- [ ] Write fuzz tests for fixed header decoding
+- [x] Implement fixed header struct (packet type, flags, remaining length)
+- [x] Implement fixed header encoder
+- [x] Implement fixed header decoder
+- [x] Add flag validation per packet type
+- [x] Write unit tests for fixed header (all packet types, flag validation)
+- [x] Write benchmarks for fixed header encoding/decoding
+- [x] Write fuzz tests for fixed header decoding
 
 ## 6. Packet Interface
 
