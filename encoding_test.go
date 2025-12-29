@@ -2,6 +2,7 @@ package mqttv5
 
 import (
 	"bytes"
+	"math/rand/v2"
 	"strings"
 	"testing"
 
@@ -397,11 +398,18 @@ func FuzzDecodeString(f *testing.F) {
 	f.Add([]byte{0x00, 0x00})                         // empty string
 	f.Add([]byte{0x00, 0x05, 'h', 'e', 'l', 'l', 'o'}) // "hello"
 	f.Add([]byte{0x00, 0x03, 0xE4, 0xB8, 0x96})       // "世" (UTF-8)
+	f.Add([]byte{0xFF, 0xFF})                         // max length prefix
+	f.Add([]byte{0x00, 0x10, 0x00, 0x01, 0x02, 0x03}) // truncated
 
-	// Random data seeds
-	f.Add([]byte{0xFF, 0xFF})                                     // max length prefix
-	f.Add([]byte{0x00, 0x10, 0x00, 0x01, 0x02, 0x03})             // truncated
-	f.Add([]byte{0x01, 0x00, 0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA}) // random bytes
+	// Random generated seeds
+	for range 10 {
+		size := rand.IntN(64) + 1
+		data := make([]byte, size)
+		for i := range data {
+			data[i] = byte(rand.IntN(256))
+		}
+		f.Add(data)
+	}
 
 	f.Fuzz(func(_ *testing.T, data []byte) {
 		r := bytes.NewReader(data)
@@ -412,11 +420,18 @@ func FuzzDecodeString(f *testing.F) {
 func FuzzDecodeBinary(f *testing.F) {
 	f.Add([]byte{0x00, 0x00})
 	f.Add([]byte{0x00, 0x03, 0x01, 0x02, 0x03})
-
-	// Random data seeds
 	f.Add([]byte{0xFF, 0xFF, 0x00})                   // large length, small data
 	f.Add([]byte{0x00, 0x05, 0xDE, 0xAD, 0xBE, 0xEF}) // truncated
-	f.Add([]byte{0xAB, 0xCD, 0xEF, 0x12, 0x34, 0x56}) // random
+
+	// Random generated seeds
+	for range 10 {
+		size := rand.IntN(64) + 1
+		data := make([]byte, size)
+		for i := range data {
+			data[i] = byte(rand.IntN(256))
+		}
+		f.Add(data)
+	}
 
 	f.Fuzz(func(_ *testing.T, data []byte) {
 		r := bytes.NewReader(data)
@@ -429,11 +444,18 @@ func FuzzDecodeVarint(f *testing.F) {
 	f.Add([]byte{0x7F})
 	f.Add([]byte{0x80, 0x01})
 	f.Add([]byte{0xFF, 0xFF, 0xFF, 0x7F})
-
-	// Random data seeds
 	f.Add([]byte{0x80, 0x80, 0x80, 0x80, 0x80}) // too many continuation bytes
-	f.Add([]byte{0xFF, 0xFF, 0xFF, 0xFF})       // overflow attempt
 	f.Add([]byte{0x80})                          // incomplete
+
+	// Random generated seeds
+	for range 10 {
+		size := rand.IntN(8) + 1
+		data := make([]byte, size)
+		for i := range data {
+			data[i] = byte(rand.IntN(256))
+		}
+		f.Add(data)
+	}
 
 	f.Fuzz(func(_ *testing.T, data []byte) {
 		r := bytes.NewReader(data)
@@ -443,12 +465,19 @@ func FuzzDecodeVarint(f *testing.F) {
 
 func FuzzDecodeStringPair(f *testing.F) {
 	f.Add([]byte{0x00, 0x00, 0x00, 0x00}) // empty key, empty value
-
-	// Random data seeds
 	f.Add([]byte{0x00, 0x03, 'k', 'e', 'y', 0x00, 0x05, 'v', 'a', 'l', 'u', 'e'})
-	f.Add([]byte{0xFF, 0xFF, 0x00, 0x00})             // large key length
-	f.Add([]byte{0x00, 0x01, 'x'})                    // missing value
-	f.Add([]byte{0xAB, 0xCD, 0xEF, 0x12, 0x34, 0x56}) // random
+	f.Add([]byte{0xFF, 0xFF, 0x00, 0x00}) // large key length
+	f.Add([]byte{0x00, 0x01, 'x'})        // missing value
+
+	// Random generated seeds
+	for range 10 {
+		size := rand.IntN(128) + 1
+		data := make([]byte, size)
+		for i := range data {
+			data[i] = byte(rand.IntN(256))
+		}
+		f.Add(data)
+	}
 
 	f.Fuzz(func(_ *testing.T, data []byte) {
 		r := bytes.NewReader(data)

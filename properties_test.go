@@ -2,6 +2,7 @@ package mqttv5
 
 import (
 	"bytes"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -368,6 +369,16 @@ func FuzzPropertiesDecode(f *testing.F) {
 	f.Add([]byte{0x05, 0xFF, 0x00, 0x00, 0x00, 0x00}) // unknown property ID
 	f.Add([]byte{0x10, 0x01, 0x01, 0x02, 0x00, 0x00, 0x00, 0x01, 0x03, 0x00, 0x04, 't', 'e', 's', 't'})
 	f.Add([]byte{0xAB, 0xCD, 0xEF, 0x12, 0x34, 0x56, 0x78, 0x9A}) // random
+
+	// Random generated seeds
+	for range 10 {
+		size := rand.IntN(64) + 1
+		data := make([]byte, size)
+		for i := range data {
+			data[i] = byte(rand.IntN(256))
+		}
+		f.Add(data)
+	}
 
 	f.Fuzz(func(_ *testing.T, data []byte) {
 		var p Properties
