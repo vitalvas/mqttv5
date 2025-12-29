@@ -151,44 +151,44 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ### 7.4 PUBACK (Type 4)
 
-- [ ] Define PubackPacket struct
-- [ ] Implement packet identifier
-- [ ] Implement reason code (optional if success with no properties)
-- [ ] Implement PUBACK properties (reason string, user properties)
-- [ ] Implement encoder and decoder
-- [ ] Implement validation
-- [ ] Write unit/benchmark/fuzz tests for PUBACK packet
+- [x] Define PubackPacket struct
+- [x] Implement packet identifier
+- [x] Implement reason code (optional if success with no properties)
+- [x] Implement PUBACK properties (reason string, user properties)
+- [x] Implement encoder and decoder
+- [x] Implement validation
+- [x] Write unit/benchmark/fuzz tests for PUBACK packet
 
 ### 7.5 PUBREC (Type 5)
 
-- [ ] Define PubrecPacket struct
-- [ ] Implement packet identifier
-- [ ] Implement reason code
-- [ ] Implement PUBREC properties (reason string, user properties)
-- [ ] Implement encoder and decoder
-- [ ] Implement validation
-- [ ] Write unit/benchmark/fuzz tests for PUBREC packet
+- [x] Define PubrecPacket struct
+- [x] Implement packet identifier
+- [x] Implement reason code
+- [x] Implement PUBREC properties (reason string, user properties)
+- [x] Implement encoder and decoder
+- [x] Implement validation
+- [x] Write unit/benchmark/fuzz tests for PUBREC packet
 
 ### 7.6 PUBREL (Type 6)
 
-- [ ] Define PubrelPacket struct
-- [ ] Implement packet identifier
-- [ ] Implement reason code
-- [ ] Implement PUBREL properties (reason string, user properties)
-- [ ] Implement encoder and decoder
-- [ ] Implement fixed header flags validation (must be 0x02)
-- [ ] Implement validation
-- [ ] Write unit/benchmark/fuzz tests for PUBREL packet
+- [x] Define PubrelPacket struct
+- [x] Implement packet identifier
+- [x] Implement reason code
+- [x] Implement PUBREL properties (reason string, user properties)
+- [x] Implement encoder and decoder
+- [x] Implement fixed header flags validation (must be 0x02)
+- [x] Implement validation
+- [x] Write unit/benchmark/fuzz tests for PUBREL packet
 
 ### 7.7 PUBCOMP (Type 7)
 
-- [ ] Define PubcompPacket struct
-- [ ] Implement packet identifier
-- [ ] Implement reason code
-- [ ] Implement PUBCOMP properties (reason string, user properties)
-- [ ] Implement encoder and decoder
-- [ ] Implement validation
-- [ ] Write unit/benchmark/fuzz tests for PUBCOMP packet
+- [x] Define PubcompPacket struct
+- [x] Implement packet identifier
+- [x] Implement reason code
+- [x] Implement PUBCOMP properties (reason string, user properties)
+- [x] Implement encoder and decoder
+- [x] Implement validation
+- [x] Write unit/benchmark/fuzz tests for PUBCOMP packet
 
 ### 7.8 SUBSCRIBE (Type 8)
 
