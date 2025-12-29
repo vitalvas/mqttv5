@@ -421,9 +421,9 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 19. Metrics Interface
 
-- [ ] Define Metrics interface
-- [ ] Define metric types: counter, gauge, histogram
-- [ ] Define standard metrics: connections, messages, bytes, latency
+- [x] Define Metrics interface
+- [x] Define metric types: counter, gauge, histogram
+- [x] Define standard metrics: connections, messages, bytes, latency
 
 ## 20. Logger Interface
 
