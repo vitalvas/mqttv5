@@ -399,12 +399,12 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 16. Clustering Interface
 
-- [ ] Define ClusterNode interface
-- [ ] Define ClusterTransport interface
-- [ ] Define message types for cluster sync
-- [ ] Define subscription sync interface
-- [ ] Define retained message sync interface
-- [ ] Define session migration interface
+- [x] Define ClusterNode interface
+- [x] Define ClusterTransport interface
+- [x] Define message types for cluster sync
+- [x] Define subscription sync interface
+- [x] Define retained message sync interface
+- [x] Define session migration interface
 
 ## 17. Authentication Interface
 
