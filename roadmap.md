@@ -280,37 +280,35 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ### 9.1 Transport Interface
 
-- [ ] Define Conn interface (Read, Write, Close, SetDeadline, LocalAddr, RemoteAddr)
-- [ ] Define Listener interface (Accept, Close, Addr)
-- [ ] Define Dialer interface (Dial with context)
+- [x] Define Conn interface (Read, Write, Close, SetDeadline, LocalAddr, RemoteAddr)
+- [x] Define Listener interface (Accept, Close, Addr)
+- [x] Define Dialer interface (Dial with context)
 
 ### 9.2 TCP Transport
 
-- [ ] Implement TCP listener using net.Listen
-- [ ] Implement TCP dialer with timeout using net.DialTimeout
-- [ ] Write unit/benchmark tests for TCP transport
+- [x] Implement TCP listener using net.Listen
+- [x] Implement TCP dialer with timeout using net.DialTimeout
+- [x] Write unit/benchmark tests for TCP transport
 
 ### 9.3 TLS Transport
 
-- [ ] Implement TLS listener using tls.Listen
-- [ ] Implement TLS dialer using tls.Dial
-- [ ] Write unit/benchmark tests for TLS transport
+- [x] Implement TLS listener using tls.Listen
+- [x] Implement TLS dialer using tls.Dial
+- [x] Write unit/benchmark tests for TLS transport
 
 ### 9.4 WebSocket Transport
 
-- [ ] Implement WebSocket dialer using gorilla/websocket.Dialer
-- [ ] Implement subprotocol negotiation ("mqtt")
-- [ ] Handle binary message framing
-- [ ] Write unit/benchmark tests for WebSocket transport
+- [x] Implement WebSocket dialer using gorilla/websocket.Dialer
+- [x] Implement subprotocol negotiation ("mqtt")
+- [x] Handle binary message framing
+- [x] Write unit/benchmark tests for WebSocket transport
 
 ### 9.5 WebSocket HTTP Handler (Embeddable)
 
-- [ ] Implement WSHandler as http.Handler interface
-- [ ] Support embedding into net/http server
-- [ ] Support embedding into gorilla/mux router
-- [ ] Implement connection callback for new WebSocket connections
-- [ ] Implement WSS via existing TLS-enabled HTTP server
-- [ ] Write unit tests for HTTP handler embedding
+- [x] Implement WSHandler as http.Handler interface
+- [x] Support embedding into net/http server
+- [x] Implement connection callback for new WebSocket connections
+- [x] Write unit tests for HTTP handler embedding
 
 ## 10. Topic Matching
 
