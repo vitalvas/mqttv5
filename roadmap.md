@@ -312,17 +312,17 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 10. Topic Matching
 
-- [ ] Implement topic name validation (UTF-8, no wildcards, no null)
-- [ ] Implement topic filter validation (valid wildcard usage)
-- [ ] Implement single-level wildcard (+) matching
-- [ ] Implement multi-level wildcard (#) matching
-- [ ] Implement shared subscription parsing ($share/group/filter)
-- [ ] Implement system topic detection ($SYS/)
-- [ ] Implement TopicMatcher interface
-- [ ] Implement efficient topic tree data structure
-- [ ] Write unit tests for topic matching (wildcards, shared subscriptions, edge cases)
-- [ ] Write benchmarks for topic matching (target: O(levels) lookup)
-- [ ] Write fuzz tests for topic validation and matching
+- [x] Implement topic name validation (UTF-8, no wildcards, no null)
+- [x] Implement topic filter validation (valid wildcard usage)
+- [x] Implement single-level wildcard (+) matching
+- [x] Implement multi-level wildcard (#) matching
+- [x] Implement shared subscription parsing ($share/group/filter)
+- [x] Implement system topic detection ($SYS/)
+- [x] Implement TopicMatcher interface
+- [x] Implement efficient topic tree data structure
+- [x] Write unit tests for topic matching (wildcards, shared subscriptions, edge cases)
+- [x] Write benchmarks for topic matching (target: O(levels) lookup)
+- [x] Write fuzz tests for topic validation and matching
 
 ## 11. Session State
 
