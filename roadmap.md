@@ -91,20 +91,20 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 6. Packet Interface
 
-- [ ] Define Packet interface (Type, Encode, Decode, Validate)
-- [ ] Define PacketWithID interface for packets with packet identifiers
-- [ ] Define PacketWithProperties interface
+- [x] Define Packet interface (Type, Encode, Decode, Validate)
+- [x] Define PacketWithID interface for packets with packet identifiers
+- [x] Define PacketWithProperties interface
 
 ## 6.1 Message Struct
 
-- [ ] Define Message struct with public fields:
+- [x] Define Message struct with public fields:
   - Topic, Payload, QoS, Retain
   - PayloadFormat, MessageExpiry, ContentType
   - ResponseTopic, CorrelationData
   - UserProperties, SubscriptionIdentifiers
-- [ ] Implement Message to PublishPacket conversion
-- [ ] Implement PublishPacket to Message conversion
-- [ ] Write unit/benchmark tests for Message
+- [x] Implement Message to PublishPacket conversion
+- [x] Implement PublishPacket to Message conversion
+- [x] Write unit/benchmark tests for Message
 
 ## 7. Control Packets
 
