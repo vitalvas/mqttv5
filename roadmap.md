@@ -348,34 +348,34 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ### 12.1 Packet ID Manager
 
-- [ ] Implement packet ID allocator (1-65535)
-- [ ] Implement packet ID release
-- [ ] Handle wraparound
-- [ ] Write unit/benchmark tests for packet ID manager
+- [x] Implement packet ID allocator (1-65535)
+- [x] Implement packet ID release
+- [x] Handle wraparound
+- [x] Write unit/benchmark tests for packet ID manager
 
 ### 12.2 QoS 1 Flow
 
-- [ ] Define QoS1State (awaiting PUBACK)
-- [ ] Implement message tracking
-- [ ] Implement retry logic
-- [ ] Implement timeout handling
-- [ ] Write unit/benchmark tests for QoS 1 flow
+- [x] Define QoS1State (awaiting PUBACK)
+- [x] Implement message tracking
+- [x] Implement retry logic
+- [x] Implement timeout handling
+- [x] Write unit/benchmark tests for QoS 1 flow
 
 ### 12.3 QoS 2 Flow
 
-- [ ] Define QoS2State (PUBREC received, PUBREL sent, awaiting PUBCOMP)
-- [ ] Implement sender state machine
-- [ ] Implement receiver state machine
-- [ ] Implement retry logic
-- [ ] Implement timeout handling
-- [ ] Write unit/benchmark tests for QoS 2 flow
+- [x] Define QoS2State (PUBREC received, PUBREL sent, awaiting PUBCOMP)
+- [x] Implement sender state machine
+- [x] Implement receiver state machine
+- [x] Implement retry logic
+- [x] Implement timeout handling
+- [x] Write unit/benchmark tests for QoS 2 flow
 
 ### 12.4 Message Store
 
-- [ ] Define MessageStore interface
-- [ ] Implement in-memory message store
-- [ ] Implement message expiry
-- [ ] Write unit/benchmark tests for message store
+- [x] Define MessageStore interface
+- [x] Implement in-memory message store
+- [x] Implement message expiry
+- [x] Write unit/benchmark tests for message store
 
 ## 13. Flow Control
 

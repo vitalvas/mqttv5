@@ -1,0 +1,500 @@
+package mqttv5
+
+import (
+	"errors"
+	"sync"
+	"time"
+)
+
+var (
+	ErrPacketIDExhausted = errors.New("mqttv5: no available packet IDs")
+	ErrPacketIDNotFound  = errors.New("mqttv5: packet ID not found")
+	ErrMessageNotFound   = errors.New("mqttv5: message not found")
+)
+
+// PacketIDManager manages allocation and release of packet IDs (1-65535).
+type PacketIDManager struct {
+	mu     sync.Mutex
+	used   map[uint16]struct{}
+	next   uint16
+	maxIDs int
+}
+
+// NewPacketIDManager creates a new packet ID manager.
+func NewPacketIDManager() *PacketIDManager {
+	return &PacketIDManager{
+		used:   make(map[uint16]struct{}),
+		next:   1,
+		maxIDs: 65535,
+	}
+}
+
+// Allocate returns the next available packet ID.
+func (m *PacketIDManager) Allocate() (uint16, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(m.used) >= m.maxIDs {
+		return 0, ErrPacketIDExhausted
+	}
+
+	start := m.next
+	for {
+		if _, ok := m.used[m.next]; !ok {
+			id := m.next
+			m.used[id] = struct{}{}
+			m.next++
+			if m.next == 0 {
+				m.next = 1
+			}
+			return id, nil
+		}
+		m.next++
+		if m.next == 0 {
+			m.next = 1
+		}
+		if m.next == start {
+			return 0, ErrPacketIDExhausted
+		}
+	}
+}
+
+// Release releases a packet ID for reuse.
+func (m *PacketIDManager) Release(id uint16) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.used[id]; !ok {
+		return ErrPacketIDNotFound
+	}
+	delete(m.used, id)
+	return nil
+}
+
+// IsUsed returns true if the packet ID is currently in use.
+func (m *PacketIDManager) IsUsed(id uint16) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.used[id]
+	return ok
+}
+
+// InUse returns the count of packet IDs currently in use.
+func (m *PacketIDManager) InUse() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.used)
+}
+
+// QoS1State represents the state of a QoS 1 publish flow.
+type QoS1State int
+
+const (
+	QoS1AwaitingPuback QoS1State = iota
+	QoS1Complete
+)
+
+// QoS1Message represents a QoS 1 message awaiting acknowledgment.
+type QoS1Message struct {
+	PacketID     uint16
+	Message      *Message
+	State        QoS1State
+	SentAt       time.Time
+	RetryCount   int
+	RetryTimeout time.Duration
+}
+
+// ShouldRetry returns true if the message should be retried.
+func (m *QoS1Message) ShouldRetry() bool {
+	if m.State != QoS1AwaitingPuback {
+		return false
+	}
+	return time.Since(m.SentAt) > m.RetryTimeout
+}
+
+// QoS1Tracker tracks QoS 1 messages awaiting acknowledgment.
+type QoS1Tracker struct {
+	mu           sync.RWMutex
+	messages     map[uint16]*QoS1Message
+	retryTimeout time.Duration
+	maxRetries   int
+}
+
+// NewQoS1Tracker creates a new QoS 1 tracker.
+func NewQoS1Tracker(retryTimeout time.Duration, maxRetries int) *QoS1Tracker {
+	return &QoS1Tracker{
+		messages:     make(map[uint16]*QoS1Message),
+		retryTimeout: retryTimeout,
+		maxRetries:   maxRetries,
+	}
+}
+
+// Track starts tracking a QoS 1 message.
+func (t *QoS1Tracker) Track(packetID uint16, msg *Message) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.messages[packetID] = &QoS1Message{
+		PacketID:     packetID,
+		Message:      msg,
+		State:        QoS1AwaitingPuback,
+		SentAt:       time.Now(),
+		RetryTimeout: t.retryTimeout,
+	}
+}
+
+// Acknowledge marks a message as acknowledged and removes it.
+func (t *QoS1Tracker) Acknowledge(packetID uint16) (*QoS1Message, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	msg, ok := t.messages[packetID]
+	if !ok {
+		return nil, false
+	}
+	msg.State = QoS1Complete
+	delete(t.messages, packetID)
+	return msg, true
+}
+
+// Get returns a tracked message.
+func (t *QoS1Tracker) Get(packetID uint16) (*QoS1Message, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	msg, ok := t.messages[packetID]
+	return msg, ok
+}
+
+// GetPendingRetries returns messages that need to be retried.
+func (t *QoS1Tracker) GetPendingRetries() []*QoS1Message {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var pending []*QoS1Message
+	for _, msg := range t.messages {
+		if msg.ShouldRetry() && msg.RetryCount < t.maxRetries {
+			msg.RetryCount++
+			msg.SentAt = time.Now()
+			pending = append(pending, msg)
+		}
+	}
+	return pending
+}
+
+// Remove removes a message from tracking.
+func (t *QoS1Tracker) Remove(packetID uint16) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if _, ok := t.messages[packetID]; !ok {
+		return false
+	}
+	delete(t.messages, packetID)
+	return true
+}
+
+// Count returns the number of tracked messages.
+func (t *QoS1Tracker) Count() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.messages)
+}
+
+// QoS2State represents the state of a QoS 2 publish flow.
+type QoS2State int
+
+const (
+	// Sender states
+	QoS2AwaitingPubrec QoS2State = iota
+	QoS2AwaitingPubcomp
+
+	// Receiver states
+	QoS2ReceivedPublish
+	QoS2AwaitingPubrel
+
+	QoS2Complete
+)
+
+// QoS2Message represents a QoS 2 message in the flow.
+type QoS2Message struct {
+	PacketID     uint16
+	Message      *Message
+	State        QoS2State
+	SentAt       time.Time
+	RetryCount   int
+	RetryTimeout time.Duration
+	IsSender     bool
+}
+
+// ShouldRetry returns true if the message should be retried.
+func (m *QoS2Message) ShouldRetry() bool {
+	if m.State == QoS2Complete {
+		return false
+	}
+	return time.Since(m.SentAt) > m.RetryTimeout
+}
+
+// QoS2Tracker tracks QoS 2 messages in the publish flow.
+type QoS2Tracker struct {
+	mu           sync.RWMutex
+	messages     map[uint16]*QoS2Message
+	retryTimeout time.Duration
+	maxRetries   int
+}
+
+// NewQoS2Tracker creates a new QoS 2 tracker.
+func NewQoS2Tracker(retryTimeout time.Duration, maxRetries int) *QoS2Tracker {
+	return &QoS2Tracker{
+		messages:     make(map[uint16]*QoS2Message),
+		retryTimeout: retryTimeout,
+		maxRetries:   maxRetries,
+	}
+}
+
+// TrackSend starts tracking a sent QoS 2 message (sender side).
+func (t *QoS2Tracker) TrackSend(packetID uint16, msg *Message) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.messages[packetID] = &QoS2Message{
+		PacketID:     packetID,
+		Message:      msg,
+		State:        QoS2AwaitingPubrec,
+		SentAt:       time.Now(),
+		RetryTimeout: t.retryTimeout,
+		IsSender:     true,
+	}
+}
+
+// TrackReceive starts tracking a received QoS 2 message (receiver side).
+func (t *QoS2Tracker) TrackReceive(packetID uint16, msg *Message) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.messages[packetID] = &QoS2Message{
+		PacketID:     packetID,
+		Message:      msg,
+		State:        QoS2ReceivedPublish,
+		SentAt:       time.Now(),
+		RetryTimeout: t.retryTimeout,
+		IsSender:     false,
+	}
+}
+
+// HandlePubrec handles receiving PUBREC (sender side).
+func (t *QoS2Tracker) HandlePubrec(packetID uint16) (*QoS2Message, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	msg, ok := t.messages[packetID]
+	if !ok || msg.State != QoS2AwaitingPubrec {
+		return nil, false
+	}
+	msg.State = QoS2AwaitingPubcomp
+	msg.SentAt = time.Now()
+	msg.RetryCount = 0
+	return msg, true
+}
+
+// HandlePubrel handles receiving PUBREL (receiver side).
+func (t *QoS2Tracker) HandlePubrel(packetID uint16) (*QoS2Message, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	msg, ok := t.messages[packetID]
+	if !ok {
+		return nil, false
+	}
+	// Can receive PUBREL in either ReceivedPublish or AwaitingPubrel state
+	if msg.State != QoS2ReceivedPublish && msg.State != QoS2AwaitingPubrel {
+		return nil, false
+	}
+	msg.State = QoS2Complete
+	delete(t.messages, packetID)
+	return msg, true
+}
+
+// HandlePubcomp handles receiving PUBCOMP (sender side).
+func (t *QoS2Tracker) HandlePubcomp(packetID uint16) (*QoS2Message, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	msg, ok := t.messages[packetID]
+	if !ok || msg.State != QoS2AwaitingPubcomp {
+		return nil, false
+	}
+	msg.State = QoS2Complete
+	delete(t.messages, packetID)
+	return msg, true
+}
+
+// SendPubrec transitions receiver state after sending PUBREC.
+func (t *QoS2Tracker) SendPubrec(packetID uint16) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	msg, ok := t.messages[packetID]
+	if !ok || msg.State != QoS2ReceivedPublish {
+		return false
+	}
+	msg.State = QoS2AwaitingPubrel
+	msg.SentAt = time.Now()
+	return true
+}
+
+// Get returns a tracked message.
+func (t *QoS2Tracker) Get(packetID uint16) (*QoS2Message, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	msg, ok := t.messages[packetID]
+	return msg, ok
+}
+
+// GetPendingRetries returns messages that need to be retried.
+func (t *QoS2Tracker) GetPendingRetries() []*QoS2Message {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var pending []*QoS2Message
+	for _, msg := range t.messages {
+		if msg.ShouldRetry() && msg.RetryCount < t.maxRetries {
+			msg.RetryCount++
+			msg.SentAt = time.Now()
+			pending = append(pending, msg)
+		}
+	}
+	return pending
+}
+
+// Remove removes a message from tracking.
+func (t *QoS2Tracker) Remove(packetID uint16) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if _, ok := t.messages[packetID]; !ok {
+		return false
+	}
+	delete(t.messages, packetID)
+	return true
+}
+
+// Count returns the number of tracked messages.
+func (t *QoS2Tracker) Count() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.messages)
+}
+
+// StoredMessage represents a message in the message store with expiry.
+type StoredMessage struct {
+	Message   *Message
+	ExpiresAt time.Time
+	StoredAt  time.Time
+}
+
+// IsExpired returns true if the message has expired.
+func (m *StoredMessage) IsExpired() bool {
+	if m.ExpiresAt.IsZero() {
+		return false
+	}
+	return time.Now().After(m.ExpiresAt)
+}
+
+// MessageStore defines the interface for message storage.
+type MessageStore interface {
+	// Store stores a message with optional expiry.
+	Store(id string, msg *Message, expiry time.Duration) error
+
+	// Get retrieves a message by ID.
+	Get(id string) (*Message, bool)
+
+	// Delete deletes a message by ID.
+	Delete(id string) bool
+
+	// Cleanup removes expired messages.
+	Cleanup() int
+
+	// Count returns the number of stored messages.
+	Count() int
+}
+
+// MemoryMessageStore is an in-memory implementation of MessageStore.
+type MemoryMessageStore struct {
+	mu       sync.RWMutex
+	messages map[string]*StoredMessage
+}
+
+// NewMemoryMessageStore creates a new in-memory message store.
+func NewMemoryMessageStore() *MemoryMessageStore {
+	return &MemoryMessageStore{
+		messages: make(map[string]*StoredMessage),
+	}
+}
+
+// Store stores a message with optional expiry.
+func (s *MemoryMessageStore) Store(id string, msg *Message, expiry time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	stored := &StoredMessage{
+		Message:  msg,
+		StoredAt: time.Now(),
+	}
+	if expiry > 0 {
+		stored.ExpiresAt = time.Now().Add(expiry)
+	}
+	s.messages[id] = stored
+	return nil
+}
+
+// Get retrieves a message by ID.
+func (s *MemoryMessageStore) Get(id string) (*Message, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	stored, ok := s.messages[id]
+	if !ok {
+		return nil, false
+	}
+	if stored.IsExpired() {
+		return nil, false
+	}
+	return stored.Message, true
+}
+
+// Delete deletes a message by ID.
+func (s *MemoryMessageStore) Delete(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.messages[id]; !ok {
+		return false
+	}
+	delete(s.messages, id)
+	return true
+}
+
+// Cleanup removes expired messages.
+func (s *MemoryMessageStore) Cleanup() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var expired []string
+	for id, stored := range s.messages {
+		if stored.IsExpired() {
+			expired = append(expired, id)
+		}
+	}
+
+	for _, id := range expired {
+		delete(s.messages, id)
+	}
+	return len(expired)
+}
+
+// Count returns the number of stored messages.
+func (s *MemoryMessageStore) Count() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.messages)
+}
