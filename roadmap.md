@@ -269,13 +269,12 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 8. Codec
 
-- [ ] Implement ReadPacket function using io.Reader directly
-- [ ] Implement WritePacket function using io.Writer directly
-- [ ] Implement maximum packet size enforcement
-- [ ] Add read/write timeout support
-- [ ] Write unit tests for codec (round-trip all packet types, max size enforcement)
-- [ ] Write benchmarks for codec (target: minimal allocs with buffer pool)
-- [ ] Write fuzz tests for codec
+- [x] Implement ReadPacket function using io.Reader directly
+- [x] Implement WritePacket function using io.Writer directly
+- [x] Implement maximum packet size enforcement
+- [x] Write unit tests for codec (round-trip all packet types, max size enforcement)
+- [x] Write benchmarks for codec (target: minimal allocs with buffer pool)
+- [x] Write fuzz tests for codec
 
 ## 9. Transport Layer
 
