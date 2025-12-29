@@ -13,70 +13,71 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 - **Each step requires**:
   - Unit tests (correctness)
   - Benchmark tests (ns/op, B/op, allocs/op)
-  - Fuzz tests (edge cases, security)
+  - Fuzz tests (edge cases, security) - include random data seeds
 - **No wrappers**: Direct usage of standard library types, no unnecessary abstractions
 - **On finish each step**:
   1. Run `yake tests` - all tests must pass
   2. Git commit with descriptive message
+  3. Update this roadmap - mark completed items with `[x]`
 
 ## 1. Project Initialization
 
-- [ ] Initialize Go module with `go mod init github.com/vitalvas/mqttv5`
-- [ ] Add gorilla/websocket dependency
-- [ ] Add testify dependency for testing
-- [ ] Configure golangci-lint
+- [x] Initialize Go module with `go mod init github.com/vitalvas/mqttv5`
+- [x] Add gorilla/websocket dependency
+- [x] Add testify dependency for testing
+- [x] Configure golangci-lint
 
 ## 2. Data Types and Encoding
 
 ### 2.1 Basic Types
 
-- [ ] Implement UTF-8 string encoding (2-byte length prefix)
-- [ ] Implement UTF-8 string decoding with validation
-- [ ] Implement binary data encoding (2-byte length prefix)
-- [ ] Implement binary data decoding
-- [ ] Implement UTF-8 string pair encoding/decoding
-- [ ] Write unit tests for basic types (empty strings, max length, invalid UTF-8, binary data)
-- [ ] Write benchmarks for string/binary encoding/decoding (target: zero-alloc)
-- [ ] Write fuzz tests for string/binary decoding
+- [x] Implement UTF-8 string encoding (2-byte length prefix)
+- [x] Implement UTF-8 string decoding with validation
+- [x] Implement binary data encoding (2-byte length prefix)
+- [x] Implement binary data decoding
+- [x] Implement UTF-8 string pair encoding/decoding
+- [x] Write unit tests for basic types (empty strings, max length, invalid UTF-8, binary data)
+- [x] Write benchmarks for string/binary encoding/decoding (target: zero-alloc)
+- [x] Write fuzz tests for string/binary decoding
 
 ### 2.2 Variable Byte Integer
 
-- [ ] Implement variable byte integer encoder (1-4 bytes)
-- [ ] Implement variable byte integer decoder
-- [ ] Add validation for maximum value (268,435,455)
-- [ ] Add validation for minimum encoding length
-- [ ] Write unit tests for variable byte integer (edge cases: 0, 127, 128, 16383, 16384, max value)
-- [ ] Write benchmarks for variable byte integer (target: zero-alloc)
-- [ ] Write fuzz tests for variable byte integer decoding
+- [x] Implement variable byte integer encoder (1-4 bytes)
+- [x] Implement variable byte integer decoder
+- [x] Add validation for maximum value (268,435,455)
+- [x] Add validation for minimum encoding length
+- [x] Write unit tests for variable byte integer (edge cases: 0, 127, 128, 16383, 16384, max value)
+- [x] Write benchmarks for variable byte integer (target: zero-alloc)
+- [x] Write fuzz tests for variable byte integer decoding
 
 ## 3. Reason Codes
 
-- [ ] Define all reason codes as constants (0x00-0x9F)
-- [ ] Create reason code to string mapping
-- [ ] Group reason codes by packet type validity
-- [ ] Implement reason code validation per packet type
-- [ ] Write unit tests for reason codes (string mapping, validation per packet type)
+- [x] Define all reason codes as constants (0x00-0x9F)
+- [x] Create reason code to string mapping
+- [x] Group reason codes by packet type validity
+- [x] Implement reason code validation per packet type
+- [x] Write unit tests for reason codes (string mapping, validation per packet type)
 
 ## 4. Properties System
 
 ### 4.1 Property Identifiers
 
-- [ ] Define all 42 property identifier constants
-- [ ] Define property data types (byte, two-byte int, four-byte int, variable int, UTF-8 string, binary data, string pair)
-- [ ] Create property identifier to type mapping
+- [x] Define all 42 property identifier constants
+- [x] Define property data types (byte, two-byte int, four-byte int, variable int, UTF-8 string, binary data, string pair)
+- [x] Create property identifier to type mapping
 
 ### 4.2 Properties Implementation
 
-- [ ] Implement Property struct (identifier, value)
-- [ ] Implement Properties collection type
-- [ ] Implement properties encoder
-- [ ] Implement properties decoder
-- [ ] Implement property validation per packet type
-- [ ] Add helper methods: Get, Set, Has, Delete
-- [ ] Add typed getters: GetUint32, GetString, GetBinary, GetStringPair
-- [ ] Write unit tests for properties (encode/decode, all property types, validation)
-- [ ] Write benchmarks for properties encoding/decoding (target: minimal allocs)
-- [ ] Write fuzz tests for properties decoding
+- [x] Implement Property struct (identifier, value)
+- [x] Implement Properties collection type
+- [x] Implement properties encoder
+- [x] Implement properties decoder
+- [x] Implement property validation per packet type
+- [x] Add helper methods: Get, Set, Has, Delete
+- [x] Add typed getters: GetUint32, GetString, GetBinary, GetStringPair
+- [x] Write unit tests for properties (encode/decode, all property types, validation)
+- [x] Write benchmarks for properties encoding/decoding (target: minimal allocs)
+- [x] Write fuzz tests for properties decoding
 
 ## 5. Fixed Header
 

@@ -354,7 +354,7 @@ func BenchmarkPropertiesGet(b *testing.B) {
 // Fuzz tests
 
 func FuzzPropertiesDecode(f *testing.F) {
-	// Add seed corpus
+	// Add seed corpus - structured data
 	f.Add([]byte{0x00}) // empty properties
 
 	// Properties with byte value
@@ -362,6 +362,12 @@ func FuzzPropertiesDecode(f *testing.F) {
 
 	// Properties with string
 	f.Add([]byte{0x08, 0x03, 0x00, 0x05, 'h', 'e', 'l', 'l', 'o'}) // ContentType = "hello"
+
+	// Random data seeds
+	f.Add([]byte{0xFF, 0xFF, 0xFF, 0x7F})             // max varint length
+	f.Add([]byte{0x05, 0xFF, 0x00, 0x00, 0x00, 0x00}) // unknown property ID
+	f.Add([]byte{0x10, 0x01, 0x01, 0x02, 0x00, 0x00, 0x00, 0x01, 0x03, 0x00, 0x04, 't', 'e', 's', 't'})
+	f.Add([]byte{0xAB, 0xCD, 0xEF, 0x12, 0x34, 0x56, 0x78, 0x9A}) // random
 
 	f.Fuzz(func(_ *testing.T, data []byte) {
 		var p Properties
