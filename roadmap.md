@@ -415,9 +415,9 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 18. Authorization Interface
 
-- [ ] Define Authorizer interface
-- [ ] Define ACLEntry struct (client pattern, topic pattern, publish, subscribe)
-- [ ] Define authorization check methods
+- [x] Define Authorizer interface
+- [x] Define ACLEntry struct (client pattern, topic pattern, publish, subscribe)
+- [x] Define authorization check methods
 
 ## 19. Metrics Interface
 
