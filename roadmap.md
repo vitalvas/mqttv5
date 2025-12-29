@@ -427,9 +427,9 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 20. Logger Interface
 
-- [ ] Define Logger interface (Debug, Info, Warn, Error)
-- [ ] Implement no-op logger as default
-- [ ] Add context fields support
+- [x] Define Logger interface (Debug, Info, Warn, Error)
+- [x] Implement no-op logger as default
+- [x] Add context fields support
 
 ## 21. Conformance Tests
 
