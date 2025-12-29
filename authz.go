@@ -10,9 +10,9 @@ type AuthzAction int
 
 const (
 	// AuthzActionPublish represents a publish action.
-	AuthzActionPublish AuthzAction = iota
+	AuthzActionPublish AuthzAction = 0
 	// AuthzActionSubscribe represents a subscribe action.
-	AuthzActionSubscribe
+	AuthzActionSubscribe AuthzAction = 1
 )
 
 // String returns the string representation of the action.

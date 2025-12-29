@@ -43,13 +43,13 @@ const (
 type PropertyType byte
 
 const (
-	PropTypeByte       PropertyType = iota // Single byte
-	PropTypeTwoByteInt                     // Two byte integer (uint16)
-	PropTypeFourByteInt                    // Four byte integer (uint32)
-	PropTypeVarInt                         // Variable byte integer
-	PropTypeString                         // UTF-8 encoded string
-	PropTypeBinary                         // Binary data
-	PropTypeStringPair                     // UTF-8 string pair
+	PropTypeByte        PropertyType = 0 // Single byte
+	PropTypeTwoByteInt  PropertyType = 1 // Two byte integer (uint16)
+	PropTypeFourByteInt PropertyType = 2 // Four byte integer (uint32)
+	PropTypeVarInt      PropertyType = 3 // Variable byte integer
+	PropTypeString      PropertyType = 4 // UTF-8 encoded string
+	PropTypeBinary      PropertyType = 5 // Binary data
+	PropTypeStringPair  PropertyType = 6 // UTF-8 string pair
 )
 
 // propertyTypeMap maps property IDs to their data types.

@@ -12,11 +12,11 @@ type MetricType int
 
 const (
 	// MetricTypeCounter is a monotonically increasing counter.
-	MetricTypeCounter MetricType = iota
+	MetricTypeCounter MetricType = 0
 	// MetricTypeGauge is a value that can go up and down.
-	MetricTypeGauge
+	MetricTypeGauge MetricType = 1
 	// MetricTypeHistogram tracks distribution of values.
-	MetricTypeHistogram
+	MetricTypeHistogram MetricType = 2
 )
 
 // String returns the string representation of the metric type.

@@ -13,11 +13,11 @@ type ClusterNodeID string
 type ClusterNodeState int
 
 const (
-	ClusterNodeStateUnknown ClusterNodeState = iota
-	ClusterNodeStateJoining
-	ClusterNodeStateActive
-	ClusterNodeStateLeaving
-	ClusterNodeStateDead
+	ClusterNodeStateUnknown ClusterNodeState = 0
+	ClusterNodeStateJoining ClusterNodeState = 1
+	ClusterNodeStateActive  ClusterNodeState = 2
+	ClusterNodeStateLeaving ClusterNodeState = 3
+	ClusterNodeStateDead    ClusterNodeState = 4
 )
 
 // ClusterNode represents a node in an MQTT broker cluster.
@@ -66,13 +66,13 @@ type ClusterTransport interface {
 type ClusterMessageType int
 
 const (
-	ClusterMessageTypeSubscriptionSync ClusterMessageType = iota
-	ClusterMessageTypeSubscriptionRemove
-	ClusterMessageTypeRetainedSync
-	ClusterMessageTypeRetainedRemove
-	ClusterMessageTypeSessionMigrate
-	ClusterMessageTypeSessionSync
-	ClusterMessageTypePublishForward
+	ClusterMessageTypeSubscriptionSync   ClusterMessageType = 0
+	ClusterMessageTypeSubscriptionRemove ClusterMessageType = 1
+	ClusterMessageTypeRetainedSync       ClusterMessageType = 2
+	ClusterMessageTypeRetainedRemove     ClusterMessageType = 3
+	ClusterMessageTypeSessionMigrate     ClusterMessageType = 4
+	ClusterMessageTypeSessionSync        ClusterMessageType = 5
+	ClusterMessageTypePublishForward     ClusterMessageType = 6
 )
 
 // ClusterMessage represents a message exchanged between cluster nodes.

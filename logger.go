@@ -11,15 +11,15 @@ type LogLevel int
 
 const (
 	// LogLevelDebug is the debug log level.
-	LogLevelDebug LogLevel = iota
+	LogLevelDebug LogLevel = 0
 	// LogLevelInfo is the info log level.
-	LogLevelInfo
+	LogLevelInfo LogLevel = 1
 	// LogLevelWarn is the warn log level.
-	LogLevelWarn
+	LogLevelWarn LogLevel = 2
 	// LogLevelError is the error log level.
-	LogLevelError
+	LogLevelError LogLevel = 3
 	// LogLevelNone disables all logging.
-	LogLevelNone
+	LogLevelNone LogLevel = 4
 )
 
 // String returns the string representation of the log level.

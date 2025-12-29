@@ -90,8 +90,8 @@ func (m *PacketIDManager) InUse() int {
 type QoS1State int
 
 const (
-	QoS1AwaitingPuback QoS1State = iota
-	QoS1Complete
+	QoS1AwaitingPuback QoS1State = 0
+	QoS1Complete       QoS1State = 1
 )
 
 // QoS1Message represents a QoS 1 message awaiting acknowledgment.
@@ -205,14 +205,14 @@ type QoS2State int
 
 const (
 	// Sender states
-	QoS2AwaitingPubrec QoS2State = iota
-	QoS2AwaitingPubcomp
+	QoS2AwaitingPubrec  QoS2State = 0
+	QoS2AwaitingPubcomp QoS2State = 1
 
 	// Receiver states
-	QoS2ReceivedPublish
-	QoS2AwaitingPubrel
+	QoS2ReceivedPublish QoS2State = 2
+	QoS2AwaitingPubrel  QoS2State = 3
 
-	QoS2Complete
+	QoS2Complete QoS2State = 4
 )
 
 // QoS2Message represents a QoS 2 message in the flow.
