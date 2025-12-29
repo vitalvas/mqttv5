@@ -451,8 +451,8 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 23. Documentation
 
-- [ ] Document all public types and functions with godoc
-- [ ] Document packet structures
-- [ ] Document transport usage
-- [ ] Document session management
-- [ ] Document clustering interface implementation
+- [x] Document all public types and functions with godoc
+- [x] Document packet structures
+- [x] Document transport usage
+- [x] Document session management
+- [x] Document clustering interface implementation
