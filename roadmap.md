@@ -379,10 +379,10 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 13. Flow Control
 
-- [ ] Implement receive maximum tracking
-- [ ] Implement quota management
-- [ ] Implement quota replenishment on acknowledgment
-- [ ] Write unit/benchmark tests for flow control
+- [x] Implement receive maximum tracking
+- [x] Implement quota management
+- [x] Implement quota replenishment on acknowledgment
+- [x] Write unit/benchmark tests for flow control
 
 ## 14. Will Message
 
