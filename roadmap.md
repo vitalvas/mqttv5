@@ -433,11 +433,11 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 21. Conformance Tests
 
-- [ ] Test all reason codes per specification
-- [ ] Test all properties per packet type
-- [ ] Test error conditions from specification
-- [ ] Test protocol edge cases
-- [ ] Verify zero-alloc paths in hot code
+- [x] Test all reason codes per specification
+- [x] Test all properties per packet type
+- [x] Test error conditions from specification
+- [x] Test protocol edge cases
+- [x] Verify zero-alloc paths in hot code
 
 ## 22. Examples
 
