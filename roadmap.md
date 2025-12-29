@@ -408,10 +408,10 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ## 17. Authentication Interface
 
-- [ ] Define Authenticator interface (Authenticate method)
-- [ ] Define AuthResult struct (success, reason code, properties)
-- [ ] Define AuthContext struct (client ID, username, password, connection info)
-- [ ] Define EnhancedAuthenticator interface for AUTH packet exchange
+- [x] Define Authenticator interface (Authenticate method)
+- [x] Define AuthResult struct (success, reason code, properties)
+- [x] Define AuthContext struct (client ID, username, password, connection info)
+- [x] Define EnhancedAuthenticator interface for AUTH packet exchange
 
 ## 18. Authorization Interface
 
