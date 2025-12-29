@@ -219,9 +219,9 @@ func TestConnackPacketDecodeErrors(t *testing.T) {
 		// Build a packet with reserved bits set
 		data := []byte{
 			0x20, 0x03, // Fixed header
-			0x02,       // Invalid flags (reserved bit set)
-			0x00,       // Reason code
-			0x00,       // Empty properties
+			0x02, // Invalid flags (reserved bit set)
+			0x00, // Reason code
+			0x00, // Empty properties
 		}
 
 		r := bytes.NewReader(data)

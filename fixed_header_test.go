@@ -394,11 +394,11 @@ func FuzzFixedHeaderDecode(f *testing.F) {
 	f.Add([]byte{0x30, 0xFF, 0xFF, 0xFF, 0x7F}) // max length
 
 	// Edge cases
-	f.Add([]byte{0x00, 0x00})                         // invalid packet type 0
-	f.Add([]byte{0xFF, 0x00})                         // packet type 15 with invalid flags
-	f.Add([]byte{0x80, 0x80, 0x80, 0x80, 0x80})       // too many continuation bytes
-	f.Add([]byte{0x10})                               // incomplete
-	f.Add([]byte{0x30, 0x80})                         // incomplete varint
+	f.Add([]byte{0x00, 0x00})                   // invalid packet type 0
+	f.Add([]byte{0xFF, 0x00})                   // packet type 15 with invalid flags
+	f.Add([]byte{0x80, 0x80, 0x80, 0x80, 0x80}) // too many continuation bytes
+	f.Add([]byte{0x10})                         // incomplete
+	f.Add([]byte{0x30, 0x80})                   // incomplete varint
 
 	// Random generated seeds
 	for range 10 {

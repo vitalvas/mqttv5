@@ -280,7 +280,7 @@ func TestMemorySessionConcurrency(_ *testing.T) {
 	var wg sync.WaitGroup
 
 	// Concurrent subscription operations
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
@@ -293,7 +293,7 @@ func TestMemorySessionConcurrency(_ *testing.T) {
 	}
 
 	// Concurrent packet ID operations
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -302,7 +302,7 @@ func TestMemorySessionConcurrency(_ *testing.T) {
 	}
 
 	// Concurrent pending message operations
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
@@ -320,7 +320,7 @@ func TestMemorySessionStoreConcurrency(_ *testing.T) {
 	store := NewMemorySessionStore()
 	var wg sync.WaitGroup
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()

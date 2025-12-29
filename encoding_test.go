@@ -395,11 +395,11 @@ func BenchmarkDecodeVarint(b *testing.B) {
 
 func FuzzDecodeString(f *testing.F) {
 	// Add seed corpus - structured data
-	f.Add([]byte{0x00, 0x00})                         // empty string
+	f.Add([]byte{0x00, 0x00})                          // empty string
 	f.Add([]byte{0x00, 0x05, 'h', 'e', 'l', 'l', 'o'}) // "hello"
-	f.Add([]byte{0x00, 0x03, 0xE4, 0xB8, 0x96})       // "世" (UTF-8)
-	f.Add([]byte{0xFF, 0xFF})                         // max length prefix
-	f.Add([]byte{0x00, 0x10, 0x00, 0x01, 0x02, 0x03}) // truncated
+	f.Add([]byte{0x00, 0x03, 0xE4, 0xB8, 0x96})        // "世" (UTF-8)
+	f.Add([]byte{0xFF, 0xFF})                          // max length prefix
+	f.Add([]byte{0x00, 0x10, 0x00, 0x01, 0x02, 0x03})  // truncated
 
 	// Random generated seeds
 	for range 10 {
@@ -445,7 +445,7 @@ func FuzzDecodeVarint(f *testing.F) {
 	f.Add([]byte{0x80, 0x01})
 	f.Add([]byte{0xFF, 0xFF, 0xFF, 0x7F})
 	f.Add([]byte{0x80, 0x80, 0x80, 0x80, 0x80}) // too many continuation bytes
-	f.Add([]byte{0x80})                          // incomplete
+	f.Add([]byte{0x80})                         // incomplete
 
 	// Random generated seeds
 	for range 10 {

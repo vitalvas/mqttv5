@@ -214,7 +214,7 @@ func TestMemoryRetainedStoreConcurrency(_ *testing.T) {
 	store := NewMemoryRetainedStore()
 	var wg sync.WaitGroup
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
@@ -258,7 +258,7 @@ func BenchmarkMemoryRetainedStoreGet(b *testing.B) {
 
 func BenchmarkMemoryRetainedStoreMatch(b *testing.B) {
 	store := NewMemoryRetainedStore()
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		topic := "sensor/" + string(rune(i)) + "/temperature"
 		store.Set(&RetainedMessage{Topic: topic, Payload: []byte("data")})
 	}

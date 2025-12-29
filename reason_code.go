@@ -187,28 +187,28 @@ var (
 
 	// PUBACK valid reason codes
 	pubackReasonCodes = map[ReasonCode]bool{
-		ReasonSuccess:              true,
+		ReasonSuccess:               true,
 		ReasonNoMatchingSubscribers: true,
-		ReasonUnspecifiedError:     true,
-		ReasonImplSpecificError:    true,
-		ReasonNotAuthorized:        true,
-		ReasonTopicNameInvalid:     true,
-		ReasonPacketIDInUse:        true,
-		ReasonQuotaExceeded:        true,
-		ReasonPayloadFormatInvalid: true,
+		ReasonUnspecifiedError:      true,
+		ReasonImplSpecificError:     true,
+		ReasonNotAuthorized:         true,
+		ReasonTopicNameInvalid:      true,
+		ReasonPacketIDInUse:         true,
+		ReasonQuotaExceeded:         true,
+		ReasonPayloadFormatInvalid:  true,
 	}
 
 	// PUBREC valid reason codes
 	pubrecReasonCodes = map[ReasonCode]bool{
-		ReasonSuccess:              true,
+		ReasonSuccess:               true,
 		ReasonNoMatchingSubscribers: true,
-		ReasonUnspecifiedError:     true,
-		ReasonImplSpecificError:    true,
-		ReasonNotAuthorized:        true,
-		ReasonTopicNameInvalid:     true,
-		ReasonPacketIDInUse:        true,
-		ReasonQuotaExceeded:        true,
-		ReasonPayloadFormatInvalid: true,
+		ReasonUnspecifiedError:      true,
+		ReasonImplSpecificError:     true,
+		ReasonNotAuthorized:         true,
+		ReasonTopicNameInvalid:      true,
+		ReasonPacketIDInUse:         true,
+		ReasonQuotaExceeded:         true,
+		ReasonPayloadFormatInvalid:  true,
 	}
 
 	// PUBREL valid reason codes

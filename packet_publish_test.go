@@ -543,8 +543,8 @@ func FuzzPublishPacketDecode(f *testing.F) {
 	f.Add(buf.Bytes())
 
 	// Edge cases
-	f.Add([]byte{0x30, 0x00})                         // Empty
-	f.Add([]byte{0x30, 0x03, 0x00, 0x01, 't'})        // Minimal topic, no payload
+	f.Add([]byte{0x30, 0x00})                              // Empty
+	f.Add([]byte{0x30, 0x03, 0x00, 0x01, 't'})             // Minimal topic, no payload
 	f.Add([]byte{0x32, 0x05, 0x00, 0x01, 't', 0x00, 0x01}) // QoS 1 with packet ID
 
 	// Random generated seeds

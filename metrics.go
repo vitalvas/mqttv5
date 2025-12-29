@@ -128,10 +128,10 @@ func (n *noOpGauge) Value() float64 { return 0 }
 
 type noOpHistogram struct{}
 
-func (n *noOpHistogram) Observe(_ float64)            {}
+func (n *noOpHistogram) Observe(_ float64)               {}
 func (n *noOpHistogram) ObserveDuration(_ time.Duration) {}
-func (n *noOpHistogram) Count() uint64                { return 0 }
-func (n *noOpHistogram) Sum() float64                 { return 0 }
+func (n *noOpHistogram) Count() uint64                   { return 0 }
+func (n *noOpHistogram) Sum() float64                    { return 0 }
 
 // Standard metric names for MQTT brokers.
 const (

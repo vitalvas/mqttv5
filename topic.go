@@ -13,7 +13,7 @@ var (
 )
 
 const (
-	topicSeparator     = '/'
+	topicSeparator      = '/'
 	singleLevelWildcard = '+'
 	multiLevelWildcard  = '#'
 )

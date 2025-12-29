@@ -32,18 +32,18 @@ func TestReadWritePacketRoundTrip(t *testing.T) {
 		{
 			name: "PUBLISH QoS0",
 			packet: &PublishPacket{
-				Topic: "test/topic",
-				Payload:   []byte("hello"),
-				QoS:       0,
+				Topic:   "test/topic",
+				Payload: []byte("hello"),
+				QoS:     0,
 			},
 		},
 		{
 			name: "PUBLISH QoS1",
 			packet: &PublishPacket{
-				Topic: "test/topic",
-				Payload:   []byte("hello"),
-				QoS:       1,
-				PacketID:  1,
+				Topic:    "test/topic",
+				Payload:  []byte("hello"),
+				QoS:      1,
+				PacketID: 1,
 			},
 		},
 		{
@@ -128,9 +128,9 @@ func TestReadWritePacketRoundTrip(t *testing.T) {
 func TestReadPacketMaxSize(t *testing.T) {
 	// Create a packet larger than max size
 	packet := &PublishPacket{
-		Topic: "test/topic",
-		Payload:   make([]byte, 1000),
-		QoS:       0,
+		Topic:   "test/topic",
+		Payload: make([]byte, 1000),
+		QoS:     0,
 	}
 
 	var buf bytes.Buffer
@@ -145,9 +145,9 @@ func TestReadPacketMaxSize(t *testing.T) {
 func TestWritePacketMaxSize(t *testing.T) {
 	// Create a packet larger than max size
 	packet := &PublishPacket{
-		Topic: "test/topic",
-		Payload:   make([]byte, 1000),
-		QoS:       0,
+		Topic:   "test/topic",
+		Payload: make([]byte, 1000),
+		QoS:     0,
 	}
 
 	var buf bytes.Buffer
@@ -219,10 +219,10 @@ func TestReadPacketAllTypes(t *testing.T) {
 
 func BenchmarkReadPacket(b *testing.B) {
 	packet := &PublishPacket{
-		Topic: "test/topic",
-		Payload:   []byte("hello world"),
-		QoS:       1,
-		PacketID:  1,
+		Topic:    "test/topic",
+		Payload:  []byte("hello world"),
+		QoS:      1,
+		PacketID: 1,
 	}
 	var buf bytes.Buffer
 	_, _ = WritePacket(&buf, packet, 0)
@@ -238,10 +238,10 @@ func BenchmarkReadPacket(b *testing.B) {
 
 func BenchmarkWritePacket(b *testing.B) {
 	packet := &PublishPacket{
-		Topic: "test/topic",
-		Payload:   []byte("hello world"),
-		QoS:       1,
-		PacketID:  1,
+		Topic:    "test/topic",
+		Payload:  []byte("hello world"),
+		QoS:      1,
+		PacketID: 1,
 	}
 	var buf bytes.Buffer
 	buf.Grow(64)
@@ -257,10 +257,10 @@ func BenchmarkWritePacket(b *testing.B) {
 
 func BenchmarkReadWriteRoundTrip(b *testing.B) {
 	packet := &PublishPacket{
-		Topic: "test/topic",
-		Payload:   []byte("hello world"),
-		QoS:       1,
-		PacketID:  1,
+		Topic:    "test/topic",
+		Payload:  []byte("hello world"),
+		QoS:      1,
+		PacketID: 1,
 	}
 
 	b.ResetTimer()

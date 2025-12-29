@@ -72,8 +72,8 @@ func (p PacketType) Valid() bool {
 
 // Fixed header errors.
 var (
-	ErrInvalidPacketType    = errors.New("mqttv5: invalid packet type")
-	ErrInvalidPacketFlags   = errors.New("mqttv5: invalid packet flags")
+	ErrInvalidPacketType       = errors.New("mqttv5: invalid packet type")
+	ErrInvalidPacketFlags      = errors.New("mqttv5: invalid packet flags")
 	ErrRemainingLengthTooLarge = errors.New("mqttv5: remaining length too large")
 )
 
