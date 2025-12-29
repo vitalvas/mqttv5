@@ -125,15 +125,15 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ### 7.2 CONNACK (Type 2)
 
-- [ ] Define ConnackPacket struct
-- [ ] Implement session present flag
-- [ ] Implement reason code
-- [ ] Implement CONNACK properties (session expiry, receive max, max QoS, retain available, max packet size, assigned client ID, topic alias max, reason string, user properties, wildcard subscription available, subscription identifiers available, shared subscription available, server keep alive, response information, server reference, auth method, auth data)
-- [ ] Implement encoder and decoder
-- [ ] Implement validation
-- [ ] Write unit tests for CONNACK packet (all properties, reason codes)
-- [ ] Write benchmarks for CONNACK encoding/decoding
-- [ ] Write fuzz tests for CONNACK decoding
+- [x] Define ConnackPacket struct
+- [x] Implement session present flag
+- [x] Implement reason code
+- [x] Implement CONNACK properties (session expiry, receive max, max QoS, retain available, max packet size, assigned client ID, topic alias max, reason string, user properties, wildcard subscription available, subscription identifiers available, shared subscription available, server keep alive, response information, server reference, auth method, auth data)
+- [x] Implement encoder and decoder
+- [x] Implement validation
+- [x] Write unit tests for CONNACK packet (all properties, reason codes)
+- [x] Write benchmarks for CONNACK encoding/decoding
+- [x] Write fuzz tests for CONNACK decoding
 
 ### 7.3 PUBLISH (Type 3)
 
