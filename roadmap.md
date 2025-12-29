@@ -192,80 +192,80 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ### 7.8 SUBSCRIBE (Type 8)
 
-- [ ] Define SubscribePacket struct
-- [ ] Define Subscription struct (topic filter, options)
-- [ ] Implement subscription options (max QoS, no local, retain as published, retain handling)
-- [ ] Implement packet identifier
-- [ ] Implement SUBSCRIBE properties (subscription identifier, user properties)
-- [ ] Implement subscriptions list
-- [ ] Implement encoder and decoder
-- [ ] Implement fixed header flags validation (must be 0x02)
-- [ ] Implement validation
-- [ ] Write unit/benchmark/fuzz tests for SUBSCRIBE packet
+- [x] Define SubscribePacket struct
+- [x] Define Subscription struct (topic filter, options)
+- [x] Implement subscription options (max QoS, no local, retain as published, retain handling)
+- [x] Implement packet identifier
+- [x] Implement SUBSCRIBE properties (subscription identifier, user properties)
+- [x] Implement subscriptions list
+- [x] Implement encoder and decoder
+- [x] Implement fixed header flags validation (must be 0x02)
+- [x] Implement validation
+- [x] Write unit/benchmark/fuzz tests for SUBSCRIBE packet
 
 ### 7.9 SUBACK (Type 9)
 
-- [ ] Define SubackPacket struct
-- [ ] Implement packet identifier
-- [ ] Implement SUBACK properties (reason string, user properties)
-- [ ] Implement reason codes list
-- [ ] Implement encoder and decoder
-- [ ] Implement validation
-- [ ] Write unit/benchmark/fuzz tests for SUBACK packet
+- [x] Define SubackPacket struct
+- [x] Implement packet identifier
+- [x] Implement SUBACK properties (reason string, user properties)
+- [x] Implement reason codes list
+- [x] Implement encoder and decoder
+- [x] Implement validation
+- [x] Write unit/benchmark/fuzz tests for SUBACK packet
 
 ### 7.10 UNSUBSCRIBE (Type 10)
 
-- [ ] Define UnsubscribePacket struct
-- [ ] Implement packet identifier
-- [ ] Implement UNSUBSCRIBE properties (user properties)
-- [ ] Implement topic filters list
-- [ ] Implement encoder and decoder
-- [ ] Implement fixed header flags validation (must be 0x02)
-- [ ] Implement validation
-- [ ] Write unit/benchmark/fuzz tests for UNSUBSCRIBE packet
+- [x] Define UnsubscribePacket struct
+- [x] Implement packet identifier
+- [x] Implement UNSUBSCRIBE properties (user properties)
+- [x] Implement topic filters list
+- [x] Implement encoder and decoder
+- [x] Implement fixed header flags validation (must be 0x02)
+- [x] Implement validation
+- [x] Write unit/benchmark/fuzz tests for UNSUBSCRIBE packet
 
 ### 7.11 UNSUBACK (Type 11)
 
-- [ ] Define UnsubackPacket struct
-- [ ] Implement packet identifier
-- [ ] Implement UNSUBACK properties (reason string, user properties)
-- [ ] Implement reason codes list
-- [ ] Implement encoder and decoder
-- [ ] Implement validation
-- [ ] Write unit/benchmark/fuzz tests for UNSUBACK packet
+- [x] Define UnsubackPacket struct
+- [x] Implement packet identifier
+- [x] Implement UNSUBACK properties (reason string, user properties)
+- [x] Implement reason codes list
+- [x] Implement encoder and decoder
+- [x] Implement validation
+- [x] Write unit/benchmark/fuzz tests for UNSUBACK packet
 
 ### 7.12 PINGREQ (Type 12)
 
-- [ ] Define PingreqPacket struct
-- [ ] Implement encoder and decoder (no variable header, no payload)
-- [ ] Implement validation
-- [ ] Write unit/benchmark/fuzz tests for PINGREQ packet
+- [x] Define PingreqPacket struct
+- [x] Implement encoder and decoder (no variable header, no payload)
+- [x] Implement validation
+- [x] Write unit/benchmark/fuzz tests for PINGREQ packet
 
 ### 7.13 PINGRESP (Type 13)
 
-- [ ] Define PingrespPacket struct
-- [ ] Implement encoder and decoder (no variable header, no payload)
-- [ ] Implement validation
-- [ ] Write unit/benchmark/fuzz tests for PINGRESP packet
+- [x] Define PingrespPacket struct
+- [x] Implement encoder and decoder (no variable header, no payload)
+- [x] Implement validation
+- [x] Write unit/benchmark/fuzz tests for PINGRESP packet
 
 ### 7.14 DISCONNECT (Type 14)
 
-- [ ] Define DisconnectPacket struct
-- [ ] Implement reason code
-- [ ] Implement DISCONNECT properties (session expiry interval, reason string, user properties, server reference)
-- [ ] Implement encoder and decoder
-- [ ] Implement validation
-- [ ] Write unit/benchmark/fuzz tests for DISCONNECT packet
+- [x] Define DisconnectPacket struct
+- [x] Implement reason code
+- [x] Implement DISCONNECT properties (session expiry interval, reason string, user properties, server reference)
+- [x] Implement encoder and decoder
+- [x] Implement validation
+- [x] Write unit/benchmark/fuzz tests for DISCONNECT packet
 
 ### 7.15 AUTH (Type 15)
 
-- [ ] Define AuthPacket struct
-- [ ] Implement reason code
-- [ ] Implement AUTH properties (auth method, auth data, reason string, user properties)
-- [ ] Implement encoder and decoder
-- [ ] Implement fixed header flags validation (must be 0x00)
-- [ ] Implement validation
-- [ ] Write unit/benchmark/fuzz tests for AUTH packet
+- [x] Define AuthPacket struct
+- [x] Implement reason code
+- [x] Implement AUTH properties (auth method, auth data, reason string, user properties)
+- [x] Implement encoder and decoder
+- [x] Implement fixed header flags validation (must be 0x00)
+- [x] Implement validation
+- [x] Write unit/benchmark/fuzz tests for AUTH packet
 
 ## 8. Codec
 
