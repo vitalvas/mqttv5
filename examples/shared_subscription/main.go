@@ -5,9 +5,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
-	"net"
 	"sync"
 	"time"
 
@@ -15,10 +15,9 @@ import (
 )
 
 const (
-	brokerAddr    = "localhost:1883"
-	shareName     = "mygroup"
-	topicFilter   = "sensors/temperature"
-	maxPacketSize = 256 * 1024
+	brokerAddr  = "tcp://localhost:1883"
+	shareName   = "mygroup"
+	topicFilter = "sensors/temperature"
 )
 
 func main() {
@@ -43,12 +42,20 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// Track received messages per subscriber
+	received := make([]int, 3)
+	var mu sync.Mutex
+
 	// Start 3 subscriber clients in the shared group
 	for i := range 3 {
 		wg.Add(1)
 		go func(clientNum int) {
 			defer wg.Done()
-			runSubscriber(ctx, clientNum, sharedFilter)
+			runSubscriber(ctx, clientNum, sharedFilter, func() {
+				mu.Lock()
+				received[clientNum-1]++
+				mu.Unlock()
+			})
 		}(i + 1)
 	}
 
@@ -63,142 +70,67 @@ func main() {
 	}()
 
 	wg.Wait()
+
+	// Print summary
 	fmt.Println("\nDemo completed!")
+	mu.Lock()
+	for i, count := range received {
+		fmt.Printf("Subscriber %d received %d messages\n", i+1, count)
+	}
+	mu.Unlock()
 }
 
-func runSubscriber(ctx context.Context, id int, sharedFilter string) {
+func runSubscriber(ctx context.Context, id int, sharedFilter string, onMessage func()) {
 	clientID := fmt.Sprintf("shared-sub-%d", id)
 
-	conn, err := net.DialTimeout("tcp", brokerAddr, 5*time.Second)
+	client, err := mqttv5.Dial(brokerAddr,
+		mqttv5.WithClientID(clientID),
+		mqttv5.WithKeepAlive(60),
+		mqttv5.OnEvent(func(_ *mqttv5.Client, ev error) {
+			if errors.Is(ev, mqttv5.ErrConnected) {
+				fmt.Printf("[%s] Connected\n", clientID)
+			}
+		}),
+	)
 	if err != nil {
 		log.Printf("[%s] Failed to connect: %v", clientID, err)
 		return
 	}
-	defer conn.Close()
-
-	// Send CONNECT
-	connectPkt := &mqttv5.ConnectPacket{
-		ClientID:   clientID,
-		CleanStart: true,
-		KeepAlive:  60,
-	}
-
-	if _, err := mqttv5.WritePacket(conn, connectPkt, maxPacketSize); err != nil {
-		log.Printf("[%s] Failed to send CONNECT: %v", clientID, err)
-		return
-	}
-
-	// Read CONNACK
-	pkt, _, err := mqttv5.ReadPacket(conn, maxPacketSize)
-	if err != nil {
-		log.Printf("[%s] Failed to read CONNACK: %v", clientID, err)
-		return
-	}
-
-	connack, ok := pkt.(*mqttv5.ConnackPacket)
-	if !ok || connack.ReasonCode != mqttv5.ReasonSuccess {
-		log.Printf("[%s] Connection failed", clientID)
-		return
-	}
-
-	fmt.Printf("[%s] Connected\n", clientID)
+	defer client.Close()
 
 	// Subscribe to shared subscription
-	subscribePkt := &mqttv5.SubscribePacket{
-		PacketID: 1,
-		Subscriptions: []mqttv5.Subscription{
-			{TopicFilter: sharedFilter, QoS: 1},
-		},
-	}
-
-	if _, err := mqttv5.WritePacket(conn, subscribePkt, maxPacketSize); err != nil {
-		log.Printf("[%s] Failed to send SUBSCRIBE: %v", clientID, err)
-		return
-	}
-
-	// Read SUBACK
-	pkt, _, err = mqttv5.ReadPacket(conn, maxPacketSize)
+	err = client.Subscribe(sharedFilter, 1, func(msg *mqttv5.Message) {
+		fmt.Printf("[%s] Received: %s\n", clientID, string(msg.Payload))
+		onMessage()
+	})
 	if err != nil {
-		log.Printf("[%s] Failed to read SUBACK: %v", clientID, err)
+		log.Printf("[%s] Failed to subscribe: %v", clientID, err)
 		return
 	}
+	fmt.Printf("[%s] Subscribed to shared subscription: %s\n", clientID, sharedFilter)
 
-	if _, ok := pkt.(*mqttv5.SubackPacket); ok {
-		fmt.Printf("[%s] Subscribed to shared subscription: %s\n", clientID, sharedFilter)
-	}
-
-	// Read incoming messages
-	messagesReceived := 0
-	for {
-		select {
-		case <-ctx.Done():
-			fmt.Printf("[%s] Received %d messages\n", clientID, messagesReceived)
-			disconnectPkt := &mqttv5.DisconnectPacket{ReasonCode: mqttv5.ReasonSuccess}
-			mqttv5.WritePacket(conn, disconnectPkt, maxPacketSize)
-			return
-		default:
-		}
-
-		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = mqttv5.ReadPacket(conn, maxPacketSize)
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue
-			}
-			return
-		}
-
-		if p, ok := pkt.(*mqttv5.PublishPacket); ok {
-			messagesReceived++
-			fmt.Printf("[%s] Received message #%d: %s\n", clientID, messagesReceived, string(p.Payload))
-
-			if p.QoS == 1 {
-				puback := &mqttv5.PubackPacket{
-					PacketID:   p.PacketID,
-					ReasonCode: mqttv5.ReasonSuccess,
-				}
-				mqttv5.WritePacket(conn, puback, maxPacketSize)
-			}
-		}
-	}
+	// Wait for context cancellation
+	<-ctx.Done()
+	fmt.Printf("[%s] Disconnecting\n", clientID)
 }
 
 func runPublisher(ctx context.Context, topic string) {
 	clientID := "publisher"
 
-	conn, err := net.DialTimeout("tcp", brokerAddr, 5*time.Second)
+	client, err := mqttv5.Dial(brokerAddr,
+		mqttv5.WithClientID(clientID),
+		mqttv5.WithKeepAlive(60),
+		mqttv5.OnEvent(func(_ *mqttv5.Client, ev error) {
+			if errors.Is(ev, mqttv5.ErrConnected) {
+				fmt.Printf("[%s] Connected\n", clientID)
+			}
+		}),
+	)
 	if err != nil {
 		log.Printf("[%s] Failed to connect: %v", clientID, err)
 		return
 	}
-	defer conn.Close()
-
-	// Send CONNECT
-	connectPkt := &mqttv5.ConnectPacket{
-		ClientID:   clientID,
-		CleanStart: true,
-		KeepAlive:  60,
-	}
-
-	if _, err := mqttv5.WritePacket(conn, connectPkt, maxPacketSize); err != nil {
-		log.Printf("[%s] Failed to send CONNECT: %v", clientID, err)
-		return
-	}
-
-	// Read CONNACK
-	pkt, _, err := mqttv5.ReadPacket(conn, maxPacketSize)
-	if err != nil {
-		log.Printf("[%s] Failed to read CONNACK: %v", clientID, err)
-		return
-	}
-
-	connack, ok := pkt.(*mqttv5.ConnackPacket)
-	if !ok || connack.ReasonCode != mqttv5.ReasonSuccess {
-		log.Printf("[%s] Connection failed", clientID)
-		return
-	}
-
-	fmt.Printf("[%s] Connected\n", clientID)
+	defer client.Close()
 
 	// Publish messages
 	for i := 1; i <= 9; i++ {
@@ -208,30 +140,16 @@ func runPublisher(ctx context.Context, topic string) {
 		default:
 		}
 
-		publishPkt := &mqttv5.PublishPacket{
-			Topic:    topic,
-			QoS:      1,
-			PacketID: uint16(i),
-			Payload:  fmt.Appendf(nil, "Temperature reading %d: %.1fC", i, 20.0+float64(i)*0.5),
-		}
-
-		if _, err := mqttv5.WritePacket(conn, publishPkt, maxPacketSize); err != nil {
+		payload := fmt.Sprintf("Temperature reading %d: %.1fC", i, 20.0+float64(i)*0.5)
+		err := client.Publish(topic, []byte(payload), 1, false)
+		if err != nil {
 			log.Printf("[%s] Failed to publish message %d: %v", clientID, i, err)
 			continue
 		}
 
-		// Read PUBACK
-		conn.SetReadDeadline(time.Now().Add(1 * time.Second))
-		pkt, _, _ = mqttv5.ReadPacket(conn, maxPacketSize)
-		if puback, ok := pkt.(*mqttv5.PubackPacket); ok {
-			fmt.Printf("[%s] Published message %d (acked: %d)\n", clientID, i, puback.PacketID)
-		}
-
+		fmt.Printf("[%s] Published message %d\n", clientID, i)
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// Disconnect
-	disconnectPkt := &mqttv5.DisconnectPacket{ReasonCode: mqttv5.ReasonSuccess}
-	mqttv5.WritePacket(conn, disconnectPkt, maxPacketSize)
-	fmt.Printf("[%s] Disconnected\n", clientID)
+	fmt.Printf("[%s] Disconnecting\n", clientID)
 }
