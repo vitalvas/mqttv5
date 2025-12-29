@@ -110,18 +110,18 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ### 7.1 CONNECT (Type 1)
 
-- [ ] Define ConnectPacket struct
-- [ ] Implement protocol name encoding ("MQTT")
-- [ ] Implement protocol version (5)
-- [ ] Implement connect flags (clean start, will flag, will QoS, will retain, password, username)
-- [ ] Implement keep alive (2-byte)
-- [ ] Implement CONNECT properties (session expiry, receive max, max packet size, topic alias max, request response info, request problem info, user properties, auth method, auth data)
-- [ ] Implement payload: client ID, will properties, will topic, will payload, username, password
-- [ ] Implement encoder and decoder
-- [ ] Implement validation
-- [ ] Write unit tests for CONNECT packet (all fields, properties, edge cases)
-- [ ] Write benchmarks for CONNECT encoding/decoding
-- [ ] Write fuzz tests for CONNECT decoding
+- [x] Define ConnectPacket struct
+- [x] Implement protocol name encoding ("MQTT")
+- [x] Implement protocol version (5)
+- [x] Implement connect flags (clean start, will flag, will QoS, will retain, password, username)
+- [x] Implement keep alive (2-byte)
+- [x] Implement CONNECT properties (session expiry, receive max, max packet size, topic alias max, request response info, request problem info, user properties, auth method, auth data)
+- [x] Implement payload: client ID, will properties, will topic, will payload, username, password
+- [x] Implement encoder and decoder
+- [x] Implement validation
+- [x] Write unit tests for CONNECT packet (all fields, properties, edge cases)
+- [x] Write benchmarks for CONNECT encoding/decoding
+- [x] Write fuzz tests for CONNECT decoding
 
 ### 7.2 CONNACK (Type 2)
 
