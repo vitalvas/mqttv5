@@ -137,17 +137,17 @@ SDK providing building blocks for implementing MQTT v5.0 clients and brokers.
 
 ### 7.3 PUBLISH (Type 3)
 
-- [ ] Define PublishPacket struct
-- [ ] Implement fixed header flags (DUP, QoS, RETAIN)
-- [ ] Implement topic name
-- [ ] Implement packet identifier (QoS > 0)
-- [ ] Implement PUBLISH properties (payload format indicator, message expiry interval, topic alias, response topic, correlation data, user properties, subscription identifier, content type)
-- [ ] Implement payload
-- [ ] Implement encoder and decoder
-- [ ] Implement validation
-- [ ] Write unit tests for PUBLISH packet (all QoS levels, flags, properties)
-- [ ] Write benchmarks for PUBLISH encoding/decoding
-- [ ] Write fuzz tests for PUBLISH decoding
+- [x] Define PublishPacket struct
+- [x] Implement fixed header flags (DUP, QoS, RETAIN)
+- [x] Implement topic name
+- [x] Implement packet identifier (QoS > 0)
+- [x] Implement PUBLISH properties (payload format indicator, message expiry interval, topic alias, response topic, correlation data, user properties, subscription identifier, content type)
+- [x] Implement payload
+- [x] Implement encoder and decoder
+- [x] Implement validation
+- [x] Write unit tests for PUBLISH packet (all QoS levels, flags, properties)
+- [x] Write benchmarks for PUBLISH encoding/decoding
+- [x] Write fuzz tests for PUBLISH decoding
 
 ### 7.4 PUBACK (Type 4)
 
