@@ -182,6 +182,133 @@ func TestWSHandlerMQTTPackets(t *testing.T) {
 	assert.Equal(t, ReasonSuccess, connack.ReasonCode)
 }
 
+func TestWSHandlerOriginValidation(t *testing.T) {
+	t.Run("no origin header allowed", func(t *testing.T) {
+		handler := NewWSHandler(func(conn Conn) {
+			conn.Close()
+		})
+
+		server := httptest.NewServer(handler)
+		defer server.Close()
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		dialer := &websocket.Dialer{
+			Subprotocols: []string{WebSocketSubprotocol},
+		}
+		// No Origin header
+		conn, _, err := dialer.Dial(wsURL, nil)
+		require.NoError(t, err)
+		conn.Close()
+	})
+
+	t.Run("matching origin allowed", func(t *testing.T) {
+		handler := NewWSHandler(func(conn Conn) {
+			conn.Close()
+		})
+
+		server := httptest.NewServer(handler)
+		defer server.Close()
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		origin := server.URL // Same origin as server
+
+		dialer := &websocket.Dialer{
+			Subprotocols: []string{WebSocketSubprotocol},
+		}
+		headers := http.Header{"Origin": []string{origin}}
+		conn, _, err := dialer.Dial(wsURL, headers)
+		require.NoError(t, err)
+		conn.Close()
+	})
+
+	t.Run("mismatched origin rejected by default", func(t *testing.T) {
+		handler := NewWSHandler(func(conn Conn) {
+			conn.Close()
+		})
+
+		server := httptest.NewServer(handler)
+		defer server.Close()
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+		dialer := &websocket.Dialer{
+			Subprotocols: []string{WebSocketSubprotocol},
+		}
+		headers := http.Header{"Origin": []string{"http://evil.example.com"}}
+		_, _, err := dialer.Dial(wsURL, headers)
+		require.Error(t, err, "connection should be rejected for mismatched origin")
+	})
+
+	t.Run("wildcard origin allows all", func(t *testing.T) {
+		handler := NewWSHandler(func(conn Conn) {
+			conn.Close()
+		})
+		handler.AllowedOrigins = []string{"*"}
+
+		server := httptest.NewServer(handler)
+		defer server.Close()
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+		dialer := &websocket.Dialer{
+			Subprotocols: []string{WebSocketSubprotocol},
+		}
+		headers := http.Header{"Origin": []string{"http://any.example.com"}}
+		conn, _, err := dialer.Dial(wsURL, headers)
+		require.NoError(t, err)
+		conn.Close()
+	})
+
+	t.Run("specific allowed origin", func(t *testing.T) {
+		handler := NewWSHandler(func(conn Conn) {
+			conn.Close()
+		})
+		handler.AllowedOrigins = []string{"http://allowed.example.com"}
+
+		server := httptest.NewServer(handler)
+		defer server.Close()
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+		dialer := &websocket.Dialer{
+			Subprotocols: []string{WebSocketSubprotocol},
+		}
+
+		// Allowed origin
+		headers := http.Header{"Origin": []string{"http://allowed.example.com"}}
+		conn, _, err := dialer.Dial(wsURL, headers)
+		require.NoError(t, err)
+		conn.Close()
+
+		// Rejected origin
+		headers = http.Header{"Origin": []string{"http://notallowed.example.com"}}
+		_, _, err = dialer.Dial(wsURL, headers)
+		require.Error(t, err)
+	})
+}
+
+func TestExtractHost(t *testing.T) {
+	tests := []struct {
+		url      string
+		expected string
+	}{
+		{"http://localhost:8080", "localhost:8080"},
+		{"https://example.com", "example.com"},
+		{"ws://mqtt.example.com:1883/path", "mqtt.example.com:1883"},
+		{"wss://secure.example.com/mqtt", "secure.example.com"},
+		{"ftp://invalid.com", ""},
+		{"", ""},
+		{"http://", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			result := extractHost(tt.url)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func BenchmarkWSRoundTrip(b *testing.B) {
 	handler := NewWSHandler(func(conn Conn) {
 		defer conn.Close()

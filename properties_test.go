@@ -282,6 +282,60 @@ func TestPropertiesDecodeUnknownPropertyID(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUnknownPropertyID)
 }
 
+func TestPropertiesDecodeDuplicateRejection(t *testing.T) {
+	t.Run("duplicate single-occurrence property rejected", func(t *testing.T) {
+		// Two PayloadFormatIndicator properties (should be rejected)
+		// length=4, prop1: id=0x01 value=0x01, prop2: id=0x01 value=0x00
+		data := []byte{0x04, 0x01, 0x01, 0x01, 0x00}
+
+		var p Properties
+		_, err := p.Decode(bytes.NewReader(data))
+		assert.ErrorIs(t, err, ErrDuplicateProperty)
+	})
+
+	t.Run("multiple UserProperty allowed", func(t *testing.T) {
+		// Two UserProperty entries (should be allowed)
+		var encoded bytes.Buffer
+		var original Properties
+		original.Add(PropUserProperty, StringPair{Key: "k1", Value: "v1"})
+		original.Add(PropUserProperty, StringPair{Key: "k2", Value: "v2"})
+		_, err := original.Encode(&encoded)
+		require.NoError(t, err)
+
+		var p Properties
+		_, err = p.Decode(bytes.NewReader(encoded.Bytes()))
+		require.NoError(t, err)
+		assert.Equal(t, 2, p.Len())
+	})
+
+	t.Run("multiple SubscriptionIdentifier allowed", func(t *testing.T) {
+		// Two SubscriptionIdentifier entries (should be allowed)
+		var encoded bytes.Buffer
+		var original Properties
+		original.Add(PropSubscriptionIdentifier, uint32(1))
+		original.Add(PropSubscriptionIdentifier, uint32(2))
+		_, err := original.Encode(&encoded)
+		require.NoError(t, err)
+
+		var p Properties
+		_, err = p.Decode(bytes.NewReader(encoded.Bytes()))
+		require.NoError(t, err)
+		assert.Equal(t, 2, p.Len())
+	})
+}
+
+func TestPropertyIDAllowsMultiple(t *testing.T) {
+	// Properties that allow multiple occurrences
+	assert.True(t, PropUserProperty.allowsMultiple())
+	assert.True(t, PropSubscriptionIdentifier.allowsMultiple())
+
+	// Properties that don't allow multiple occurrences
+	assert.False(t, PropPayloadFormatIndicator.allowsMultiple())
+	assert.False(t, PropMessageExpiryInterval.allowsMultiple())
+	assert.False(t, PropContentType.allowsMultiple())
+	assert.False(t, PropReceiveMaximum.allowsMultiple())
+}
+
 func TestPropertiesNilReceiver(t *testing.T) {
 	var p *Properties
 

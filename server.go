@@ -286,16 +286,29 @@ func (s *Server) handleConnection(conn net.Conn) {
 		return
 	}
 
-	// Generate client ID if empty
+	// Validate and handle client ID
 	clientID := connect.ClientID
+	var assignedClientID string
 	if clientID == "" {
+		// Per MQTT 5.0 spec: If CleanStart=false and ClientID is empty, reject
+		if !connect.CleanStart {
+			logger.Warn("empty client ID with CleanStart=false", nil)
+			connack := &ConnackPacket{
+				ReasonCode: ReasonClientIDNotValid,
+			}
+			WritePacket(conn, connack, s.config.maxPacketSize)
+			return
+		}
+		// CleanStart=true with empty ClientID: assign one
 		clientID = fmt.Sprintf("auto-%d", time.Now().UnixNano())
+		assignedClientID = clientID
 		connect.ClientID = clientID
 	}
 
 	logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 
 	// Authenticate
+	var authResult *AuthResult
 	if s.config.auth != nil {
 		actx := &AuthContext{
 			ClientID:      clientID,
@@ -321,11 +334,35 @@ func (s *Server) handleConnection(conn net.Conn) {
 			WritePacket(conn, connack, s.config.maxPacketSize)
 			return
 		}
+		authResult = result
 		logger.Debug("authentication successful", nil)
+
+		// Apply AuthResult fields
+		if result.AssignedClientID != "" {
+			clientID = result.AssignedClientID
+			assignedClientID = clientID
+			connect.ClientID = clientID
+			logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
+		}
 	}
 
 	// Create client
 	client := NewServerClient(conn, connect, s.config.maxPacketSize)
+
+	// Apply CONNECT properties from client
+	// Receive Maximum: how many QoS 1/2 messages server can send to this client concurrently
+	if rm := connect.Props.GetUint16(PropReceiveMaximum); rm > 0 {
+		client.SetReceiveMaximum(rm)
+	}
+
+	// Set server's receive maximum (how many QoS 1/2 messages client can send to server)
+	if s.config.receiveMaximum < 65535 {
+		client.SetInboundReceiveMaximum(s.config.receiveMaximum)
+	}
+	// Topic Alias Maximum: how many topic aliases server can use when sending to this client
+	clientTopicAliasMax := connect.Props.GetUint16(PropTopicAliasMaximum)
+	// Session Expiry Interval: stored for session management
+	// (session expiry is handled when client disconnects)
 
 	// Handle session
 	var sessionPresent bool
@@ -372,14 +409,32 @@ func (s *Server) handleConnection(conn net.Conn) {
 		ReasonCode:     ReasonSuccess,
 	}
 
+	// Apply AuthResult fields to CONNACK
+	if authResult != nil {
+		// AuthResult.SessionPresent can override session presence
+		if authResult.SessionPresent {
+			connack.SessionPresent = true
+		}
+		// Merge AuthResult properties into CONNACK
+		if authResult.Properties.Len() > 0 {
+			connack.Props.Merge(&authResult.Properties)
+		}
+	}
+
+	// Set Assigned Client Identifier if we generated one
+	if assignedClientID != "" {
+		connack.Props.Set(PropAssignedClientIdentifier, assignedClientID)
+	}
+
 	// Set server properties
 	if s.config.keepAliveOverride > 0 {
 		connack.Props.Set(PropServerKeepAlive, effectiveKeepAlive)
 	}
 	if s.config.topicAliasMax > 0 {
 		connack.Props.Set(PropTopicAliasMaximum, s.config.topicAliasMax)
-		client.SetTopicAliasMax(s.config.topicAliasMax, 0)
 	}
+	// Set topic alias limits: inbound from server config, outbound from client's CONNECT
+	client.SetTopicAliasMax(s.config.topicAliasMax, clientTopicAliasMax)
 	if s.config.receiveMaximum < 65535 {
 		connack.Props.Set(PropReceiveMaximum, s.config.receiveMaximum)
 	}
@@ -428,11 +483,12 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 		}
 
 		// Trigger will if not clean disconnect
-		if client.IsConnected() {
+		// Clean disconnect is when DISCONNECT packet was received from client
+		if client.IsCleanDisconnect() {
+			s.wills.Unregister(clientID)
+		} else {
 			s.wills.TriggerWill(clientID, 0)
 			logger.Debug("will message triggered", nil)
-		} else {
-			s.wills.Unregister(clientID)
 		}
 
 		s.removeClient(clientID)
@@ -480,11 +536,26 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 			}
 
 		case *PubrelPacket:
-			if _, ok := client.QoS2Tracker().HandlePubrel(p.PacketID); ok {
+			msg, ok := client.QoS2Tracker().HandlePubrel(p.PacketID)
+			if ok {
 				pubcomp := &PubcompPacket{PacketID: p.PacketID}
 				if n, err := WritePacket(conn, pubcomp, s.config.maxPacketSize); err == nil {
 					s.config.metrics.BytesSent(n)
 					s.config.metrics.PacketSent(PacketPUBCOMP)
+				}
+
+				// Release inbound quota for QoS 2 message
+				client.InboundFlowControl().Release()
+
+				// Deliver the QoS 2 message now that the flow is complete
+				if msg != nil && msg.Message != nil {
+					// Callback
+					if s.config.onMessage != nil {
+						s.config.onMessage(client, msg.Message)
+					}
+
+					// Publish to subscribers
+					s.publishToSubscribers(clientID, msg.Message)
 				}
 			}
 
@@ -507,8 +578,9 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 			}
 
 		case *DisconnectPacket:
-			// Clean disconnect - don't send will
+			// Clean disconnect - mark it and close
 			logger.Debug("clean disconnect received", nil)
+			client.SetCleanDisconnect()
 			client.Close()
 			return
 		}
@@ -523,7 +595,10 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 	topic := pub.Topic
 	if alias := pub.Props.GetUint16(PropTopicAlias); alias > 0 {
 		if topic != "" {
-			client.TopicAliases().SetInbound(alias, topic)
+			if err := client.TopicAliases().SetInbound(alias, topic); err != nil {
+				client.Disconnect(ReasonTopicAliasInvalid)
+				return
+			}
 		} else {
 			resolved, err := client.TopicAliases().GetInbound(alias)
 			if err != nil {
@@ -540,12 +615,28 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 		return
 	}
 
+	// Validate topic name (no wildcards, valid UTF-8)
+	if err := ValidateTopicName(topic); err != nil {
+		client.Disconnect(ReasonTopicNameInvalid)
+		return
+	}
+
+	// Enforce server's Receive Maximum for inbound QoS 1/2 messages
+	if pub.QoS > 0 {
+		if !client.InboundFlowControl().TryAcquire() {
+			// Client has exceeded the receive maximum - protocol error
+			client.Disconnect(ReasonReceiveMaxExceeded)
+			return
+		}
+	}
+
 	logger.Debug("publish received", LogFields{
 		LogFieldTopic: topic,
 		LogFieldQoS:   pub.QoS,
 	})
 
 	// Authorization
+	effectiveQoS := pub.QoS
 	if s.config.authz != nil {
 		azCtx := &AuthzContext{
 			ClientID:   clientID,
@@ -573,8 +664,14 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 					ReasonCode: reasonCode,
 				}
 				WritePacket(client.Conn(), puback, s.config.maxPacketSize)
+				// Release inbound quota on authorization failure
+				client.InboundFlowControl().Release()
 			}
 			return
+		}
+		// Apply MaxQoS downgrade if authorizer specified a lower QoS
+		if result.MaxQoS < effectiveQoS {
+			effectiveQoS = result.MaxQoS
 		}
 	}
 
@@ -591,18 +688,8 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 			s.config.metrics.BytesSent(n)
 			s.config.metrics.PacketSent(PacketPUBACK)
 		}
-	}
-
-	// Send PUBREC for QoS 2
-	if pub.QoS == 2 {
-		pubrec := &PubrecPacket{
-			PacketID:   pub.PacketID,
-			ReasonCode: ReasonSuccess,
-		}
-		if n, err := WritePacket(client.Conn(), pubrec, s.config.maxPacketSize); err == nil {
-			s.config.metrics.BytesSent(n)
-			s.config.metrics.PacketSent(PacketPUBREC)
-		}
+		// Release inbound quota
+		client.InboundFlowControl().Release()
 	}
 
 	// Track latency
@@ -610,11 +697,11 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 		s.config.metrics.PublishLatency(time.Since(startTime))
 	}()
 
-	// Convert to Message
+	// Convert to Message (use effectiveQoS which may be downgraded by authorizer)
 	msg := &Message{
 		Topic:   topic,
 		Payload: pub.Payload,
-		QoS:     pub.QoS,
+		QoS:     effectiveQoS,
 		Retain:  pub.Retain,
 	}
 
@@ -636,12 +723,29 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 	}
 	msg.UserProperties = pub.Props.GetAllStringPairs(PropUserProperty)
 
-	// Callback
+	// Send PUBREC for QoS 2 and track the message
+	// Per MQTT 5.0 spec, message delivery happens after PUBREL is received
+	if pub.QoS == 2 {
+		client.QoS2Tracker().TrackReceive(pub.PacketID, msg)
+		pubrec := &PubrecPacket{
+			PacketID:   pub.PacketID,
+			ReasonCode: ReasonSuccess,
+		}
+		if n, err := WritePacket(client.Conn(), pubrec, s.config.maxPacketSize); err == nil {
+			s.config.metrics.BytesSent(n)
+			s.config.metrics.PacketSent(PacketPUBREC)
+			client.QoS2Tracker().SendPubrec(pub.PacketID)
+		}
+		// QoS 2 message delivery is deferred until PUBREL is received
+		return
+	}
+
+	// Callback (QoS 0 and 1 only - QoS 2 callback happens on PUBREL)
 	if s.config.onMessage != nil {
 		s.config.onMessage(client, msg)
 	}
 
-	// Publish to subscribers
+	// Publish to subscribers (QoS 0 and 1 only - QoS 2 delivery happens on PUBREL)
 	s.publishToSubscribers(clientID, msg)
 }
 
@@ -731,13 +835,25 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 				reasonCodes[i] = reasonCode
 				continue
 			}
+			// Apply MaxQoS downgrade if authorizer specified a lower QoS
+			if result.MaxQoS < subscription.QoS {
+				subscription.QoS = result.MaxQoS
+				sub.Subscriptions[i] = subscription
+			}
 		}
 
 		// Check if this is a new subscription
 		isNew := !s.subs.Unsubscribe(clientID, subscription.TopicFilter)
 
 		// Add subscription
-		s.subs.Subscribe(clientID, subscription)
+		if err := s.subs.Subscribe(clientID, subscription); err != nil {
+			logger.Warn("subscription failed", LogFields{
+				LogFieldTopic: subscription.TopicFilter,
+				LogFieldError: err.Error(),
+			})
+			reasonCodes[i] = ReasonTopicFilterInvalid
+			continue
+		}
 		s.config.metrics.SubscriptionAdded()
 
 		logger.Debug("subscription added", LogFields{
@@ -851,6 +967,8 @@ func (s *Server) keepAliveLoop() {
 				s.mu.RUnlock()
 
 				if ok {
+					// Close the client - will is triggered by deferred cleanup in clientLoop
+					// since this is an unclean disconnect (no DISCONNECT packet)
 					client.Close()
 				}
 			}

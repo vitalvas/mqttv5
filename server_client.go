@@ -8,36 +8,39 @@ import (
 
 // ServerClient represents a connected client on the server.
 type ServerClient struct {
-	mu            sync.RWMutex
-	conn          Conn
-	clientID      string
-	username      string
-	session       Session
-	topicAliases  *TopicAliasManager
-	qos1Tracker   *QoS1Tracker
-	qos2Tracker   *QoS2Tracker
-	flowControl   *FlowController
-	properties    *ConnectPacket // original connect properties
-	connected     atomic.Bool
-	cleanStart    bool
-	keepAlive     uint16
-	maxPacketSize uint32
+	mu                 sync.RWMutex
+	conn               Conn
+	clientID           string
+	username           string
+	session            Session
+	topicAliases       *TopicAliasManager
+	qos1Tracker        *QoS1Tracker
+	qos2Tracker        *QoS2Tracker
+	flowControl        *FlowController // outbound flow control (server → client)
+	inboundFlowControl *FlowController // inbound flow control (client → server)
+	properties         *ConnectPacket  // original connect properties
+	connected          atomic.Bool
+	cleanDisconnect    atomic.Bool // true if DISCONNECT packet was received
+	cleanStart         bool
+	keepAlive          uint16
+	maxPacketSize      uint32
 }
 
 // NewServerClient creates a new server client.
 func NewServerClient(conn Conn, connect *ConnectPacket, maxPacketSize uint32) *ServerClient {
 	client := &ServerClient{
-		conn:          conn,
-		clientID:      connect.ClientID,
-		username:      connect.Username,
-		properties:    connect,
-		cleanStart:    connect.CleanStart,
-		keepAlive:     connect.KeepAlive,
-		maxPacketSize: maxPacketSize,
-		topicAliases:  NewTopicAliasManager(0, 0),
-		qos1Tracker:   NewQoS1Tracker(20*time.Second, 3),
-		qos2Tracker:   NewQoS2Tracker(20*time.Second, 3),
-		flowControl:   NewFlowController(65535),
+		conn:               conn,
+		clientID:           connect.ClientID,
+		username:           connect.Username,
+		properties:         connect,
+		cleanStart:         connect.CleanStart,
+		keepAlive:          connect.KeepAlive,
+		maxPacketSize:      maxPacketSize,
+		topicAliases:       NewTopicAliasManager(0, 0),
+		qos1Tracker:        NewQoS1Tracker(20*time.Second, 3),
+		qos2Tracker:        NewQoS2Tracker(20*time.Second, 3),
+		flowControl:        NewFlowController(65535),
+		inboundFlowControl: NewFlowController(65535),
 	}
 	client.connected.Store(true)
 	return client
@@ -87,6 +90,16 @@ func (c *ServerClient) IsConnected() bool {
 	return c.connected.Load()
 }
 
+// SetCleanDisconnect marks this as a clean disconnect (DISCONNECT packet received).
+func (c *ServerClient) SetCleanDisconnect() {
+	c.cleanDisconnect.Store(true)
+}
+
+// IsCleanDisconnect returns true if the client sent a DISCONNECT packet.
+func (c *ServerClient) IsCleanDisconnect() bool {
+	return c.cleanDisconnect.Load()
+}
+
 // TopicAliases returns the topic alias manager.
 func (c *ServerClient) TopicAliases() *TopicAliasManager {
 	c.mu.RLock()
@@ -117,7 +130,7 @@ func (c *ServerClient) FlowControl() *FlowController {
 	return c.flowControl
 }
 
-// SetReceiveMaximum sets the receive maximum from the client.
+// SetReceiveMaximum sets the receive maximum from the client (outbound flow control).
 func (c *ServerClient) SetReceiveMaximum(maxVal uint16) {
 	if maxVal == 0 {
 		maxVal = 65535
@@ -125,6 +138,23 @@ func (c *ServerClient) SetReceiveMaximum(maxVal uint16) {
 	c.mu.Lock()
 	c.flowControl = NewFlowController(maxVal)
 	c.mu.Unlock()
+}
+
+// SetInboundReceiveMaximum sets the server's receive maximum (inbound flow control).
+func (c *ServerClient) SetInboundReceiveMaximum(maxVal uint16) {
+	if maxVal == 0 {
+		maxVal = 65535
+	}
+	c.mu.Lock()
+	c.inboundFlowControl = NewFlowController(maxVal)
+	c.mu.Unlock()
+}
+
+// InboundFlowControl returns the inbound flow controller.
+func (c *ServerClient) InboundFlowControl() *FlowController {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.inboundFlowControl
 }
 
 // Send sends a message to the client.

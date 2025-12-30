@@ -282,6 +282,44 @@ func TestDecodeVarintMalformed(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestDecodeVarintOverlong(t *testing.T) {
+	// Overlong encodings use more bytes than necessary to represent a value
+	tests := []struct {
+		name  string
+		input []byte
+		value uint32
+	}{
+		{
+			name:  "zero in 2 bytes",
+			input: []byte{0x80, 0x00}, // 0 encoded in 2 bytes (should be 0x00)
+			value: 0,
+		},
+		{
+			name:  "1 in 2 bytes",
+			input: []byte{0x81, 0x00}, // 1 encoded in 2 bytes (should be 0x01)
+			value: 1,
+		},
+		{
+			name:  "127 in 2 bytes",
+			input: []byte{0xFF, 0x00}, // 127 encoded in 2 bytes (should be 0x7F)
+			value: 127,
+		},
+		{
+			name:  "128 in 3 bytes",
+			input: []byte{0x80, 0x81, 0x00}, // 128 encoded in 3 bytes (should be 0x80, 0x01)
+			value: 128,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := bytes.NewBuffer(tt.input)
+			_, _, err := decodeVarint(buf)
+			assert.ErrorIs(t, err, ErrVarintOverlong, "value %d should reject overlong encoding", tt.value)
+		})
+	}
+}
+
 // Benchmarks
 
 func BenchmarkEncodeString(b *testing.B) {

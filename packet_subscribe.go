@@ -130,9 +130,10 @@ func (p *SubscribePacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 	}
 
 	// Validate subscription identifier if present (must be 1-268435455 per MQTT v5.0 spec)
+	var subscriptionID uint32
 	if p.Props.Has(PropSubscriptionIdentifier) {
-		subID := p.Props.GetUint32(PropSubscriptionIdentifier)
-		if subID == 0 || subID > maxSubscriptionIdentifierValue {
+		subscriptionID = p.Props.GetUint32(PropSubscriptionIdentifier)
+		if subscriptionID == 0 || subscriptionID > maxSubscriptionIdentifierValue {
 			return totalRead, ErrInvalidSubscriptionID
 		}
 	}
@@ -163,6 +164,9 @@ func (p *SubscribePacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 		sub.NoLocal = (options & 0x04) != 0
 		sub.RetainAsPublish = (options & 0x08) != 0
 		sub.RetainHandling = (options >> 4) & 0x03
+
+		// Attach subscription identifier from SUBSCRIBE properties
+		sub.SubscriptionID = subscriptionID
 
 		// Check reserved bits
 		if (options & 0xC0) != 0 {

@@ -194,6 +194,7 @@ func encodeVarint(w io.Writer, value uint32) (int, error) {
 
 // decodeVarint reads a variable byte integer from r.
 // Returns the value, number of bytes read, and any error.
+// Per MQTT 5.0 spec, overlong encodings (using more bytes than necessary) are rejected.
 func decodeVarint(r io.Reader) (uint32, int, error) {
 	var value uint32
 	var multiplier uint32 = 1
@@ -222,6 +223,12 @@ func decodeVarint(r io.Reader) (uint32, int, error) {
 		if multiplier > 128*128*128 {
 			return 0, bytesRead, ErrVarintMalformed
 		}
+	}
+
+	// Check for overlong encoding: value should require at least bytesRead bytes
+	// If the value could be encoded in fewer bytes, it's an overlong encoding
+	if bytesRead > varintSize(value) {
+		return 0, bytesRead, ErrVarintOverlong
 	}
 
 	return value, bytesRead, nil

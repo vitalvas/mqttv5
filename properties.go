@@ -200,6 +200,24 @@ func (p *Properties) Delete(id PropertyID) {
 	p.props = p.props[:n]
 }
 
+// Merge adds all properties from other into this Properties.
+// For properties that can appear multiple times (UserProperty, SubscriptionIdentifier),
+// values are appended. For single-occurrence properties, existing values are replaced.
+func (p *Properties) Merge(other *Properties) {
+	if p == nil || other == nil {
+		return
+	}
+	for i := range other.props {
+		prop := other.props[i]
+		// Properties that can appear multiple times should use Add
+		if prop.id == PropUserProperty || prop.id == PropSubscriptionIdentifier {
+			p.Add(prop.id, prop.value)
+		} else {
+			p.Set(prop.id, prop.value)
+		}
+	}
+}
+
 // Typed getters
 
 // GetByte returns the byte value of a property, or 0 if not found.
@@ -412,6 +430,12 @@ func (p *Properties) size() int {
 	return size
 }
 
+// allowsMultiple returns true if this property can appear multiple times.
+// Per MQTT 5.0 spec, only User Property and Subscription Identifier allow multiples.
+func (p PropertyID) allowsMultiple() bool {
+	return p == PropUserProperty || p == PropSubscriptionIdentifier
+}
+
 // Decode reads properties from the reader.
 // Returns the number of bytes read.
 func (p *Properties) Decode(r io.Reader) (int, error) {
@@ -424,6 +448,9 @@ func (p *Properties) Decode(r io.Reader) (int, error) {
 	if length == 0 {
 		return n, nil
 	}
+
+	// Track seen properties to detect duplicates
+	seen := make(map[PropertyID]bool)
 
 	// Read properties
 	remaining := int(length)
@@ -442,6 +469,12 @@ func (p *Properties) Decode(r io.Reader) (int, error) {
 		if !ok {
 			return n, ErrUnknownPropertyID
 		}
+
+		// Check for duplicates (only UserProperty and SubscriptionIdentifier can appear multiple times)
+		if seen[id] && !id.allowsMultiple() {
+			return n, ErrDuplicateProperty
+		}
+		seen[id] = true
 
 		// Read value based on type
 		var value any

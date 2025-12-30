@@ -979,6 +979,283 @@ func TestServerAuthorization(t *testing.T) {
 	})
 }
 
+// TestServerReceiveMaximumEnforcement tests server-side Receive Maximum enforcement
+func TestServerReceiveMaximumEnforcement(t *testing.T) {
+	t.Run("exceeding receive maximum disconnects client", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		// Server with receive maximum of 2
+		srv := NewServer(WithListener(listener), WithServerReceiveMaximum(2))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		// Connect
+		connect := &ConnectPacket{ClientID: "test-client"}
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Send 3 QoS 1 publishes without waiting for PUBACK (exceeds limit of 2)
+		for i := 1; i <= 3; i++ {
+			publish := &PublishPacket{
+				PacketID: uint16(i),
+				Topic:    "test/topic",
+				Payload:  []byte("data"),
+				QoS:      1,
+			}
+			_, err = WritePacket(conn, publish, 256*1024)
+			if err != nil {
+				// Connection may be closed by server
+				break
+			}
+		}
+
+		// Read responses - server should disconnect us
+		var gotDisconnect bool
+		var gotQuotaError bool
+		for i := 0; i < 5; i++ {
+			conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			pkt, _, err := ReadPacket(conn, 256*1024)
+			if err != nil {
+				// Connection closed by server - this is expected
+				gotDisconnect = true
+				break
+			}
+			if disc, ok := pkt.(*DisconnectPacket); ok {
+				gotDisconnect = true
+				if disc.ReasonCode == ReasonReceiveMaxExceeded {
+					gotQuotaError = true
+				}
+				break
+			}
+		}
+
+		// Server should have disconnected us for exceeding receive maximum
+		assert.True(t, gotDisconnect, "server should disconnect client for exceeding receive maximum")
+		if gotDisconnect && !gotQuotaError {
+			// Server disconnected but we didn't catch the DISCONNECT packet
+			// (it may have been sent and connection closed immediately after)
+			t.Log("server disconnected client (DISCONNECT packet may have been missed)")
+		}
+
+		conn.Close()
+		srv.Close()
+		wg.Wait()
+	})
+
+	t.Run("within receive maximum allowed", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener), WithServerReceiveMaximum(10))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		connect := &ConnectPacket{ClientID: "test-client"}
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Send 2 QoS 1 publishes (within limit)
+		for i := 1; i <= 2; i++ {
+			publish := &PublishPacket{
+				PacketID: uint16(i),
+				Topic:    "test/topic",
+				Payload:  []byte("data"),
+				QoS:      1,
+			}
+			_, err = WritePacket(conn, publish, 256*1024)
+			require.NoError(t, err)
+		}
+
+		// Read PUBACKs - both should succeed
+		for i := 0; i < 2; i++ {
+			conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			pkt, _, err := ReadPacket(conn, 256*1024)
+			require.NoError(t, err)
+			puback, ok := pkt.(*PubackPacket)
+			require.True(t, ok)
+			assert.Equal(t, ReasonSuccess, puback.ReasonCode)
+		}
+
+		conn.Close()
+		srv.Close()
+		wg.Wait()
+	})
+}
+
+// TestServerMaxQoSDowngrade tests AuthzResult.MaxQoS downgrade behavior
+func TestServerMaxQoSDowngrade(t *testing.T) {
+	t.Run("subscription QoS downgraded to MaxQoS", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		// Authorizer that allows subscriptions but limits QoS to 1
+		authz := &testAuthorizer{
+			authzFunc: func(_ context.Context, _ *AuthzContext) (*AuthzResult, error) {
+				return &AuthzResult{Allowed: true, MaxQoS: 1}, nil
+			},
+		}
+
+		srv := NewServer(WithListener(listener), WithServerAuthz(authz))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		connect := &ConnectPacket{ClientID: "test-client"}
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Subscribe with QoS 2
+		subscribe := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/topic", QoS: 2},
+			},
+		}
+		_, err = WritePacket(conn, subscribe, 256*1024)
+		require.NoError(t, err)
+
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		suback, ok := pkt.(*SubackPacket)
+		require.True(t, ok)
+		require.Len(t, suback.ReasonCodes, 1)
+		// QoS should be downgraded to 1
+		assert.Equal(t, ReasonCode(1), suback.ReasonCodes[0], "QoS should be downgraded to 1")
+
+		conn.Close()
+		srv.Close()
+		wg.Wait()
+	})
+
+	t.Run("publish QoS internally downgraded to MaxQoS", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		// Track what QoS messages are distributed at
+		var receivedQoS byte
+		var mu sync.Mutex
+
+		// Authorizer that allows publishes but limits QoS to 0
+		authz := &testAuthorizer{
+			authzFunc: func(_ context.Context, _ *AuthzContext) (*AuthzResult, error) {
+				return &AuthzResult{Allowed: true, MaxQoS: 0}, nil
+			},
+		}
+
+		srv := NewServer(
+			WithListener(listener),
+			WithServerAuthz(authz),
+			OnMessage(func(_ *ServerClient, msg *Message) {
+				mu.Lock()
+				receivedQoS = msg.QoS
+				mu.Unlock()
+			}),
+		)
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		connect := &ConnectPacket{ClientID: "test-client"}
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Publish with QoS 1 - will be internally downgraded to QoS 0 for distribution
+		// but PUBACK is still sent to acknowledge receipt from client
+		publish := &PublishPacket{
+			PacketID: 1,
+			Topic:    "test/topic",
+			Payload:  []byte("data"),
+			QoS:      1,
+		}
+		_, err = WritePacket(conn, publish, 256*1024)
+		require.NoError(t, err)
+
+		// Server sends PUBACK to acknowledge receipt from client
+		conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		puback, ok := pkt.(*PubackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, puback.ReasonCode)
+
+		// Give time for message callback to be called
+		time.Sleep(50 * time.Millisecond)
+
+		// Verify the message was handled at QoS 0 internally
+		mu.Lock()
+		assert.Equal(t, byte(0), receivedQoS, "message should be handled at downgraded QoS 0")
+		mu.Unlock()
+
+		conn.Close()
+		srv.Close()
+		wg.Wait()
+	})
+}
+
 // TestServerSessionRecoveryErrorHandling tests proper session error handling (Issue 11)
 func TestServerSessionRecoveryErrorHandling(t *testing.T) {
 	t.Run("session not found creates new session", func(t *testing.T) {

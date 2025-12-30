@@ -262,6 +262,67 @@ func TestSubscribePacketDecodeReservedBits(t *testing.T) {
 	assert.ErrorIs(t, err, ErrProtocolViolation)
 }
 
+func TestSubscribePacketSubscriptionIdentifierAttachment(t *testing.T) {
+	t.Run("subscription identifier attached to all subscriptions", func(t *testing.T) {
+		packet := SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "topic1", QoS: 0},
+				{TopicFilter: "topic2", QoS: 1},
+				{TopicFilter: "topic3", QoS: 2},
+			},
+		}
+		packet.Props.Set(PropSubscriptionIdentifier, uint32(12345))
+
+		var buf bytes.Buffer
+		_, err := packet.Encode(&buf)
+		require.NoError(t, err)
+
+		r := bytes.NewReader(buf.Bytes())
+
+		var header FixedHeader
+		_, err = header.Decode(r)
+		require.NoError(t, err)
+
+		var decoded SubscribePacket
+		_, err = decoded.Decode(r, header)
+		require.NoError(t, err)
+
+		// Verify each subscription has the subscription identifier attached
+		require.Len(t, decoded.Subscriptions, 3)
+		for i, sub := range decoded.Subscriptions {
+			assert.Equal(t, uint32(12345), sub.SubscriptionID, "subscription %d should have SubscriptionID attached", i)
+		}
+	})
+
+	t.Run("no subscription identifier means zero in subscriptions", func(t *testing.T) {
+		packet := SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "topic1", QoS: 0},
+			},
+		}
+		// No subscription identifier property set
+
+		var buf bytes.Buffer
+		_, err := packet.Encode(&buf)
+		require.NoError(t, err)
+
+		r := bytes.NewReader(buf.Bytes())
+
+		var header FixedHeader
+		_, err = header.Decode(r)
+		require.NoError(t, err)
+
+		var decoded SubscribePacket
+		_, err = decoded.Decode(r, header)
+		require.NoError(t, err)
+
+		require.Len(t, decoded.Subscriptions, 1)
+		assert.Equal(t, uint32(0), decoded.Subscriptions[0].SubscriptionID)
+	})
+}
+
 func TestSubscribePacketSubscriptionIdentifierValidation(t *testing.T) {
 	t.Run("valid subscription identifier", func(t *testing.T) {
 		// Create a valid subscribe packet with subscription identifier

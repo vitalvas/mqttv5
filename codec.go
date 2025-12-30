@@ -19,6 +19,11 @@ func ReadPacket(r io.Reader, maxSize uint32) (Packet, int, error) {
 		return nil, n, err
 	}
 
+	// Validate fixed header flags per MQTT spec
+	if err := header.ValidateFlags(); err != nil {
+		return nil, n, err
+	}
+
 	// Check max size
 	if maxSize > 0 && header.RemainingLength > maxSize {
 		return nil, n, ErrPacketTooLarge
@@ -75,6 +80,11 @@ func ReadPacket(r io.Reader, maxSize uint32) (Packet, int, error) {
 	reader := newBytesReader(remaining)
 	_, err = packet.Decode(reader, header)
 	if err != nil {
+		return nil, n, err
+	}
+
+	// Validate decoded packet contents
+	if err := packet.Validate(); err != nil {
 		return nil, n, err
 	}
 

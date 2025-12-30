@@ -30,6 +30,11 @@ type Client struct {
 	subscriptions   map[string]MessageHandler
 	subscriptionsMu sync.RWMutex
 
+	// Pending subscription/unsubscription operations awaiting ACK
+	pendingSubscribes   map[uint16][]string // packet ID -> topic filters
+	pendingUnsubscribes map[uint16][]string // packet ID -> topic filters
+	pendingOpsMu        sync.Mutex
+
 	// Connection state
 	connected    atomic.Bool
 	reconnecting atomic.Bool
@@ -58,14 +63,16 @@ func DialContext(ctx context.Context, addr string, opts ...Option) (*Client, err
 	options := applyOptions(opts...)
 
 	c := &Client{
-		addr:          addr,
-		options:       options,
-		parentCtx:     ctx, // Store parent context for lifecycle management
-		subscriptions: make(map[string]MessageHandler),
-		packetIDMgr:   NewPacketIDManager(),
-		qos1Tracker:   NewQoS1Tracker(30*time.Second, 3),
-		qos2Tracker:   NewQoS2Tracker(30*time.Second, 3),
-		done:          make(chan struct{}),
+		addr:                addr,
+		options:             options,
+		parentCtx:           ctx, // Store parent context for lifecycle management
+		subscriptions:       make(map[string]MessageHandler),
+		pendingSubscribes:   make(map[uint16][]string),
+		pendingUnsubscribes: make(map[uint16][]string),
+		packetIDMgr:         NewPacketIDManager(),
+		qos1Tracker:         NewQoS1Tracker(30*time.Second, 3),
+		qos2Tracker:         NewQoS2Tracker(30*time.Second, 3),
+		done:                make(chan struct{}),
 	}
 
 	// Generate client ID if not provided
@@ -149,6 +156,10 @@ func (c *Client) connect(ctx context.Context) error {
 	if c.options.topicAliasMaximum > 0 {
 		connectPkt.Props.Set(PropTopicAliasMaximum, c.options.topicAliasMaximum)
 	}
+	// Add user properties
+	for key, value := range c.options.userProperties {
+		connectPkt.Props.Add(PropUserProperty, StringPair{Key: key, Value: value})
+	}
 
 	// Send CONNECT
 	if err := c.writePacket(connectPkt); err != nil {
@@ -180,6 +191,26 @@ func (c *Client) connect(ctx context.Context) error {
 		c.cancel()
 		c.conn.Close()
 		return NewConnectError(connack.ReasonCode, connack.Properties())
+	}
+
+	// Apply CONNACK properties
+	props := connack.Properties()
+	if props != nil {
+		// Assigned Client Identifier - server assigned us a new client ID
+		if assignedID := props.GetString(PropAssignedClientIdentifier); assignedID != "" {
+			c.options.clientID = assignedID
+			c.session = NewMemorySession(assignedID)
+		}
+		// Server Keep Alive - server overrides our keep-alive
+		if serverKA := props.GetUint16(PropServerKeepAlive); serverKA > 0 {
+			c.options.keepAlive = serverKA
+		}
+		// Maximum Packet Size - limit our outbound packets
+		if maxPacketSize := props.GetUint32(PropMaximumPacketSize); maxPacketSize > 0 {
+			c.options.maxPacketSize = maxPacketSize
+		}
+		// Topic Alias Maximum - limit topic aliases we can use
+		// (stored for future use when sending publishes)
 	}
 
 	c.connected.Store(true)
@@ -382,11 +413,15 @@ func (c *Client) SubscribeMultiple(filters map[string]byte, handler MessageHandl
 		}
 	}
 
-	// Build subscription list
+	// Build subscription list with validation
 	subs := make([]Subscription, 0, len(filters))
 	for filter, qos := range filters {
 		if filter == "" {
 			return ErrInvalidTopic
+		}
+		// Validate topic filter (wildcards, UTF-8, etc.)
+		if err := ValidateTopicFilter(filter); err != nil {
+			return err
 		}
 		subs = append(subs, Subscription{
 			TopicFilter: filter,
@@ -404,12 +439,23 @@ func (c *Client) SubscribeMultiple(filters map[string]byte, handler MessageHandl
 		Subscriptions: subs,
 	}
 
+	// Build list of topic filters for tracking
+	topicFilters := make([]string, 0, len(filters))
+	for filter := range filters {
+		topicFilters = append(topicFilters, filter)
+	}
+
 	// Register handlers BEFORE sending packet to avoid race with incoming messages
 	c.subscriptionsMu.Lock()
 	for filter := range filters {
 		c.subscriptions[filter] = handler
 	}
 	c.subscriptionsMu.Unlock()
+
+	// Track pending subscription to check SUBACK reason codes later
+	c.pendingOpsMu.Lock()
+	c.pendingSubscribes[packetID] = topicFilters
+	c.pendingOpsMu.Unlock()
 
 	if err := c.writePacket(pkt); err != nil {
 		// Remove handlers on failure
@@ -418,6 +464,10 @@ func (c *Client) SubscribeMultiple(filters map[string]byte, handler MessageHandl
 			delete(c.subscriptions, filter)
 		}
 		c.subscriptionsMu.Unlock()
+		// Clean up pending tracking
+		c.pendingOpsMu.Lock()
+		delete(c.pendingSubscribes, packetID)
+		c.pendingOpsMu.Unlock()
 		_ = c.packetIDMgr.Release(packetID)
 		return err
 	}
@@ -438,6 +488,16 @@ func (c *Client) Unsubscribe(filters ...string) error {
 		return ErrInvalidTopic
 	}
 
+	// Validate topic filters
+	for _, filter := range filters {
+		if filter == "" {
+			return ErrInvalidTopic
+		}
+		if err := ValidateTopicFilter(filter); err != nil {
+			return err
+		}
+	}
+
 	packetID, err := c.packetIDMgr.Allocate()
 	if err != nil {
 		return err
@@ -448,17 +508,18 @@ func (c *Client) Unsubscribe(filters ...string) error {
 		TopicFilters: filters,
 	}
 
+	// Track pending unsubscribe to check UNSUBACK reason codes later
+	c.pendingOpsMu.Lock()
+	c.pendingUnsubscribes[packetID] = filters
+	c.pendingOpsMu.Unlock()
+
 	if err := c.writePacket(pkt); err != nil {
+		c.pendingOpsMu.Lock()
+		delete(c.pendingUnsubscribes, packetID)
+		c.pendingOpsMu.Unlock()
 		_ = c.packetIDMgr.Release(packetID)
 		return err
 	}
-
-	// Remove handlers
-	c.subscriptionsMu.Lock()
-	for _, filter := range filters {
-		delete(c.subscriptions, filter)
-	}
-	c.subscriptionsMu.Unlock()
 
 	return nil
 }
@@ -569,18 +630,28 @@ func (c *Client) handlePublish(pkt *PublishPacket) {
 		}
 		c.writePacket(puback)
 	case 2:
+		// Track the message and send PUBREC, but don't deliver yet
+		// Per MQTT 5.0 spec, message delivery happens after PUBREL is received
+		c.qos2Tracker.TrackReceive(pkt.PacketID, msg)
 		pubrec := &PubrecPacket{
 			PacketID:   pkt.PacketID,
 			ReasonCode: ReasonSuccess,
 		}
 		c.writePacket(pubrec)
-		c.qos2Tracker.TrackReceive(pkt.PacketID, msg)
+		c.qos2Tracker.SendPubrec(pkt.PacketID)
+		// QoS 2 message delivery is deferred until PUBREL is received
+		return
 	}
 
-	// Deliver to matching handlers
+	// Deliver to matching handlers (QoS 0 and 1 only)
+	c.deliverMessage(msg, pkt.Topic)
+}
+
+// deliverMessage delivers a message to matching subscription handlers.
+func (c *Client) deliverMessage(msg *Message, topic string) {
 	c.subscriptionsMu.RLock()
 	for filter, handler := range c.subscriptions {
-		if TopicMatch(filter, pkt.Topic) {
+		if TopicMatch(filter, topic) {
 			handler(msg)
 		}
 	}
@@ -606,12 +677,18 @@ func (c *Client) handlePubrec(pkt *PubrecPacket) {
 
 // handlePubrel processes a PUBREL packet.
 func (c *Client) handlePubrel(pkt *PubrelPacket) {
-	if _, ok := c.qos2Tracker.HandlePubrel(pkt.PacketID); ok {
+	msg, ok := c.qos2Tracker.HandlePubrel(pkt.PacketID)
+	if ok {
 		pubcomp := &PubcompPacket{
 			PacketID:   pkt.PacketID,
 			ReasonCode: ReasonSuccess,
 		}
 		c.writePacket(pubcomp)
+
+		// Deliver the QoS 2 message now that the flow is complete
+		if msg != nil && msg.Message != nil {
+			c.deliverMessage(msg.Message, msg.Message.Topic)
+		}
 	}
 }
 
@@ -622,13 +699,61 @@ func (c *Client) handlePubcomp(pkt *PubcompPacket) {
 }
 
 // handleSuback processes a SUBACK packet.
-func (c *Client) handleSuback(_ *SubackPacket) {
-	// Subscription confirmed - handlers already registered
+func (c *Client) handleSuback(pkt *SubackPacket) {
+	// Get pending subscription for this packet ID
+	c.pendingOpsMu.Lock()
+	filters, ok := c.pendingSubscribes[pkt.PacketID]
+	delete(c.pendingSubscribes, pkt.PacketID)
+	c.pendingOpsMu.Unlock()
+
+	if !ok {
+		return
+	}
+
+	// Release packet ID
+	_ = c.packetIDMgr.Release(pkt.PacketID)
+
+	// Check reason codes and remove handlers for failed subscriptions
+	c.subscriptionsMu.Lock()
+	for i, code := range pkt.ReasonCodes {
+		if i >= len(filters) {
+			break
+		}
+		// Reason codes >= 0x80 indicate failure
+		if code.IsError() {
+			delete(c.subscriptions, filters[i])
+		}
+	}
+	c.subscriptionsMu.Unlock()
 }
 
 // handleUnsuback processes an UNSUBACK packet.
-func (c *Client) handleUnsuback(_ *UnsubackPacket) {
-	// Unsubscription confirmed
+func (c *Client) handleUnsuback(pkt *UnsubackPacket) {
+	// Get pending unsubscribe for this packet ID
+	c.pendingOpsMu.Lock()
+	filters, ok := c.pendingUnsubscribes[pkt.PacketID]
+	delete(c.pendingUnsubscribes, pkt.PacketID)
+	c.pendingOpsMu.Unlock()
+
+	if !ok {
+		return
+	}
+
+	// Release packet ID
+	_ = c.packetIDMgr.Release(pkt.PacketID)
+
+	// Only remove handlers for successful unsubscribes
+	c.subscriptionsMu.Lock()
+	for i, code := range pkt.ReasonCodes {
+		if i >= len(filters) {
+			break
+		}
+		// Only remove handler if unsubscribe was successful
+		if code.IsSuccess() {
+			delete(c.subscriptions, filters[i])
+		}
+	}
+	c.subscriptionsMu.Unlock()
 }
 
 // handleDisconnect processes a DISCONNECT packet from the server.

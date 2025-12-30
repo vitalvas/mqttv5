@@ -157,21 +157,95 @@ type WSHandler struct {
 	// OnConnect is called when a new WebSocket connection is established.
 	// The handler should process MQTT packets on the connection.
 	OnConnect func(conn Conn)
+
+	// AllowedOrigins is a list of allowed origins for WebSocket connections.
+	// If nil or empty, origin checking is strict (Origin must match Host header).
+	// Use "*" to allow all origins (not recommended for production).
+	AllowedOrigins []string
 }
 
 // NewWSHandler creates a new WebSocket handler for MQTT.
+// By default, origin checking is strict (Origin must match Host header).
+// Use AllowedOrigins to configure allowed origins.
 func NewWSHandler(onConnect func(conn Conn)) *WSHandler {
-	return &WSHandler{
-		Upgrader: websocket.Upgrader{
-			Subprotocols:    []string{WebSocketSubprotocol},
-			ReadBufferSize:  4096,
-			WriteBufferSize: 4096,
-			CheckOrigin: func(_ *http.Request) bool {
-				return true
-			},
-		},
+	h := &WSHandler{
 		OnConnect: onConnect,
 	}
+	h.Upgrader = websocket.Upgrader{
+		Subprotocols:    []string{WebSocketSubprotocol},
+		ReadBufferSize:  4096,
+		WriteBufferSize: 4096,
+		CheckOrigin:     h.checkOrigin,
+	}
+	return h
+}
+
+// checkOrigin validates the Origin header for WebSocket connections.
+func (h *WSHandler) checkOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+
+	// If no Origin header, allow (non-browser clients)
+	if origin == "" {
+		return true
+	}
+
+	// Check allowed origins list
+	if len(h.AllowedOrigins) > 0 {
+		for _, allowed := range h.AllowedOrigins {
+			if allowed == "*" {
+				return true
+			}
+			if origin == allowed {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Default: strict check - Origin must match Host header
+	// Parse origin to extract host
+	host := r.Host
+	if host == "" {
+		return false
+	}
+
+	// Extract host from origin URL
+	// Origin format: "scheme://host[:port]"
+	originHost := extractHost(origin)
+	if originHost == "" {
+		return false
+	}
+
+	return originHost == host
+}
+
+// extractHost extracts the host:port from a URL string.
+func extractHost(urlStr string) string {
+	// Skip scheme
+	var start int
+	switch {
+	case len(urlStr) > 8 && urlStr[:8] == "https://":
+		start = 8
+	case len(urlStr) > 7 && urlStr[:7] == "http://":
+		start = 7
+	case len(urlStr) > 6 && urlStr[:6] == "wss://":
+		start = 6
+	case len(urlStr) > 5 && urlStr[:5] == "ws://":
+		start = 5
+	default:
+		return ""
+	}
+
+	// Find end of host (path starts at /)
+	end := len(urlStr)
+	for i := start; i < len(urlStr); i++ {
+		if urlStr[i] == '/' {
+			end = i
+			break
+		}
+	}
+
+	return urlStr[start:end]
 }
 
 // ServeHTTP implements http.Handler.

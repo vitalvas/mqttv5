@@ -50,6 +50,9 @@ func (p *PubrecPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 
 // Validate validates the packet contents.
 func (p *PubrecPacket) Validate() error {
+	if p.PacketID == 0 {
+		return ErrInvalidPacketID
+	}
 	if !p.ReasonCode.ValidForPUBREC() {
 		return ErrInvalidReasonCode
 	}

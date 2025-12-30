@@ -50,6 +50,9 @@ func (p *PubackPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 
 // Validate validates the packet contents.
 func (p *PubackPacket) Validate() error {
+	if p.PacketID == 0 {
+		return ErrInvalidPacketID
+	}
 	if !p.ReasonCode.ValidForPUBACK() {
 		return ErrInvalidReasonCode
 	}

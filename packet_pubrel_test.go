@@ -73,11 +73,20 @@ func TestPubrelPacketInvalidFlags(t *testing.T) {
 }
 
 func TestPubrelPacketValidation(t *testing.T) {
-	valid := PubrelPacket{PacketID: 1, ReasonCode: ReasonSuccess}
-	assert.NoError(t, valid.Validate())
+	t.Run("valid packet", func(t *testing.T) {
+		valid := PubrelPacket{PacketID: 1, ReasonCode: ReasonSuccess}
+		assert.NoError(t, valid.Validate())
+	})
 
-	invalid := PubrelPacket{PacketID: 1, ReasonCode: ReasonNotAuthorized}
-	assert.ErrorIs(t, invalid.Validate(), ErrInvalidReasonCode)
+	t.Run("invalid reason code", func(t *testing.T) {
+		invalid := PubrelPacket{PacketID: 1, ReasonCode: ReasonNotAuthorized}
+		assert.ErrorIs(t, invalid.Validate(), ErrInvalidReasonCode)
+	})
+
+	t.Run("zero packet ID", func(t *testing.T) {
+		invalid := PubrelPacket{PacketID: 0, ReasonCode: ReasonSuccess}
+		assert.ErrorIs(t, invalid.Validate(), ErrInvalidPacketID)
+	})
 }
 
 func BenchmarkPubrelPacketEncode(b *testing.B) {
