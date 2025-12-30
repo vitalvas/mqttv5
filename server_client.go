@@ -163,7 +163,7 @@ func (c *ServerClient) Send(msg *Message) error {
 		pub.Props.Set(PropCorrelationData, msg.CorrelationData)
 	}
 	for _, up := range msg.UserProperties {
-		pub.Props.Set(PropUserProperty, up)
+		pub.Props.Add(PropUserProperty, up)
 	}
 	for _, subID := range msg.SubscriptionIdentifiers {
 		pub.Props.Set(PropSubscriptionIdentifier, subID)

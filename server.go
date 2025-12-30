@@ -530,6 +530,7 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket) {
 	if v := pub.Props.GetBinary(PropCorrelationData); len(v) > 0 {
 		msg.CorrelationData = v
 	}
+	msg.UserProperties = pub.Props.GetAllStringPairs(PropUserProperty)
 
 	// Callback
 	if s.config.onMessage != nil {
