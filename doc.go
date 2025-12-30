@@ -40,12 +40,12 @@
 //	    mqttv5.WithClientID("my-client"),
 //	    mqttv5.WithKeepAlive(60),
 //	)
-//	defer client.Disconnect()
+//	defer client.Close()
 //
 // TLS connections:
 //
 //	client, err := mqttv5.Dial("tls://localhost:8883",
-//	    mqttv5.WithTLSConfig(&tls.Config{}),
+//	    mqttv5.WithTLS(&tls.Config{}),
 //	)
 //
 // WebSocket connections:
@@ -109,12 +109,12 @@
 //
 //	// QoS 1 tracking
 //	tracker := mqttv5.NewQoS1Tracker(retryTimeout, maxRetries)
-//	tracker.StartSend(packetID, message)
-//	tracker.AcknowledgeSend(packetID)
+//	tracker.Track(packetID, message)
+//	tracker.Acknowledge(packetID)
 //
 //	// QoS 2 tracking
 //	tracker := mqttv5.NewQoS2Tracker(retryTimeout, maxRetries)
-//	tracker.StartSend(packetID, message)
+//	tracker.TrackSend(packetID, message)
 //	tracker.HandlePubrec(packetID)
 //	tracker.HandlePubcomp(packetID)
 //
@@ -124,9 +124,9 @@
 //
 //	fc := mqttv5.NewFlowController(receiveMaximum)
 //	if fc.CanSend() {
-//	    fc.MessageSent()
+//	    fc.Acquire()
 //	}
-//	fc.MessageAcknowledged()
+//	fc.Release()
 //
 // # Topic Matching
 //
@@ -147,11 +147,11 @@
 // Implement the Authenticator interface for basic authentication:
 //
 //	type MyAuth struct{}
-//	func (a *MyAuth) Authenticate(ctx mqttv5.AuthContext) mqttv5.AuthResult {
-//	    if ctx.Username == "valid" {
-//	        return mqttv5.AuthResult{Success: true}
+//	func (a *MyAuth) Authenticate(ctx context.Context, authCtx *mqttv5.AuthContext) (*mqttv5.AuthResult, error) {
+//	    if authCtx.Username == "valid" {
+//	        return &mqttv5.AuthResult{Success: true, ReasonCode: mqttv5.ReasonSuccess}, nil
 //	    }
-//	    return mqttv5.AuthResult{Success: false, ReasonCode: mqttv5.ReasonBadUserNameOrPassword}
+//	    return &mqttv5.AuthResult{Success: false, ReasonCode: mqttv5.ReasonBadUserNameOrPassword}, nil
 //	}
 //
 // For enhanced authentication (multi-step), implement EnhancedAuthenticator.
@@ -160,13 +160,13 @@
 //
 // Implement the Authorizer interface for access control:
 //
-//	authorizer := &mqttv5.ACLAuthorizer{}
-//	authorizer.AddEntry(mqttv5.ACLEntry{
-//	    ClientPattern: "*",
-//	    TopicPattern: "public/#",
-//	    CanPublish: true,
-//	    CanSubscribe: true,
-//	})
+//	type MyAuthz struct{}
+//	func (a *MyAuthz) Authorize(ctx context.Context, authzCtx *mqttv5.AuthzContext) (*mqttv5.AuthzResult, error) {
+//	    if authzCtx.Topic == "public" {
+//	        return &mqttv5.AuthzResult{Allowed: true, MaxQoS: 1}, nil
+//	    }
+//	    return &mqttv5.AuthzResult{Allowed: false, ReasonCode: mqttv5.ReasonNotAuthorized}, nil
+//	}
 //
 // # Clustering
 //
@@ -183,12 +183,18 @@
 //
 // # Metrics
 //
-// Implement the Metrics interface to collect operational metrics:
+// Use the built-in metrics collectors for operational metrics:
 //
+//	// For production use with expvar (exposed at /debug/vars)
+//	metrics := mqttv5.NewMetrics()
+//
+//	// For testing
 //	metrics := mqttv5.NewMemoryMetrics()
-//	brokerMetrics := mqttv5.NewBrokerMetrics(metrics)
-//	brokerMetrics.ConnectionOpened()
-//	brokerMetrics.MessageReceived("PUBLISH")
+//
+//	srv := mqttv5.NewServer(
+//	    mqttv5.WithListener(listener),
+//	    mqttv5.WithMetrics(metrics),
+//	)
 //
 // # Logging
 //
