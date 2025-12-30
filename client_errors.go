@@ -66,6 +66,9 @@ var (
 
 	// ErrInvalidTopic is returned when a topic is invalid.
 	ErrInvalidTopic = errors.New("invalid topic")
+
+	// ErrTooManySubscriptions is returned when the subscription limit is reached.
+	ErrTooManySubscriptions = errors.New("too many subscriptions")
 )
 
 // ConnectedEvent contains details about a successful connection.

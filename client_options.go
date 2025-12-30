@@ -39,7 +39,8 @@ type clientOptions struct {
 	onEvent EventHandler
 
 	// Limits
-	maxPacketSize uint32
+	maxPacketSize    uint32
+	maxSubscriptions int // 0 means unlimited
 
 	// Properties for CONNECT packet
 	sessionExpiryInterval uint32
@@ -175,6 +176,14 @@ func WithWillProps(props *Properties) Option {
 func WithMaxPacketSize(size uint32) Option {
 	return func(o *clientOptions) {
 		o.maxPacketSize = size
+	}
+}
+
+// WithMaxSubscriptions sets the maximum number of active subscriptions.
+// Use 0 for unlimited subscriptions.
+func WithMaxSubscriptions(maxValue int) Option {
+	return func(o *clientOptions) {
+		o.maxSubscriptions = maxValue
 	}
 }
 

@@ -84,10 +84,30 @@ func (s *MemorySession) NextPacketID() uint16 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.packetIDCounter++
-	if s.packetIDCounter == 0 {
-		s.packetIDCounter = 1
+	// Try to find an unused packet ID, checking against in-flight messages
+	// Maximum attempts equals the number of possible packet IDs (65535)
+	for range 65535 {
+		s.packetIDCounter++
+		if s.packetIDCounter == 0 {
+			s.packetIDCounter = 1
+		}
+
+		// Check if this ID is already in use by in-flight messages
+		if _, exists := s.inflightQoS1[s.packetIDCounter]; exists {
+			continue
+		}
+		if _, exists := s.inflightQoS2[s.packetIDCounter]; exists {
+			continue
+		}
+		if _, exists := s.pendingMessages[s.packetIDCounter]; exists {
+			continue
+		}
+
+		return s.packetIDCounter
 	}
+
+	// All packet IDs exhausted (extremely unlikely with flow control)
+	// Return the counter anyway - caller should handle this edge case
 	return s.packetIDCounter
 }
 

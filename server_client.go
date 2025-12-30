@@ -89,6 +89,8 @@ func (c *ServerClient) IsConnected() bool {
 
 // TopicAliases returns the topic alias manager.
 func (c *ServerClient) TopicAliases() *TopicAliasManager {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.topicAliases
 }
 
@@ -110,6 +112,8 @@ func (c *ServerClient) QoS2Tracker() *QoS2Tracker {
 
 // FlowControl returns the flow controller.
 func (c *ServerClient) FlowControl() *FlowController {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.flowControl
 }
 
@@ -118,13 +122,22 @@ func (c *ServerClient) SetReceiveMaximum(maxVal uint16) {
 	if maxVal == 0 {
 		maxVal = 65535
 	}
+	c.mu.Lock()
 	c.flowControl = NewFlowController(maxVal)
+	c.mu.Unlock()
 }
 
 // Send sends a message to the client.
 func (c *ServerClient) Send(msg *Message) error {
 	if !c.connected.Load() {
 		return ErrNotConnected
+	}
+
+	// For QoS > 0, check flow control before sending
+	if msg.QoS > 0 {
+		if !c.flowControl.TryAcquire() {
+			return ErrQuotaExceeded
+		}
 	}
 
 	pub := &PublishPacket{
@@ -143,6 +156,13 @@ func (c *ServerClient) Send(msg *Message) error {
 	if msg.QoS > 0 {
 		if c.session != nil {
 			pub.PacketID = c.session.NextPacketID()
+		}
+		// Track for acknowledgment
+		switch msg.QoS {
+		case 1:
+			c.qos1Tracker.Track(pub.PacketID, msg)
+		case 2:
+			c.qos2Tracker.TrackSend(pub.PacketID, msg)
 		}
 	}
 

@@ -7,8 +7,10 @@ import (
 )
 
 var (
-	ErrInvalidPacketID   = errors.New("invalid packet identifier")
-	ErrProtocolViolation = errors.New("protocol violation")
+	ErrInvalidPacketID             = errors.New("invalid packet identifier")
+	ErrProtocolViolation           = errors.New("protocol violation")
+	ErrInvalidSubscriptionID       = errors.New("invalid subscription identifier")
+	maxSubscriptionIdentifierValue = uint32(268435455) // 0x0FFFFFFF per MQTT v5.0 spec
 )
 
 // Subscription represents a topic filter with subscription options.
@@ -125,6 +127,14 @@ func (p *SubscribePacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 	totalRead += n
 	if err != nil {
 		return totalRead, err
+	}
+
+	// Validate subscription identifier if present (must be 1-268435455 per MQTT v5.0 spec)
+	if p.Props.Has(PropSubscriptionIdentifier) {
+		subID := p.Props.GetUint32(PropSubscriptionIdentifier)
+		if subID == 0 || subID > maxSubscriptionIdentifierValue {
+			return totalRead, ErrInvalidSubscriptionID
+		}
 	}
 
 	// Payload: subscriptions

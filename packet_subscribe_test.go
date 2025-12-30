@@ -262,6 +262,89 @@ func TestSubscribePacketDecodeReservedBits(t *testing.T) {
 	assert.ErrorIs(t, err, ErrProtocolViolation)
 }
 
+func TestSubscribePacketSubscriptionIdentifierValidation(t *testing.T) {
+	t.Run("valid subscription identifier", func(t *testing.T) {
+		// Create a valid subscribe packet with subscription identifier
+		packet := SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test", QoS: 0},
+			},
+		}
+		packet.Props.Set(PropSubscriptionIdentifier, uint32(100))
+
+		var buf bytes.Buffer
+		_, err := packet.Encode(&buf)
+		require.NoError(t, err)
+
+		r := bytes.NewReader(buf.Bytes())
+
+		var header FixedHeader
+		_, err = header.Decode(r)
+		require.NoError(t, err)
+
+		var decoded SubscribePacket
+		_, err = decoded.Decode(r, header)
+		assert.NoError(t, err)
+	})
+
+	t.Run("subscription identifier zero is invalid", func(t *testing.T) {
+		// Build packet manually with subscription identifier = 0
+		var buf bytes.Buffer
+
+		// Packet ID
+		buf.Write([]byte{0x00, 0x01})
+
+		// Properties: length (2) + PropSubscriptionIdentifier (0x0B) + value 0
+		buf.WriteByte(0x02) // Properties length
+		buf.WriteByte(0x0B) // PropSubscriptionIdentifier
+		buf.WriteByte(0x00) // Value = 0 (invalid)
+
+		// Topic filter "test"
+		buf.Write([]byte{0x00, 0x04, 't', 'e', 's', 't'})
+
+		// Subscription options
+		buf.WriteByte(0x00)
+
+		header := FixedHeader{
+			PacketType:      PacketSUBSCRIBE,
+			Flags:           0x02,
+			RemainingLength: uint32(buf.Len()),
+		}
+
+		r := bytes.NewReader(buf.Bytes())
+
+		var p SubscribePacket
+		_, err := p.Decode(r, header)
+		assert.ErrorIs(t, err, ErrInvalidSubscriptionID)
+	})
+
+	t.Run("subscription identifier at maximum is valid", func(t *testing.T) {
+		// Test with max valid value: 268435455 (0x0FFFFFFF)
+		packet := SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test", QoS: 0},
+			},
+		}
+		packet.Props.Set(PropSubscriptionIdentifier, uint32(268435455))
+
+		var buf bytes.Buffer
+		_, err := packet.Encode(&buf)
+		require.NoError(t, err)
+
+		r := bytes.NewReader(buf.Bytes())
+
+		var header FixedHeader
+		_, err = header.Decode(r)
+		require.NoError(t, err)
+
+		var decoded SubscribePacket
+		_, err = decoded.Decode(r, header)
+		assert.NoError(t, err)
+	})
+}
+
 func BenchmarkSubscribePacketEncode(b *testing.B) {
 	packet := SubscribePacket{
 		PacketID: 1,

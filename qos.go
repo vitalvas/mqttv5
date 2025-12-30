@@ -203,6 +203,22 @@ func (t *QoS1Tracker) Count() int {
 	return len(t.messages)
 }
 
+// CleanupExpired removes messages that have exceeded max retries.
+// Returns the number of removed messages.
+func (t *QoS1Tracker) CleanupExpired() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	count := 0
+	for packetID, msg := range t.messages {
+		if msg.RetryCount >= t.maxRetries && msg.ShouldRetry() {
+			delete(t.messages, packetID)
+			count++
+		}
+	}
+	return count
+}
+
 // QoS2State represents the state of a QoS 2 publish flow.
 // MQTT v5.0 spec: Section 4.3.3
 type QoS2State int
@@ -243,6 +259,7 @@ func (m *QoS2Message) ShouldRetry() bool {
 type QoS2Tracker struct {
 	mu           sync.RWMutex
 	messages     map[uint16]*QoS2Message
+	completed    map[uint16]time.Time // Track completed packet IDs for PUBCOMP retransmission
 	retryTimeout time.Duration
 	maxRetries   int
 }
@@ -251,6 +268,7 @@ type QoS2Tracker struct {
 func NewQoS2Tracker(retryTimeout time.Duration, maxRetries int) *QoS2Tracker {
 	return &QoS2Tracker{
 		messages:     make(map[uint16]*QoS2Message),
+		completed:    make(map[uint16]time.Time),
 		retryTimeout: retryTimeout,
 		maxRetries:   maxRetries,
 	}
@@ -302,9 +320,18 @@ func (t *QoS2Tracker) HandlePubrec(packetID uint16) (*QoS2Message, bool) {
 }
 
 // HandlePubrel handles receiving PUBREL (receiver side).
+// Returns (message, shouldSendPubcomp). If packet ID was already completed,
+// returns (nil, true) to allow PUBCOMP retransmission per MQTT spec.
 func (t *QoS2Tracker) HandlePubrel(packetID uint16) (*QoS2Message, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// Check if this is a retransmitted PUBREL for an already completed flow
+	if _, completed := t.completed[packetID]; completed {
+		// Update completion time to extend the cache
+		t.completed[packetID] = time.Now()
+		return nil, true // Should send PUBCOMP
+	}
 
 	msg, ok := t.messages[packetID]
 	if !ok {
@@ -316,6 +343,10 @@ func (t *QoS2Tracker) HandlePubrel(packetID uint16) (*QoS2Message, bool) {
 	}
 	msg.State = QoS2Complete
 	delete(t.messages, packetID)
+
+	// Track as completed for potential PUBREL retransmissions
+	t.completed[packetID] = time.Now()
+
 	return msg, true
 }
 
@@ -388,6 +419,39 @@ func (t *QoS2Tracker) Count() int {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return len(t.messages)
+}
+
+// CleanupCompleted removes completed packet IDs older than the retry timeout.
+// This should be called periodically to prevent memory growth.
+func (t *QoS2Tracker) CleanupCompleted() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	count := 0
+	now := time.Now()
+	for packetID, completedAt := range t.completed {
+		if now.Sub(completedAt) > t.retryTimeout*2 {
+			delete(t.completed, packetID)
+			count++
+		}
+	}
+	return count
+}
+
+// CleanupExpired removes messages that have exceeded max retries.
+// Returns the number of removed messages.
+func (t *QoS2Tracker) CleanupExpired() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	count := 0
+	for packetID, msg := range t.messages {
+		if msg.RetryCount >= t.maxRetries && msg.ShouldRetry() {
+			delete(t.messages, packetID)
+			count++
+		}
+	}
+	return count
 }
 
 // StoredMessage represents a message in the message store with expiry.

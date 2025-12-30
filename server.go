@@ -81,9 +81,10 @@ func (s *Server) ListenAndServe() error {
 	}
 
 	// Start background tasks
-	s.wg.Add(2)
+	s.wg.Add(3)
 	go s.keepAliveLoop()
 	go s.willLoop()
+	go s.qosRetryLoop()
 
 	for {
 		conn, err := s.listener.Accept()
@@ -92,6 +93,8 @@ func (s *Server) ListenAndServe() error {
 			case <-s.done:
 				return ErrServerClosed
 			default:
+				// Add backoff delay to prevent CPU burn on persistent errors
+				time.Sleep(100 * time.Millisecond)
 				continue
 			}
 		}
@@ -299,6 +302,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 			sessionPresent = true
 			client.SetSession(existing)
 		} else {
+			// Session doesn't exist or error - create a new one
+			// Only claim sessionPresent if we successfully retrieved an existing session
 			session := NewMemorySession(clientID)
 			s.config.sessionStore.Create(session)
 			client.SetSession(session)
@@ -410,7 +415,9 @@ func (s *Server) clientLoop(client *ServerClient) {
 			s.handlePublish(client, p)
 
 		case *PubackPacket:
-			client.QoS1Tracker().Acknowledge(p.PacketID)
+			if _, ok := client.QoS1Tracker().Acknowledge(p.PacketID); ok {
+				client.FlowControl().Release()
+			}
 
 		case *PubrecPacket:
 			client.QoS2Tracker().HandlePubrec(p.PacketID)
@@ -418,12 +425,15 @@ func (s *Server) clientLoop(client *ServerClient) {
 			WritePacket(conn, pubrel, s.config.maxPacketSize)
 
 		case *PubrelPacket:
-			client.QoS2Tracker().HandlePubrel(p.PacketID)
-			pubcomp := &PubcompPacket{PacketID: p.PacketID}
-			WritePacket(conn, pubcomp, s.config.maxPacketSize)
+			if _, ok := client.QoS2Tracker().HandlePubrel(p.PacketID); ok {
+				pubcomp := &PubcompPacket{PacketID: p.PacketID}
+				WritePacket(conn, pubcomp, s.config.maxPacketSize)
+			}
 
 		case *PubcompPacket:
-			client.QoS2Tracker().HandlePubcomp(p.PacketID)
+			if _, ok := client.QoS2Tracker().HandlePubcomp(p.PacketID); ok {
+				client.FlowControl().Release()
+			}
 
 		case *SubscribePacket:
 			s.handleSubscribe(client, p)
@@ -459,6 +469,12 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket) {
 			}
 			topic = resolved
 		}
+	}
+
+	// Validate topic is not empty after alias resolution
+	if topic == "" {
+		client.Disconnect(ReasonProtocolError)
+		return
 	}
 
 	// Authorization
@@ -750,4 +766,76 @@ func (s *Server) willLoop() {
 			}
 		}
 	}
+}
+
+func (s *Server) qosRetryLoop() {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			s.mu.RLock()
+			clients := make([]*ServerClient, 0, len(s.clients))
+			for _, client := range s.clients {
+				clients = append(clients, client)
+			}
+			s.mu.RUnlock()
+
+			for _, client := range clients {
+				s.retryClientMessages(client)
+			}
+		}
+	}
+}
+
+func (s *Server) retryClientMessages(client *ServerClient) {
+	if !client.IsConnected() {
+		return
+	}
+
+	conn := client.Conn()
+
+	// Retry QoS 1 messages
+	for _, msg := range client.QoS1Tracker().GetPendingRetries() {
+		pub := &PublishPacket{
+			PacketID: msg.PacketID,
+			Topic:    msg.Message.Topic,
+			Payload:  msg.Message.Payload,
+			QoS:      1,
+			Retain:   msg.Message.Retain,
+			DUP:      true, // Set DUP flag for retransmission
+		}
+		WritePacket(conn, pub, s.config.maxPacketSize)
+	}
+
+	// Retry QoS 2 messages
+	for _, msg := range client.QoS2Tracker().GetPendingRetries() {
+		switch msg.State {
+		case QoS2AwaitingPubrec:
+			// Retransmit PUBLISH with DUP flag
+			pub := &PublishPacket{
+				PacketID: msg.PacketID,
+				Topic:    msg.Message.Topic,
+				Payload:  msg.Message.Payload,
+				QoS:      2,
+				Retain:   msg.Message.Retain,
+				DUP:      true,
+			}
+			WritePacket(conn, pub, s.config.maxPacketSize)
+		case QoS2AwaitingPubcomp:
+			// Retransmit PUBREL
+			pubrel := &PubrelPacket{PacketID: msg.PacketID}
+			WritePacket(conn, pubrel, s.config.maxPacketSize)
+		}
+	}
+
+	// Cleanup expired and completed entries to prevent unbounded growth
+	client.QoS1Tracker().CleanupExpired()
+	client.QoS2Tracker().CleanupExpired()
+	client.QoS2Tracker().CleanupCompleted()
 }

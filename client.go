@@ -36,12 +36,13 @@ type Client struct {
 	closed       atomic.Bool
 
 	// Lifecycle control
+	parentCtx  context.Context // User's context for lifecycle management
 	ctx        context.Context
 	cancel     context.CancelFunc
 	done       chan struct{}
 	readDone   chan struct{}
 	writeMu    sync.Mutex
-	lastPacket time.Time
+	lastPacket atomic.Int64 // Unix nano timestamp for thread-safe access
 }
 
 // Dial connects to an MQTT broker and returns a client.
@@ -52,21 +53,20 @@ func Dial(addr string, opts ...Option) (*Client, error) {
 }
 
 // DialContext connects to an MQTT broker with a context.
+// The context controls the client's lifecycle - when canceled, the client will close.
 func DialContext(ctx context.Context, addr string, opts ...Option) (*Client, error) {
 	options := applyOptions(opts...)
 
 	c := &Client{
 		addr:          addr,
 		options:       options,
+		parentCtx:     ctx, // Store parent context for lifecycle management
 		subscriptions: make(map[string]MessageHandler),
 		packetIDMgr:   NewPacketIDManager(),
 		qos1Tracker:   NewQoS1Tracker(30*time.Second, 3),
 		qos2Tracker:   NewQoS2Tracker(30*time.Second, 3),
 		done:          make(chan struct{}),
-		readDone:      make(chan struct{}),
 	}
-
-	c.ctx, c.cancel = context.WithCancel(context.Background())
 
 	// Generate client ID if not provided
 	if options.clientID == "" {
@@ -87,8 +87,28 @@ func DialContext(ctx context.Context, addr string, opts ...Option) (*Client, err
 
 // connect establishes the TCP/TLS connection and performs MQTT handshake.
 func (c *Client) connect(ctx context.Context) error {
+	// Cancel any existing goroutines from previous connection
+	if c.cancel != nil {
+		c.cancel()
+		// Wait for readLoop to finish if it was running
+		select {
+		case <-c.readDone:
+		case <-time.After(time.Second):
+		}
+	}
+
+	// Create new context and channels for this connection
+	// Derive from parent context to respect user's lifecycle control
+	parentCtx := c.parentCtx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	c.ctx, c.cancel = context.WithCancel(parentCtx)
+	c.readDone = make(chan struct{})
+
 	conn, err := c.dial(ctx)
 	if err != nil {
+		c.cancel()
 		return err
 	}
 	c.conn = conn
@@ -132,6 +152,7 @@ func (c *Client) connect(ctx context.Context) error {
 
 	// Send CONNECT
 	if err := c.writePacket(connectPkt); err != nil {
+		c.cancel()
 		c.conn.Close()
 		return fmt.Errorf("failed to send CONNECT: %w", err)
 	}
@@ -142,28 +163,32 @@ func (c *Client) connect(ctx context.Context) error {
 	c.conn.SetReadDeadline(time.Time{})
 
 	if err != nil {
+		c.cancel()
 		c.conn.Close()
 		return fmt.Errorf("failed to read CONNACK: %w", err)
 	}
 
 	connack, ok := pkt.(*ConnackPacket)
 	if !ok {
+		c.cancel()
 		c.conn.Close()
 		return fmt.Errorf("expected CONNACK, got %T", pkt)
 	}
 
 	// Check reason code
 	if connack.ReasonCode != ReasonSuccess {
+		c.cancel()
 		c.conn.Close()
 		return NewConnectError(connack.ReasonCode, connack.Properties())
 	}
 
 	c.connected.Store(true)
-	c.lastPacket = time.Now()
+	c.lastPacket.Store(time.Now().UnixNano())
 
 	// Start background goroutines
 	go c.readLoop()
 	go c.keepAliveLoop()
+	go c.qosRetryLoop()
 
 	// Emit connected event
 	c.emit(NewConnectedEvent(connack.SessionPresent, connack.Properties()))
@@ -346,6 +371,27 @@ func (c *Client) SubscribeMultiple(filters map[string]byte, handler MessageHandl
 		return ErrInvalidTopic
 	}
 
+	// Check subscription limit
+	if c.options.maxSubscriptions > 0 {
+		c.subscriptionsMu.RLock()
+		currentCount := len(c.subscriptions)
+		c.subscriptionsMu.RUnlock()
+
+		// Count new subscriptions (filters not already subscribed)
+		newCount := 0
+		c.subscriptionsMu.RLock()
+		for filter := range filters {
+			if _, exists := c.subscriptions[filter]; !exists {
+				newCount++
+			}
+		}
+		c.subscriptionsMu.RUnlock()
+
+		if currentCount+newCount > c.options.maxSubscriptions {
+			return ErrTooManySubscriptions
+		}
+	}
+
 	// Build subscription list
 	subs := make([]Subscription, 0, len(filters))
 	for filter, qos := range filters {
@@ -368,17 +414,23 @@ func (c *Client) SubscribeMultiple(filters map[string]byte, handler MessageHandl
 		Subscriptions: subs,
 	}
 
-	if err := c.writePacket(pkt); err != nil {
-		_ = c.packetIDMgr.Release(packetID)
-		return err
-	}
-
-	// Register handlers
+	// Register handlers BEFORE sending packet to avoid race with incoming messages
 	c.subscriptionsMu.Lock()
 	for filter := range filters {
 		c.subscriptions[filter] = handler
 	}
 	c.subscriptionsMu.Unlock()
+
+	if err := c.writePacket(pkt); err != nil {
+		// Remove handlers on failure
+		c.subscriptionsMu.Lock()
+		for filter := range filters {
+			delete(c.subscriptions, filter)
+		}
+		c.subscriptionsMu.Unlock()
+		_ = c.packetIDMgr.Release(packetID)
+		return err
+	}
 
 	return nil
 }
@@ -440,7 +492,7 @@ func (c *Client) writePacket(pkt Packet) error {
 		return err
 	}
 
-	c.lastPacket = time.Now()
+	c.lastPacket.Store(time.Now().UnixNano())
 	return nil
 }
 
@@ -507,7 +559,10 @@ func (c *Client) handlePacket(pkt Packet) {
 	case *DisconnectPacket:
 		c.handleDisconnect(p)
 	case *AuthPacket:
-		// Enhanced auth not implemented yet
+		// Enhanced authentication (SASL mechanisms like SCRAM) is not implemented.
+		// The AUTH packet is received but not processed. Standard username/password
+		// authentication via CONNECT packet is fully supported.
+		// See MQTT v5.0 spec Section 4.12 for enhanced authentication details.
 	}
 }
 
@@ -615,12 +670,66 @@ func (c *Client) keepAliveLoop() {
 				continue
 			}
 
-			if time.Since(c.lastPacket) >= interval {
+			lastPacketTime := time.Unix(0, c.lastPacket.Load())
+			if time.Since(lastPacketTime) >= interval {
 				pingreq := &PingreqPacket{}
 				if err := c.writePacket(pingreq); err != nil {
 					c.emit(NewConnectionLostError(err))
 				}
 			}
+		}
+	}
+}
+
+// qosRetryLoop handles retransmission of unacknowledged QoS 1/2 messages.
+func (c *Client) qosRetryLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			if !c.connected.Load() {
+				continue
+			}
+
+			// Retry QoS 1 messages with DUP flag
+			for _, msg := range c.qos1Tracker.GetPendingRetries() {
+				pub := &PublishPacket{
+					PacketID: msg.PacketID,
+					Topic:    msg.Message.Topic,
+					Payload:  msg.Message.Payload,
+					QoS:      1,
+					Retain:   msg.Message.Retain,
+					DUP:      true, // Set DUP flag for retransmission
+				}
+				c.writePacket(pub)
+			}
+
+			// Retry QoS 2 messages with DUP flag
+			for _, msg := range c.qos2Tracker.GetPendingRetries() {
+				switch msg.State {
+				case QoS2AwaitingPubrec:
+					pub := &PublishPacket{
+						PacketID: msg.PacketID,
+						Topic:    msg.Message.Topic,
+						Payload:  msg.Message.Payload,
+						QoS:      2,
+						Retain:   msg.Message.Retain,
+						DUP:      true,
+					}
+					c.writePacket(pub)
+				case QoS2AwaitingPubcomp:
+					pubrel := &PubrelPacket{PacketID: msg.PacketID}
+					c.writePacket(pubrel)
+				}
+			}
+
+			// Cleanup expired messages
+			c.qos1Tracker.CleanupExpired()
+			c.qos2Tracker.CleanupExpired()
 		}
 	}
 }

@@ -87,9 +87,13 @@ func (m *WillManager) TriggerWill(clientID string, sessionExpiry time.Duration) 
 	var sessionExpiryTime time.Time
 	if sessionExpiry > 0 {
 		sessionExpiryTime = now.Add(sessionExpiry)
-		// Will must be published before session expires
+		// Will must be published before session expires (subtract 1 second buffer)
 		if !sessionExpiryTime.IsZero() && publishAt.After(sessionExpiryTime) {
-			publishAt = sessionExpiryTime
+			publishAt = sessionExpiryTime.Add(-time.Second)
+			// Ensure we don't go before 'now'
+			if publishAt.Before(now) {
+				publishAt = now
+			}
 		}
 	}
 

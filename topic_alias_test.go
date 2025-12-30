@@ -146,10 +146,14 @@ func TestTopicAliasManager(t *testing.T) {
 		assert.Equal(t, uint16(1), alias)
 	})
 
-	t.Run("inbound max zero allows any alias", func(t *testing.T) {
+	t.Run("inbound max zero rejects all aliases", func(t *testing.T) {
+		// Per MQTT v5.0 spec, if Topic Alias Maximum is 0 (not set), topic aliases must not be used
 		m := NewTopicAliasManager(0, 10)
 
-		err := m.SetInbound(65535, "test")
-		assert.NoError(t, err)
+		err := m.SetInbound(1, "test")
+		assert.ErrorIs(t, err, ErrTopicAliasExceeded)
+
+		err = m.SetInbound(65535, "test")
+		assert.ErrorIs(t, err, ErrTopicAliasExceeded)
 	})
 }

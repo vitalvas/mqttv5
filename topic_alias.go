@@ -36,12 +36,19 @@ func NewTopicAliasManager(inboundMax, outboundMax uint16) *TopicAliasManager {
 }
 
 // SetInbound registers an inbound alias (received from remote).
+// Per MQTT v5.0 spec, topic aliases must be between 1 and Topic Alias Maximum.
+// If Topic Alias Maximum is 0 (not set), topic aliases must not be used.
 func (m *TopicAliasManager) SetInbound(alias uint16, topic string) error {
 	if alias == 0 {
 		return ErrTopicAliasInvalid
 	}
 
-	if m.inboundMax > 0 && alias > m.inboundMax {
+	// If inboundMax is 0, topic aliases are not allowed
+	if m.inboundMax == 0 {
+		return ErrTopicAliasExceeded
+	}
+
+	if alias > m.inboundMax {
 		return ErrTopicAliasExceeded
 	}
 
