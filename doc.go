@@ -32,34 +32,48 @@
 //	// Write a packet
 //	n, err := mqttv5.WritePacket(conn, packet, maxPacketSize)
 //
-// # Transport
+// # Client
 //
-// Multiple transport types are supported through the Dialer and Listener interfaces.
+// Use the high-level Client API for connecting to MQTT brokers:
 //
-// TCP Transport:
+//	client, err := mqttv5.Dial("tcp://localhost:1883",
+//	    mqttv5.WithClientID("my-client"),
+//	    mqttv5.WithKeepAlive(60),
+//	)
+//	defer client.Disconnect()
 //
-//	dialer := &mqttv5.TCPDialer{Timeout: 5 * time.Second}
-//	conn, err := dialer.Dial(ctx, "localhost:1883")
+// TLS connections:
 //
-// TLS Transport:
+//	client, err := mqttv5.Dial("tls://localhost:8883",
+//	    mqttv5.WithTLSConfig(&tls.Config{}),
+//	)
 //
-//	dialer := &mqttv5.TLSDialer{
-//	    Config: &tls.Config{},
-//	    Timeout: 5 * time.Second,
-//	}
-//	conn, err := dialer.Dial(ctx, "localhost:8883")
+// WebSocket connections:
 //
-// WebSocket Transport:
+//	client, err := mqttv5.Dial("ws://localhost:8080/mqtt")
 //
-//	dialer := mqttv5.NewWSDialer()
-//	conn, err := dialer.Dial(ctx, "ws://localhost:8080/mqtt")
+// # Server
 //
-// For WebSocket server, use WSHandler as an http.Handler:
+// Use the high-level Server API for building MQTT brokers:
 //
-//	handler := mqttv5.NewWSHandler(func(conn mqttv5.Conn) {
-//	    // Handle MQTT connection
-//	})
-//	http.Handle("/mqtt", handler)
+//	srv, err := mqttv5.NewServer(":1883",
+//	    mqttv5.OnConnect(func(c *mqttv5.ServerClient) { ... }),
+//	    mqttv5.OnMessage(func(c *mqttv5.ServerClient, m *mqttv5.Message) { ... }),
+//	)
+//	srv.ListenAndServe()
+//
+// For TLS server, create a TLS listener and use NewServerWithListener:
+//
+//	listener, _ := tls.Listen("tcp", ":8883", tlsConfig)
+//	srv := mqttv5.NewServerWithListener(listener)
+//
+// For WebSocket server, use WSServer as an http.Handler:
+//
+//	ws := mqttv5.NewWSServer(
+//	    mqttv5.OnConnect(func(c *mqttv5.ServerClient) { ... }),
+//	)
+//	ws.Start()
+//	http.Handle("/mqtt", ws)
 //
 // # Session Management
 //
