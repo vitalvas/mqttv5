@@ -1,6 +1,9 @@
 package mqttv5
 
-import "io"
+import (
+	"io"
+	"time"
+)
 
 // Packet is the interface that all MQTT control packets implement.
 // MQTT v5.0 spec: Section 2.1
@@ -65,6 +68,10 @@ type Message struct {
 	// Zero means no expiry.
 	MessageExpiry uint32
 
+	// PublishedAt is when the message was originally published.
+	// Used to calculate remaining expiry on delivery.
+	PublishedAt time.Time
+
 	// ContentType is the MIME type of the payload.
 	ContentType string
 
@@ -94,6 +101,7 @@ func (m *Message) Clone() *Message {
 		Retain:        m.Retain,
 		PayloadFormat: m.PayloadFormat,
 		MessageExpiry: m.MessageExpiry,
+		PublishedAt:   m.PublishedAt,
 		ContentType:   m.ContentType,
 		ResponseTopic: m.ResponseTopic,
 	}
@@ -119,6 +127,36 @@ func (m *Message) Clone() *Message {
 	}
 
 	return clone
+}
+
+// IsExpired returns true if the message has expired based on MessageExpiry and PublishedAt.
+func (m *Message) IsExpired() bool {
+	if m.MessageExpiry == 0 {
+		return false // No expiry set
+	}
+	if m.PublishedAt.IsZero() {
+		return false // No publish time tracked
+	}
+	elapsed := time.Since(m.PublishedAt)
+	return elapsed >= time.Duration(m.MessageExpiry)*time.Second
+}
+
+// RemainingExpiry returns the remaining expiry time in seconds.
+// Returns 0 if expired or no expiry is set.
+func (m *Message) RemainingExpiry() uint32 {
+	if m.MessageExpiry == 0 {
+		return 0 // No expiry set
+	}
+	if m.PublishedAt.IsZero() {
+		return m.MessageExpiry // No publish time, return original
+	}
+	elapsed := time.Since(m.PublishedAt)
+	expiryDuration := time.Duration(m.MessageExpiry) * time.Second
+	if elapsed >= expiryDuration {
+		return 0 // Expired
+	}
+	remaining := expiryDuration - elapsed
+	return uint32(remaining.Seconds())
 }
 
 // ToProperties converts the message metadata to MQTT properties.

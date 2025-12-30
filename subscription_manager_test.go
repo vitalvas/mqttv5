@@ -197,3 +197,123 @@ func TestGetDeliveryRetain(t *testing.T) {
 		assert.False(t, GetDeliveryRetain(sub, false))
 	})
 }
+
+func TestSubscriptionManagerSubscriptionIDsAggregation(t *testing.T) {
+	t.Run("aggregates subscription IDs from multiple matching subscriptions", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		// Subscribe with different subscription IDs
+		m.Subscribe("client1", Subscription{TopicFilter: "a/b", QoS: 0, SubscriptionID: 1})
+		m.Subscribe("client1", Subscription{TopicFilter: "a/+", QoS: 1, SubscriptionID: 2})
+		m.Subscribe("client1", Subscription{TopicFilter: "#", QoS: 2, SubscriptionID: 3})
+
+		matches := m.MatchForDelivery("a/b", "other")
+
+		// Should have one entry with all subscription IDs
+		require.Len(t, matches, 1)
+		assert.Equal(t, "client1", matches[0].ClientID)
+		assert.Equal(t, byte(2), matches[0].Subscription.QoS)
+		assert.Len(t, matches[0].SubscriptionIDs, 3)
+		assert.Contains(t, matches[0].SubscriptionIDs, uint32(1))
+		assert.Contains(t, matches[0].SubscriptionIDs, uint32(2))
+		assert.Contains(t, matches[0].SubscriptionIDs, uint32(3))
+	})
+
+	t.Run("no subscription IDs when not set", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		m.Subscribe("client1", Subscription{TopicFilter: "topic", QoS: 1})
+
+		matches := m.MatchForDelivery("topic", "other")
+
+		require.Len(t, matches, 1)
+		assert.Len(t, matches[0].SubscriptionIDs, 0)
+	})
+
+	t.Run("aggregates RetainAsPublish from any matching subscription", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		m.Subscribe("client1", Subscription{TopicFilter: "a/b", QoS: 0, RetainAsPublish: false})
+		m.Subscribe("client1", Subscription{TopicFilter: "a/+", QoS: 1, RetainAsPublish: true})
+
+		matches := m.MatchForDelivery("a/b", "other")
+
+		require.Len(t, matches, 1)
+		assert.True(t, matches[0].Subscription.RetainAsPublish)
+	})
+}
+
+func TestSharedSubscriptions(t *testing.T) {
+	t.Run("shared subscription basic matching", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		err := m.Subscribe("client1", Subscription{TopicFilter: "$share/group1/sensors/+", QoS: 1})
+		require.NoError(t, err)
+
+		// Messages to the actual topic should match
+		matches := m.Match("sensors/room1")
+		require.Len(t, matches, 1)
+		assert.Equal(t, "client1", matches[0].ClientID)
+		assert.Equal(t, "group1", matches[0].ShareGroup)
+	})
+
+	t.Run("shared subscription load balancing round-robin", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		// Add multiple subscribers to same share group
+		m.Subscribe("client1", Subscription{TopicFilter: "$share/mygroup/topic", QoS: 1})
+		m.Subscribe("client2", Subscription{TopicFilter: "$share/mygroup/topic", QoS: 1})
+		m.Subscribe("client3", Subscription{TopicFilter: "$share/mygroup/topic", QoS: 1})
+
+		// Track which clients get messages
+		clientCounts := make(map[string]int)
+		for range 9 {
+			matches := m.MatchForDelivery("topic", "publisher")
+			require.Len(t, matches, 1)
+			clientCounts[matches[0].ClientID]++
+		}
+
+		// All clients should have received some messages (round-robin)
+		assert.Equal(t, 3, clientCounts["client1"])
+		assert.Equal(t, 3, clientCounts["client2"])
+		assert.Equal(t, 3, clientCounts["client3"])
+	})
+
+	t.Run("different share groups are independent", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		m.Subscribe("client1", Subscription{TopicFilter: "$share/group1/topic", QoS: 1})
+		m.Subscribe("client2", Subscription{TopicFilter: "$share/group2/topic", QoS: 1})
+
+		// Each group should get one delivery
+		matches := m.MatchForDelivery("topic", "publisher")
+		assert.Len(t, matches, 2)
+	})
+
+	t.Run("unsubscribe shared subscription", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		m.Subscribe("client1", Subscription{TopicFilter: "$share/group1/topic", QoS: 1})
+		m.Subscribe("client2", Subscription{TopicFilter: "$share/group1/topic", QoS: 1})
+
+		// Unsubscribe one client
+		removed := m.Unsubscribe("client1", "$share/group1/topic")
+		assert.True(t, removed)
+
+		// Only client2 should receive
+		matches := m.MatchForDelivery("topic", "publisher")
+		require.Len(t, matches, 1)
+		assert.Equal(t, "client2", matches[0].ClientID)
+	})
+
+	t.Run("regular and shared subscriptions coexist", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		m.Subscribe("client1", Subscription{TopicFilter: "$share/group1/topic", QoS: 1})
+		m.Subscribe("client2", Subscription{TopicFilter: "topic", QoS: 1})
+
+		matches := m.MatchForDelivery("topic", "publisher")
+		// Should get one from shared group + one regular
+		assert.Len(t, matches, 2)
+	})
+}

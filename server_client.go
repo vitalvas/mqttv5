@@ -205,9 +205,32 @@ func (c *ServerClient) Send(msg *Message) error {
 		// Track for acknowledgment
 		switch msg.QoS {
 		case 1:
+			qos1Msg := &QoS1Message{
+				PacketID:     pub.PacketID,
+				Message:      msg,
+				State:        QoS1AwaitingPuback,
+				SentAt:       time.Now(),
+				RetryTimeout: c.qos1Tracker.RetryTimeout(),
+			}
 			c.qos1Tracker.Track(pub.PacketID, msg)
+			// Persist to session for recovery on reconnect
+			if c.session != nil {
+				c.session.AddInflightQoS1(pub.PacketID, qos1Msg)
+			}
 		case 2:
+			qos2Msg := &QoS2Message{
+				PacketID:     pub.PacketID,
+				Message:      msg,
+				State:        QoS2AwaitingPubrec,
+				SentAt:       time.Now(),
+				RetryTimeout: c.qos2Tracker.RetryTimeout(),
+				IsSender:     true,
+			}
 			c.qos2Tracker.TrackSend(pub.PacketID, msg)
+			// Persist to session for recovery on reconnect
+			if c.session != nil {
+				c.session.AddInflightQoS2(pub.PacketID, qos2Msg)
+			}
 		}
 	}
 
@@ -240,9 +263,15 @@ func (c *ServerClient) Send(msg *Message) error {
 		c.flowControl.Release()
 		switch msg.QoS {
 		case 1:
-			c.qos1Tracker.Acknowledge(pub.PacketID)
+			c.qos1Tracker.Remove(pub.PacketID)
 		case 2:
-			c.qos2Tracker.HandlePubcomp(pub.PacketID)
+			// Use Remove instead of HandlePubcomp since message is in QoS2AwaitingPubrec state
+			c.qos2Tracker.Remove(pub.PacketID)
+		}
+		// Also remove from session persistence
+		if c.session != nil {
+			c.session.RemoveInflightQoS1(pub.PacketID)
+			c.session.RemoveInflightQoS2(pub.PacketID)
 		}
 	}
 	return err

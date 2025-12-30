@@ -207,7 +207,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	}
 
 	if _, err := WritePacket(conn, connack, s.config.maxPacketSize); err != nil {
-		s.removeClient(clientID)
+		s.removeClient(clientID, client)
 		return
 	}
 

@@ -170,6 +170,16 @@ func (s *Server) Publish(msg *Message) error {
 		return err
 	}
 
+	// Set publish time if not already set
+	if msg.PublishedAt.IsZero() {
+		msg.PublishedAt = time.Now()
+	}
+
+	// Check if message has expired
+	if msg.IsExpired() {
+		return nil // Silently discard expired message
+	}
+
 	// Handle retained messages
 	if msg.Retain {
 		if len(msg.Payload) == 0 {
@@ -201,6 +211,9 @@ func (s *Server) Publish(msg *Message) error {
 			deliveryQoS = entry.Subscription.QoS
 		}
 
+		// Calculate remaining expiry for delivery
+		remainingExpiry := msg.RemainingExpiry()
+
 		// Create delivery message
 		deliveryMsg := &Message{
 			Topic:                   msg.Topic,
@@ -208,7 +221,8 @@ func (s *Server) Publish(msg *Message) error {
 			QoS:                     deliveryQoS,
 			Retain:                  GetDeliveryRetain(entry.Subscription, msg.Retain),
 			PayloadFormat:           msg.PayloadFormat,
-			MessageExpiry:           msg.MessageExpiry,
+			MessageExpiry:           remainingExpiry, // Use remaining expiry, not original
+			PublishedAt:             msg.PublishedAt,
 			ContentType:             msg.ContentType,
 			ResponseTopic:           msg.ResponseTopic,
 			CorrelationData:         msg.CorrelationData,
@@ -216,11 +230,11 @@ func (s *Server) Publish(msg *Message) error {
 			SubscriptionIdentifiers: msg.SubscriptionIdentifiers,
 		}
 
-		// Add subscription identifier if present
-		if entry.Subscription.SubscriptionID > 0 {
+		// Add all aggregated subscription identifiers from matching subscriptions
+		if len(entry.SubscriptionIDs) > 0 {
 			deliveryMsg.SubscriptionIdentifiers = append(
 				deliveryMsg.SubscriptionIdentifiers,
-				entry.Subscription.SubscriptionID,
+				entry.SubscriptionIDs...,
 			)
 		}
 
@@ -450,7 +464,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 
 	if _, err := WritePacket(conn, connack, s.config.maxPacketSize); err != nil {
-		s.removeClient(clientID)
+		s.removeClient(clientID, client)
 		return
 	}
 
@@ -471,6 +485,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 				s.subs.Subscribe(clientID, sub)
 				s.config.metrics.SubscriptionAdded()
 			}
+		}
+	}
+
+	// Restore and resend inflight QoS messages from session
+	if sessionPresent {
+		session := client.Session()
+		if session != nil {
+			s.restoreInflightMessages(client, session, logger)
 		}
 	}
 
@@ -503,18 +525,21 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 			logger.Debug("will message triggered", nil)
 		}
 
-		// Set session expiry time for cleanup
+		// Handle session expiry
 		if session := client.Session(); session != nil {
 			expiryInterval := client.SessionExpiryInterval()
 			if expiryInterval > 0 {
+				// Set expiry time for cleanup loop
 				session.SetExpiryTime(time.Now().Add(time.Duration(expiryInterval) * time.Second))
 			} else {
 				// Session expiry of 0 means session ends immediately on disconnect
-				session.SetExpiryTime(time.Now())
+				// Delete session and subscriptions immediately per MQTT v5 spec
+				s.config.sessionStore.Delete(clientID)
 			}
 		}
 
-		s.removeClient(clientID)
+		// Pass client pointer to prevent race condition with new connections
+		s.removeClient(clientID, client)
 	}()
 
 	for {
@@ -548,14 +573,26 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 		case *PubackPacket:
 			if _, ok := client.QoS1Tracker().Acknowledge(p.PacketID); ok {
 				client.FlowControl().Release()
+				// Remove from session persistence
+				if session := client.Session(); session != nil {
+					session.RemoveInflightQoS1(p.PacketID)
+				}
 			}
 
 		case *PubrecPacket:
-			client.QoS2Tracker().HandlePubrec(p.PacketID)
-			pubrel := &PubrelPacket{PacketID: p.PacketID}
-			if n, err := WritePacket(conn, pubrel, s.config.maxPacketSize); err == nil {
-				s.config.metrics.BytesSent(n)
-				s.config.metrics.PacketSent(PacketPUBREL)
+			if _, ok := client.QoS2Tracker().HandlePubrec(p.PacketID); ok {
+				pubrel := &PubrelPacket{PacketID: p.PacketID}
+				if n, err := WritePacket(conn, pubrel, s.config.maxPacketSize); err == nil {
+					s.config.metrics.BytesSent(n)
+					s.config.metrics.PacketSent(PacketPUBREL)
+				}
+				// Update session with new state (awaiting PUBCOMP)
+				if session := client.Session(); session != nil {
+					if qos2Msg, exists := session.GetInflightQoS2(p.PacketID); exists {
+						qos2Msg.State = QoS2AwaitingPubcomp
+						qos2Msg.SentAt = time.Now()
+					}
+				}
 			}
 
 		case *PubrelPacket:
@@ -585,6 +622,10 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 		case *PubcompPacket:
 			if _, ok := client.QoS2Tracker().HandlePubcomp(p.PacketID); ok {
 				client.FlowControl().Release()
+				// Remove from session persistence
+				if session := client.Session(); session != nil {
+					session.RemoveInflightQoS2(p.PacketID)
+				}
 			}
 
 		case *SubscribePacket:
@@ -739,10 +780,11 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 
 	// Convert to Message (use effectiveQoS which may be downgraded by authorizer)
 	msg := &Message{
-		Topic:   topic,
-		Payload: pub.Payload,
-		QoS:     effectiveQoS,
-		Retain:  pub.Retain,
+		Topic:       topic,
+		Payload:     pub.Payload,
+		QoS:         effectiveQoS,
+		Retain:      pub.Retain,
+		PublishedAt: time.Now(), // Track publish time for message expiry
 	}
 
 	// Copy properties
@@ -790,6 +832,11 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 }
 
 func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
+	// Check if message has expired before delivery
+	if msg.IsExpired() {
+		return // Discard expired message
+	}
+
 	// Handle retained messages
 	if msg.Retain {
 		if len(msg.Payload) == 0 {
@@ -821,6 +868,9 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 			deliveryQoS = entry.Subscription.QoS
 		}
 
+		// Calculate remaining expiry for delivery
+		remainingExpiry := msg.RemainingExpiry()
+
 		// Create delivery message
 		deliveryMsg := &Message{
 			Topic:           msg.Topic,
@@ -828,16 +878,17 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 			QoS:             deliveryQoS,
 			Retain:          GetDeliveryRetain(entry.Subscription, msg.Retain),
 			PayloadFormat:   msg.PayloadFormat,
-			MessageExpiry:   msg.MessageExpiry,
+			MessageExpiry:   remainingExpiry, // Use remaining expiry, not original
+			PublishedAt:     msg.PublishedAt,
 			ContentType:     msg.ContentType,
 			ResponseTopic:   msg.ResponseTopic,
 			CorrelationData: msg.CorrelationData,
 			UserProperties:  msg.UserProperties,
 		}
 
-		// Add subscription identifier
-		if entry.Subscription.SubscriptionID > 0 {
-			deliveryMsg.SubscriptionIdentifiers = []uint32{entry.Subscription.SubscriptionID}
+		// Add all aggregated subscription identifiers from matching subscriptions
+		if len(entry.SubscriptionIDs) > 0 {
+			deliveryMsg.SubscriptionIdentifiers = entry.SubscriptionIDs
 		}
 
 		client.Send(deliveryMsg)
@@ -981,13 +1032,106 @@ func (s *Server) handleUnsubscribe(client *ServerClient, unsub *UnsubscribePacke
 	}
 }
 
-func (s *Server) removeClient(clientID string) {
+// removeClient removes a client from the server.
+// If client is non-nil, the client is only removed if it matches the current
+// entry in the clients map. This prevents a race condition where a new client
+// with the same ID could be removed by the old client's deferred cleanup.
+func (s *Server) removeClient(clientID string, client *ServerClient) {
 	s.mu.Lock()
-	delete(s.clients, clientID)
+	if client != nil {
+		// Only remove if the map entry still points to this client
+		if existing, ok := s.clients[clientID]; ok && existing == client {
+			delete(s.clients, clientID)
+		}
+	} else {
+		delete(s.clients, clientID)
+	}
 	s.mu.Unlock()
 
 	s.keepAlive.Unregister(clientID)
 	s.subs.UnsubscribeAll(clientID)
+}
+
+// restoreInflightMessages restores and resends inflight QoS messages from session.
+// Per MQTT v5 spec, messages are resent with DUP flag set on session resume.
+func (s *Server) restoreInflightMessages(client *ServerClient, session Session, logger Logger) {
+	conn := client.Conn()
+
+	// Restore QoS 1 messages
+	for packetID, msg := range session.InflightQoS1() {
+		// Restore to tracker
+		client.QoS1Tracker().Track(packetID, msg.Message)
+
+		// Acquire flow control for the resend
+		if !client.FlowControl().TryAcquire() {
+			logger.Warn("flow control exhausted during session restore", nil)
+			continue
+		}
+
+		// Resend with DUP flag
+		pub := &PublishPacket{
+			PacketID: packetID,
+			Topic:    msg.Message.Topic,
+			Payload:  msg.Message.Payload,
+			QoS:      1,
+			Retain:   msg.Message.Retain,
+			DUP:      true,
+		}
+		if n, err := WritePacket(conn, pub, s.config.maxPacketSize); err == nil {
+			s.config.metrics.BytesSent(n)
+			s.config.metrics.PacketSent(PacketPUBLISH)
+		}
+	}
+
+	// Restore QoS 2 messages
+	for packetID, msg := range session.InflightQoS2() {
+		// Only restore sender-side messages
+		if !msg.IsSender {
+			continue
+		}
+
+		switch msg.State {
+		case QoS2AwaitingPubrec:
+			// Restore to tracker and resend PUBLISH with DUP
+			client.QoS2Tracker().TrackSend(packetID, msg.Message)
+
+			// Acquire flow control for the resend
+			if !client.FlowControl().TryAcquire() {
+				logger.Warn("flow control exhausted during session restore", nil)
+				continue
+			}
+
+			pub := &PublishPacket{
+				PacketID: packetID,
+				Topic:    msg.Message.Topic,
+				Payload:  msg.Message.Payload,
+				QoS:      2,
+				Retain:   msg.Message.Retain,
+				DUP:      true,
+			}
+			if n, err := WritePacket(conn, pub, s.config.maxPacketSize); err == nil {
+				s.config.metrics.BytesSent(n)
+				s.config.metrics.PacketSent(PacketPUBLISH)
+			}
+
+		case QoS2AwaitingPubcomp:
+			// Restore to tracker (already past PUBREC) and resend PUBREL
+			client.QoS2Tracker().TrackSend(packetID, msg.Message)
+			client.QoS2Tracker().HandlePubrec(packetID) // Transition to AwaitingPubcomp state
+
+			// Acquire flow control for the resend
+			if !client.FlowControl().TryAcquire() {
+				logger.Warn("flow control exhausted during session restore", nil)
+				continue
+			}
+
+			pubrel := &PubrelPacket{PacketID: packetID}
+			if n, err := WritePacket(conn, pubrel, s.config.maxPacketSize); err == nil {
+				s.config.metrics.BytesSent(n)
+				s.config.metrics.PacketSent(PacketPUBREL)
+			}
+		}
+	}
 }
 
 func (s *Server) keepAliveLoop() {

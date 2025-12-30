@@ -367,12 +367,12 @@ func (c *Client) Publish(msg *Message) error {
 	if err := c.writePacket(pkt); err != nil {
 		if msg.QoS > 0 {
 			_ = c.packetIDMgr.Release(pkt.PacketID)
-			// Also remove from tracker to prevent retries with reused packet ID
+			// Use Remove to unconditionally remove tracker entry regardless of state
 			switch msg.QoS {
 			case 1:
-				c.qos1Tracker.Acknowledge(pkt.PacketID)
+				c.qos1Tracker.Remove(pkt.PacketID)
 			case 2:
-				c.qos2Tracker.HandlePubcomp(pkt.PacketID)
+				c.qos2Tracker.Remove(pkt.PacketID)
 			}
 		}
 		return err
@@ -870,6 +870,62 @@ func generateClientID() string {
 
 // reconnectLoop handles automatic reconnection.
 // This is a placeholder that will be expanded in client_events.go.
+// restoreSubscriptions re-subscribes to all stored subscriptions after reconnect.
+func (c *Client) restoreSubscriptions() {
+	c.subscriptionsMu.RLock()
+	// Make a copy of subscriptions to avoid holding lock during network calls
+	subs := make(map[string]MessageHandler, len(c.subscriptions))
+	for filter, handler := range c.subscriptions {
+		subs[filter] = handler
+	}
+	c.subscriptionsMu.RUnlock()
+
+	if len(subs) == 0 {
+		return
+	}
+
+	// Build subscription list from session if available
+	var subOptions []Subscription
+	if c.session != nil {
+		for filter := range subs {
+			if sub, ok := c.session.GetSubscription(filter); ok {
+				subOptions = append(subOptions, sub)
+			} else {
+				// Fallback to QoS 0 if no session info
+				subOptions = append(subOptions, Subscription{
+					TopicFilter: filter,
+					QoS:         0,
+				})
+			}
+		}
+	} else {
+		// No session, restore with QoS 0
+		for filter := range subs {
+			subOptions = append(subOptions, Subscription{
+				TopicFilter: filter,
+				QoS:         0,
+			})
+		}
+	}
+
+	// Resubscribe - errors are silently ignored since this is best-effort
+	for _, sub := range subOptions {
+		packetID, err := c.packetIDMgr.Allocate()
+		if err != nil {
+			continue
+		}
+
+		subPkt := &SubscribePacket{
+			PacketID: packetID,
+			Subscriptions: []Subscription{sub},
+		}
+
+		if err := c.writePacket(subPkt); err != nil {
+			_ = c.packetIDMgr.Release(packetID)
+		}
+	}
+}
+
 func (c *Client) reconnectLoop() {
 	if !c.options.autoReconnect || c.closed.Load() {
 		return
@@ -908,6 +964,8 @@ func (c *Client) reconnectLoop() {
 		connectCancel()
 
 		if err == nil {
+			// Restore subscriptions after successful reconnect
+			c.restoreSubscriptions()
 			return // Successfully reconnected
 		}
 

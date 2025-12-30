@@ -219,6 +219,11 @@ func (t *QoS1Tracker) CleanupExpired() int {
 	return count
 }
 
+// RetryTimeout returns the configured retry timeout.
+func (t *QoS1Tracker) RetryTimeout() time.Duration {
+	return t.retryTimeout
+}
+
 // QoS2State represents the state of a QoS 2 publish flow.
 // MQTT v5.0 spec: Section 4.3.3
 type QoS2State int
@@ -452,6 +457,11 @@ func (t *QoS2Tracker) CleanupExpired() int {
 		}
 	}
 	return count
+}
+
+// RetryTimeout returns the configured retry timeout.
+func (t *QoS2Tracker) RetryTimeout() time.Duration {
+	return t.retryTimeout
 }
 
 // StoredMessage represents a message in the message store with expiry.

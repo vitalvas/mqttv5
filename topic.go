@@ -238,6 +238,13 @@ func (m *TopicMatcher) Subscribe(filter string, subscriber any) error {
 	return nil
 }
 
+// SubscriberMatcher is an interface for comparing subscribers.
+// This is needed because some subscriber types (like SubscriptionEntry)
+// contain slices which make them incomparable with ==.
+type SubscriberMatcher interface {
+	MatchSubscriber(other any) bool
+}
+
 // Unsubscribe removes a subscriber for the given topic filter.
 func (m *TopicMatcher) Unsubscribe(filter string, subscriber any) error {
 	if err := ValidateTopicFilter(filter); err != nil {
@@ -255,15 +262,31 @@ func (m *TopicMatcher) Unsubscribe(filter string, subscriber any) error {
 		node = child
 	}
 
-	// Remove subscriber
+	// Remove subscriber using custom matching if available
+	matcher, hasMatcher := subscriber.(SubscriberMatcher)
 	for i, s := range node.subscribers {
-		if s == subscriber {
+		var match bool
+		if hasMatcher {
+			match = matcher.MatchSubscriber(s)
+		} else {
+			// Fallback to reflect.DeepEqual for uncomparable types
+			match = subscriberEqual(subscriber, s)
+		}
+		if match {
 			node.subscribers = append(node.subscribers[:i], node.subscribers[i+1:]...)
 			break
 		}
 	}
 
 	return nil
+}
+
+// subscriberEqual compares two subscribers, handling uncomparable types.
+func subscriberEqual(a, b any) bool {
+	defer func() {
+		recover() // Ignore panics from comparing uncomparable types
+	}()
+	return a == b
 }
 
 // Match returns all subscribers matching the given topic.

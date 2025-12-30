@@ -300,3 +300,111 @@ func BenchmarkQoS2TrackerSenderFlow(b *testing.B) {
 		tracker.HandlePubcomp(1)
 	}
 }
+
+func TestQoS1TrackerRetryTimeout(t *testing.T) {
+	t.Run("returns configured retry timeout", func(t *testing.T) {
+		tracker := NewQoS1Tracker(5*time.Second, 3)
+		assert.Equal(t, 5*time.Second, tracker.RetryTimeout())
+	})
+}
+
+func TestQoS2TrackerRetryTimeout(t *testing.T) {
+	t.Run("returns configured retry timeout", func(t *testing.T) {
+		tracker := NewQoS2Tracker(10*time.Second, 5)
+		assert.Equal(t, 10*time.Second, tracker.RetryTimeout())
+	})
+}
+
+func TestQoS1TrackerRemoveForSendFailure(t *testing.T) {
+	t.Run("Remove clears entry regardless of state", func(t *testing.T) {
+		tracker := NewQoS1Tracker(time.Second, 3)
+
+		msg := &Message{Topic: "test/topic", Payload: []byte("data")}
+		tracker.Track(1, msg)
+
+		// Entry should be in AwaitingPuback state
+		entry, ok := tracker.Get(1)
+		require.True(t, ok)
+		assert.Equal(t, QoS1AwaitingPuback, entry.State)
+
+		// Remove should work regardless of state (for send failure cleanup)
+		removed := tracker.Remove(1)
+		assert.True(t, removed)
+		assert.Equal(t, 0, tracker.Count())
+
+		// Verify it's gone
+		_, ok = tracker.Get(1)
+		assert.False(t, ok)
+	})
+}
+
+func TestQoS2TrackerRemoveForSendFailure(t *testing.T) {
+	t.Run("Remove clears entry in AwaitingPubrec state", func(t *testing.T) {
+		tracker := NewQoS2Tracker(time.Second, 3)
+
+		msg := &Message{Topic: "test/topic", Payload: []byte("data")}
+		tracker.TrackSend(1, msg)
+
+		// Entry should be in AwaitingPubrec state
+		entry, ok := tracker.Get(1)
+		require.True(t, ok)
+		assert.Equal(t, QoS2AwaitingPubrec, entry.State)
+
+		// Remove should work (for send failure cleanup)
+		removed := tracker.Remove(1)
+		assert.True(t, removed)
+		assert.Equal(t, 0, tracker.Count())
+	})
+
+	t.Run("Remove clears entry in AwaitingPubcomp state", func(t *testing.T) {
+		tracker := NewQoS2Tracker(time.Second, 3)
+
+		msg := &Message{Topic: "test/topic", Payload: []byte("data")}
+		tracker.TrackSend(1, msg)
+		tracker.HandlePubrec(1)
+
+		// Entry should now be in AwaitingPubcomp state
+		entry, ok := tracker.Get(1)
+		require.True(t, ok)
+		assert.Equal(t, QoS2AwaitingPubcomp, entry.State)
+
+		// Remove should work (for send failure cleanup)
+		removed := tracker.Remove(1)
+		assert.True(t, removed)
+		assert.Equal(t, 0, tracker.Count())
+	})
+
+	t.Run("HandlePubcomp fails in AwaitingPubrec state", func(t *testing.T) {
+		tracker := NewQoS2Tracker(time.Second, 3)
+
+		msg := &Message{Topic: "test/topic", Payload: []byte("data")}
+		tracker.TrackSend(1, msg)
+
+		// Entry is in AwaitingPubrec state, HandlePubcomp should fail
+		_, ok := tracker.HandlePubcomp(1)
+		assert.False(t, ok)
+
+		// Entry should still exist
+		assert.Equal(t, 1, tracker.Count())
+	})
+}
+
+func TestQoS2TrackerPubrelRetransmission(t *testing.T) {
+	t.Run("completed flow allows PUBREL retransmission", func(t *testing.T) {
+		tracker := NewQoS2Tracker(time.Second, 3)
+
+		msg := &Message{Topic: "test/topic"}
+		tracker.TrackReceive(1, msg)
+		tracker.SendPubrec(1)
+
+		// Complete the flow
+		result, ok := tracker.HandlePubrel(1)
+		require.True(t, ok)
+		assert.Equal(t, QoS2Complete, result.State)
+
+		// Retransmitted PUBREL should return nil message but still indicate PUBCOMP should be sent
+		result2, ok := tracker.HandlePubrel(1)
+		assert.True(t, ok)
+		assert.Nil(t, result2)
+	})
+}

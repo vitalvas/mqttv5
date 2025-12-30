@@ -2,6 +2,7 @@ package mqttv5
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -250,4 +251,94 @@ func BenchmarkMessageFromProperties(b *testing.B) {
 		var m Message
 		m.FromProperties(&p)
 	}
+}
+
+func TestMessageExpiry(t *testing.T) {
+	t.Run("IsExpired returns false when no expiry set", func(t *testing.T) {
+		m := &Message{
+			Topic:   "test",
+			Payload: []byte("hello"),
+		}
+		assert.False(t, m.IsExpired())
+	})
+
+	t.Run("IsExpired returns false when no PublishedAt set", func(t *testing.T) {
+		m := &Message{
+			Topic:         "test",
+			Payload:       []byte("hello"),
+			MessageExpiry: 60,
+		}
+		assert.False(t, m.IsExpired())
+	})
+
+	t.Run("IsExpired returns false when not yet expired", func(t *testing.T) {
+		m := &Message{
+			Topic:         "test",
+			Payload:       []byte("hello"),
+			MessageExpiry: 60,
+			PublishedAt:   time.Now(),
+		}
+		assert.False(t, m.IsExpired())
+	})
+
+	t.Run("IsExpired returns true when expired", func(t *testing.T) {
+		m := &Message{
+			Topic:         "test",
+			Payload:       []byte("hello"),
+			MessageExpiry: 1,
+			PublishedAt:   time.Now().Add(-2 * time.Second),
+		}
+		assert.True(t, m.IsExpired())
+	})
+
+	t.Run("RemainingExpiry returns 0 when no expiry set", func(t *testing.T) {
+		m := &Message{
+			Topic:   "test",
+			Payload: []byte("hello"),
+		}
+		assert.Equal(t, uint32(0), m.RemainingExpiry())
+	})
+
+	t.Run("RemainingExpiry returns original when no PublishedAt set", func(t *testing.T) {
+		m := &Message{
+			Topic:         "test",
+			Payload:       []byte("hello"),
+			MessageExpiry: 60,
+		}
+		assert.Equal(t, uint32(60), m.RemainingExpiry())
+	})
+
+	t.Run("RemainingExpiry returns remaining time", func(t *testing.T) {
+		m := &Message{
+			Topic:         "test",
+			Payload:       []byte("hello"),
+			MessageExpiry: 60,
+			PublishedAt:   time.Now().Add(-30 * time.Second),
+		}
+		remaining := m.RemainingExpiry()
+		// Allow some tolerance for test execution time
+		assert.True(t, remaining >= 28 && remaining <= 31, "expected ~30, got %d", remaining)
+	})
+
+	t.Run("RemainingExpiry returns 0 when expired", func(t *testing.T) {
+		m := &Message{
+			Topic:         "test",
+			Payload:       []byte("hello"),
+			MessageExpiry: 10,
+			PublishedAt:   time.Now().Add(-20 * time.Second),
+		}
+		assert.Equal(t, uint32(0), m.RemainingExpiry())
+	})
+
+	t.Run("Clone preserves PublishedAt", func(t *testing.T) {
+		publishedAt := time.Now().Add(-5 * time.Second)
+		m := &Message{
+			Topic:         "test",
+			Payload:       []byte("hello"),
+			MessageExpiry: 60,
+			PublishedAt:   publishedAt,
+		}
+		clone := m.Clone()
+		assert.Equal(t, publishedAt, clone.PublishedAt)
+	})
 }
