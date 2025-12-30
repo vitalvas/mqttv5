@@ -80,6 +80,10 @@ func (s *Server) ListenAndServe() error {
 		return errors.New("server already running")
 	}
 
+	s.config.logger.Info("server started", LogFields{
+		LogFieldRemoteAddr: s.listener.Addr().String(),
+	})
+
 	// Start background tasks
 	s.wg.Add(3)
 	go s.keepAliveLoop()
@@ -91,8 +95,12 @@ func (s *Server) ListenAndServe() error {
 		if err != nil {
 			select {
 			case <-s.done:
+				s.config.logger.Info("server stopped", nil)
 				return ErrServerClosed
 			default:
+				s.config.logger.Error("accept error", LogFields{
+					LogFieldError: err.Error(),
+				})
 				// Add backoff delay to prevent CPU burn on persistent errors
 				time.Sleep(100 * time.Millisecond)
 				continue
@@ -106,6 +114,9 @@ func (s *Server) ListenAndServe() error {
 			s.mu.RUnlock()
 
 			if count >= s.config.maxConnections {
+				s.config.logger.Warn("max connections reached", LogFields{
+					LogFieldRemoteAddr: conn.RemoteAddr().String(),
+				})
 				conn.Close()
 				continue
 			}
@@ -239,18 +250,28 @@ func (s *Server) handleConnection(conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
 
+	logger := s.config.logger.WithFields(LogFields{
+		LogFieldRemoteAddr: conn.RemoteAddr().String(),
+	})
+
 	// Read CONNECT packet with timeout
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 
-	pkt, _, err := ReadPacket(conn, s.config.maxPacketSize)
+	pkt, n, err := ReadPacket(conn, s.config.maxPacketSize)
 	if err != nil {
+		logger.Debug("failed to read CONNECT", LogFields{LogFieldError: err.Error()})
 		return
 	}
+	s.config.metrics.BytesReceived(n)
+	s.config.metrics.PacketReceived(PacketCONNECT)
 
 	conn.SetReadDeadline(time.Time{})
 
 	connect, ok := pkt.(*ConnectPacket)
 	if !ok {
+		logger.Warn("first packet not CONNECT", LogFields{
+			LogFieldPacketType: pkt.Type().String(),
+		})
 		return
 	}
 
@@ -260,6 +281,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 		clientID = fmt.Sprintf("auto-%d", time.Now().UnixNano())
 		connect.ClientID = clientID
 	}
+
+	logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 
 	// Authenticate
 	if s.config.auth != nil {
@@ -278,12 +301,16 @@ func (s *Server) handleConnection(conn net.Conn) {
 			if result != nil {
 				reasonCode = result.ReasonCode
 			}
+			logger.Warn("authentication failed", LogFields{
+				LogFieldReasonCode: reasonCode.String(),
+			})
 			connack := &ConnackPacket{
 				ReasonCode: reasonCode,
 			}
 			WritePacket(conn, connack, s.config.maxPacketSize)
 			return
 		}
+		logger.Debug("authentication successful", nil)
 	}
 
 	// Create client
@@ -351,6 +378,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 		return
 	}
 
+	// Metrics and logging
+	s.config.metrics.ConnectionOpened()
+	logger.Info("client connected", nil)
+
 	// Callback
 	if s.config.onConnect != nil {
 		s.config.onConnect(client)
@@ -362,19 +393,24 @@ func (s *Server) handleConnection(conn net.Conn) {
 		if session != nil {
 			for _, sub := range session.Subscriptions() {
 				s.subs.Subscribe(clientID, sub)
+				s.config.metrics.SubscriptionAdded()
 			}
 		}
 	}
 
 	// Handle packets
-	s.clientLoop(client)
+	s.clientLoop(client, logger)
 }
 
-func (s *Server) clientLoop(client *ServerClient) {
+func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 	clientID := client.ClientID()
 	conn := client.Conn()
 
 	defer func() {
+		// Metrics and logging
+		s.config.metrics.ConnectionClosed()
+		logger.Info("client disconnected", nil)
+
 		// Disconnect callback
 		if s.config.onDisconnect != nil {
 			s.config.onDisconnect(client)
@@ -383,6 +419,7 @@ func (s *Server) clientLoop(client *ServerClient) {
 		// Trigger will if not clean disconnect
 		if client.IsConnected() {
 			s.wills.TriggerWill(clientID, 0)
+			logger.Debug("will message triggered", nil)
 		} else {
 			s.wills.Unregister(clientID)
 		}
@@ -402,17 +439,21 @@ func (s *Server) clientLoop(client *ServerClient) {
 			conn.SetReadDeadline(deadline)
 		}
 
-		pkt, _, err := ReadPacket(conn, s.config.maxPacketSize)
+		pkt, n, err := ReadPacket(conn, s.config.maxPacketSize)
 		if err != nil {
 			return
 		}
+
+		// Metrics
+		s.config.metrics.BytesReceived(n)
+		s.config.metrics.PacketReceived(pkt.Type())
 
 		// Update keep-alive
 		s.keepAlive.UpdateActivity(clientID)
 
 		switch p := pkt.(type) {
 		case *PublishPacket:
-			s.handlePublish(client, p)
+			s.handlePublish(client, p, logger)
 
 		case *PubackPacket:
 			if _, ok := client.QoS1Tracker().Acknowledge(p.PacketID); ok {
@@ -422,12 +463,18 @@ func (s *Server) clientLoop(client *ServerClient) {
 		case *PubrecPacket:
 			client.QoS2Tracker().HandlePubrec(p.PacketID)
 			pubrel := &PubrelPacket{PacketID: p.PacketID}
-			WritePacket(conn, pubrel, s.config.maxPacketSize)
+			if n, err := WritePacket(conn, pubrel, s.config.maxPacketSize); err == nil {
+				s.config.metrics.BytesSent(n)
+				s.config.metrics.PacketSent(PacketPUBREL)
+			}
 
 		case *PubrelPacket:
 			if _, ok := client.QoS2Tracker().HandlePubrel(p.PacketID); ok {
 				pubcomp := &PubcompPacket{PacketID: p.PacketID}
-				WritePacket(conn, pubcomp, s.config.maxPacketSize)
+				if n, err := WritePacket(conn, pubcomp, s.config.maxPacketSize); err == nil {
+					s.config.metrics.BytesSent(n)
+					s.config.metrics.PacketSent(PacketPUBCOMP)
+				}
 			}
 
 		case *PubcompPacket:
@@ -436,25 +483,30 @@ func (s *Server) clientLoop(client *ServerClient) {
 			}
 
 		case *SubscribePacket:
-			s.handleSubscribe(client, p)
+			s.handleSubscribe(client, p, logger)
 
 		case *UnsubscribePacket:
-			s.handleUnsubscribe(client, p)
+			s.handleUnsubscribe(client, p, logger)
 
 		case *PingreqPacket:
 			pingresp := &PingrespPacket{}
-			WritePacket(conn, pingresp, s.config.maxPacketSize)
+			if n, err := WritePacket(conn, pingresp, s.config.maxPacketSize); err == nil {
+				s.config.metrics.BytesSent(n)
+				s.config.metrics.PacketSent(PacketPINGRESP)
+			}
 
 		case *DisconnectPacket:
 			// Clean disconnect - don't send will
+			logger.Debug("clean disconnect received", nil)
 			client.Close()
 			return
 		}
 	}
 }
 
-func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket) {
+func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger Logger) {
 	clientID := client.ClientID()
+	startTime := time.Now()
 
 	// Resolve topic alias
 	topic := pub.Topic
@@ -477,6 +529,11 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket) {
 		return
 	}
 
+	logger.Debug("publish received", LogFields{
+		LogFieldTopic: topic,
+		LogFieldQoS:   pub.QoS,
+	})
+
 	// Authorization
 	if s.config.authz != nil {
 		azCtx := &AuthzContext{
@@ -491,11 +548,15 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket) {
 		}
 		result, err := s.config.authz.Authorize(authCtx, azCtx)
 		if err != nil || !result.Allowed {
+			reasonCode := ReasonNotAuthorized
+			if result != nil {
+				reasonCode = result.ReasonCode
+			}
+			logger.Warn("publish authorization failed", LogFields{
+				LogFieldTopic:      topic,
+				LogFieldReasonCode: reasonCode.String(),
+			})
 			if pub.QoS > 0 {
-				reasonCode := ReasonNotAuthorized
-				if result != nil {
-					reasonCode = result.ReasonCode
-				}
 				puback := &PubackPacket{
 					PacketID:   pub.PacketID,
 					ReasonCode: reasonCode,
@@ -506,13 +567,19 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket) {
 		}
 	}
 
+	// Metrics
+	s.config.metrics.MessageReceived(pub.QoS)
+
 	// Send PUBACK for QoS 1
 	if pub.QoS == 1 {
 		puback := &PubackPacket{
 			PacketID:   pub.PacketID,
 			ReasonCode: ReasonSuccess,
 		}
-		WritePacket(client.Conn(), puback, s.config.maxPacketSize)
+		if n, err := WritePacket(client.Conn(), puback, s.config.maxPacketSize); err == nil {
+			s.config.metrics.BytesSent(n)
+			s.config.metrics.PacketSent(PacketPUBACK)
+		}
 	}
 
 	// Send PUBREC for QoS 2
@@ -521,8 +588,16 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket) {
 			PacketID:   pub.PacketID,
 			ReasonCode: ReasonSuccess,
 		}
-		WritePacket(client.Conn(), pubrec, s.config.maxPacketSize)
+		if n, err := WritePacket(client.Conn(), pubrec, s.config.maxPacketSize); err == nil {
+			s.config.metrics.BytesSent(n)
+			s.config.metrics.PacketSent(PacketPUBREC)
+		}
 	}
+
+	// Track latency
+	defer func() {
+		s.config.metrics.PublishLatency(time.Since(startTime))
+	}()
 
 	// Convert to Message
 	msg := &Message{
@@ -614,7 +689,7 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 	}
 }
 
-func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket) {
+func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, logger Logger) {
 	clientID := client.ClientID()
 	session := client.Session()
 
@@ -638,6 +713,10 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket) {
 				if result != nil {
 					reasonCode = result.ReasonCode
 				}
+				logger.Warn("subscribe authorization failed", LogFields{
+					LogFieldTopic:      subscription.TopicFilter,
+					LogFieldReasonCode: reasonCode.String(),
+				})
 				reasonCodes[i] = reasonCode
 				continue
 			}
@@ -648,6 +727,12 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket) {
 
 		// Add subscription
 		s.subs.Subscribe(clientID, subscription)
+		s.config.metrics.SubscriptionAdded()
+
+		logger.Debug("subscription added", LogFields{
+			LogFieldTopic: subscription.TopicFilter,
+			LogFieldQoS:   subscription.QoS,
+		})
 
 		// Add to session
 		if session != nil {
@@ -685,10 +770,13 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket) {
 		PacketID:    sub.PacketID,
 		ReasonCodes: reasonCodes,
 	}
-	WritePacket(client.Conn(), suback, s.config.maxPacketSize)
+	if n, err := WritePacket(client.Conn(), suback, s.config.maxPacketSize); err == nil {
+		s.config.metrics.BytesSent(n)
+		s.config.metrics.PacketSent(PacketSUBACK)
+	}
 }
 
-func (s *Server) handleUnsubscribe(client *ServerClient, unsub *UnsubscribePacket) {
+func (s *Server) handleUnsubscribe(client *ServerClient, unsub *UnsubscribePacket, logger Logger) {
 	clientID := client.ClientID()
 	session := client.Session()
 
@@ -697,6 +785,10 @@ func (s *Server) handleUnsubscribe(client *ServerClient, unsub *UnsubscribePacke
 	for i, filter := range unsub.TopicFilters {
 		if s.subs.Unsubscribe(clientID, filter) {
 			reasonCodes[i] = ReasonSuccess
+			s.config.metrics.SubscriptionRemoved()
+			logger.Debug("subscription removed", LogFields{
+				LogFieldTopic: filter,
+			})
 			if session != nil {
 				session.RemoveSubscription(filter)
 			}
@@ -715,7 +807,10 @@ func (s *Server) handleUnsubscribe(client *ServerClient, unsub *UnsubscribePacke
 		PacketID:    unsub.PacketID,
 		ReasonCodes: reasonCodes,
 	}
-	WritePacket(client.Conn(), unsuback, s.config.maxPacketSize)
+	if n, err := WritePacket(client.Conn(), unsuback, s.config.maxPacketSize); err == nil {
+		s.config.metrics.BytesSent(n)
+		s.config.metrics.PacketSent(PacketUNSUBACK)
+	}
 }
 
 func (s *Server) removeClient(clientID string) {

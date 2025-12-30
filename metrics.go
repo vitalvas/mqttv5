@@ -1,137 +1,12 @@
 package mqttv5
 
 import (
+	"expvar"
+	"math"
+	"sync"
+	"sync/atomic"
 	"time"
 )
-
-// MetricType represents the type of metric.
-type MetricType int
-
-const (
-	// MetricTypeCounter is a monotonically increasing counter.
-	MetricTypeCounter MetricType = 0
-	// MetricTypeGauge is a value that can go up and down.
-	MetricTypeGauge MetricType = 1
-	// MetricTypeHistogram tracks distribution of values.
-	MetricTypeHistogram MetricType = 2
-)
-
-// String returns the string representation of the metric type.
-func (t MetricType) String() string {
-	switch t {
-	case MetricTypeCounter:
-		return "counter"
-	case MetricTypeGauge:
-		return "gauge"
-	case MetricTypeHistogram:
-		return "histogram"
-	default:
-		return "unknown"
-	}
-}
-
-// MetricLabels represents key-value pairs for metric labels.
-type MetricLabels map[string]string
-
-// Metrics defines the interface for collecting metrics.
-type Metrics interface {
-	// Counter returns a counter metric.
-	Counter(name string, labels MetricLabels) Counter
-
-	// Gauge returns a gauge metric.
-	Gauge(name string, labels MetricLabels) Gauge
-
-	// Histogram returns a histogram metric.
-	Histogram(name string, labels MetricLabels) Histogram
-}
-
-// Counter is a monotonically increasing counter.
-type Counter interface {
-	// Inc increments the counter by 1.
-	Inc()
-
-	// Add adds the given value to the counter.
-	Add(delta float64)
-
-	// Value returns the current value.
-	Value() float64
-}
-
-// Gauge is a metric that can go up and down.
-type Gauge interface {
-	// Set sets the gauge to the given value.
-	Set(value float64)
-
-	// Inc increments the gauge by 1.
-	Inc()
-
-	// Dec decrements the gauge by 1.
-	Dec()
-
-	// Add adds the given value to the gauge.
-	Add(delta float64)
-
-	// Sub subtracts the given value from the gauge.
-	Sub(delta float64)
-
-	// Value returns the current value.
-	Value() float64
-}
-
-// Histogram tracks the distribution of values.
-type Histogram interface {
-	// Observe records a value.
-	Observe(value float64)
-
-	// ObserveDuration records a duration in seconds.
-	ObserveDuration(d time.Duration)
-
-	// Count returns the number of observations.
-	Count() uint64
-
-	// Sum returns the sum of all observations.
-	Sum() float64
-}
-
-// NoOpMetrics is a no-op implementation of Metrics.
-type NoOpMetrics struct{}
-
-// Counter returns a no-op counter.
-func (n *NoOpMetrics) Counter(_ string, _ MetricLabels) Counter {
-	return &noOpCounter{}
-}
-
-// Gauge returns a no-op gauge.
-func (n *NoOpMetrics) Gauge(_ string, _ MetricLabels) Gauge {
-	return &noOpGauge{}
-}
-
-// Histogram returns a no-op histogram.
-func (n *NoOpMetrics) Histogram(_ string, _ MetricLabels) Histogram {
-	return &noOpHistogram{}
-}
-
-type noOpCounter struct{}
-
-func (n *noOpCounter) Inc()           {}
-func (n *noOpCounter) Add(_ float64)  {}
-func (n *noOpCounter) Value() float64 { return 0 }
-
-type noOpGauge struct{}
-
-func (n *noOpGauge) Set(_ float64)  {}
-func (n *noOpGauge) Inc()           {}
-func (n *noOpGauge) Dec()           {}
-func (n *noOpGauge) Add(_ float64)  {}
-func (n *noOpGauge) Sub(_ float64)  {}
-func (n *noOpGauge) Value() float64 { return 0 }
-
-type noOpHistogram struct{}
-
-func (n *noOpHistogram) Observe(_ float64)               {}
-func (n *noOpHistogram) ObserveDuration(_ time.Duration) {}
-func (n *noOpHistogram) Count() uint64                   { return 0 }
-func (n *noOpHistogram) Sum() float64                    { return 0 }
 
 // Standard metric names for MQTT brokers.
 const (
@@ -159,110 +34,464 @@ const (
 	// MetricRetainedMessages is the current number of retained messages.
 	MetricRetainedMessages = "mqtt_retained_messages"
 
-	// MetricPublishLatency is the publish message processing latency.
-	MetricPublishLatency = "mqtt_publish_latency_seconds"
-
 	// MetricPacketsSent is the total number of packets sent.
 	MetricPacketsSent = "mqtt_packets_sent_total"
 
 	// MetricPacketsReceived is the total number of packets received.
 	MetricPacketsReceived = "mqtt_packets_received_total"
+
+	// MetricPublishLatencyCount is the number of publish latency observations.
+	MetricPublishLatencyCount = "mqtt_publish_latency_count"
+
+	// MetricPublishLatencySum is the sum of publish latencies in seconds.
+	MetricPublishLatencySum = "mqtt_publish_latency_seconds_sum"
 )
 
-// Standard metric labels.
-const (
-	// LabelPacketType is the packet type label.
-	LabelPacketType = "packet_type"
+// Metrics provides broker metrics using expvar.
+type Metrics struct {
+	connections      *expvar.Int
+	connectionsTotal *expvar.Int
+	subscriptions    *expvar.Int
+	retainedMessages *expvar.Int
+	bytesReceived    *expvar.Int
+	bytesSent        *expvar.Int
+	latencyCount     *expvar.Int
+	latencySum       *expvar.Float
 
-	// LabelQoS is the QoS level label.
-	LabelQoS = "qos"
-
-	// LabelReasonCode is the reason code label.
-	LabelReasonCode = "reason_code"
-
-	// LabelClientID is the client ID label.
-	LabelClientID = "client_id"
-
-	// LabelTopic is the topic label.
-	LabelTopic = "topic"
-)
-
-// BrokerMetrics provides convenience methods for common broker metrics.
-type BrokerMetrics struct {
-	metrics Metrics
+	// Maps for labeled metrics
+	mu               sync.RWMutex
+	messagesReceived map[byte]*expvar.Int
+	messagesSent     map[byte]*expvar.Int
+	packetsReceived  map[PacketType]*expvar.Int
+	packetsSent      map[PacketType]*expvar.Int
 }
 
-// NewBrokerMetrics creates a new BrokerMetrics instance.
-func NewBrokerMetrics(m Metrics) *BrokerMetrics {
-	return &BrokerMetrics{metrics: m}
+// NewMetrics creates a new Metrics instance using expvar.
+func NewMetrics() *Metrics {
+	m := &Metrics{
+		connections:      expvar.NewInt(MetricConnections),
+		connectionsTotal: expvar.NewInt(MetricConnectionsTotal),
+		subscriptions:    expvar.NewInt(MetricSubscriptions),
+		retainedMessages: expvar.NewInt(MetricRetainedMessages),
+		bytesReceived:    expvar.NewInt(MetricBytesReceived),
+		bytesSent:        expvar.NewInt(MetricBytesSent),
+		latencyCount:     expvar.NewInt(MetricPublishLatencyCount),
+		latencySum:       expvar.NewFloat(MetricPublishLatencySum),
+		messagesReceived: make(map[byte]*expvar.Int),
+		messagesSent:     make(map[byte]*expvar.Int),
+		packetsReceived:  make(map[PacketType]*expvar.Int),
+		packetsSent:      make(map[PacketType]*expvar.Int),
+	}
+
+	// Pre-initialize QoS counters
+	for qos := byte(0); qos <= 2; qos++ {
+		m.messagesReceived[qos] = expvar.NewInt(MetricMessagesReceived + "_qos" + string(rune('0'+qos)))
+		m.messagesSent[qos] = expvar.NewInt(MetricMessagesSent + "_qos" + string(rune('0'+qos)))
+	}
+
+	return m
 }
 
 // ConnectionOpened records a new connection.
-func (b *BrokerMetrics) ConnectionOpened() {
-	b.metrics.Gauge(MetricConnections, nil).Inc()
-	b.metrics.Counter(MetricConnectionsTotal, nil).Inc()
+func (m *Metrics) ConnectionOpened() {
+	m.connections.Add(1)
+	m.connectionsTotal.Add(1)
 }
 
 // ConnectionClosed records a closed connection.
-func (b *BrokerMetrics) ConnectionClosed() {
-	b.metrics.Gauge(MetricConnections, nil).Dec()
+func (m *Metrics) ConnectionClosed() {
+	m.connections.Add(-1)
+}
+
+// Connections returns the current connection count.
+func (m *Metrics) Connections() int64 {
+	return m.connections.Value()
+}
+
+// ConnectionsTotal returns the total connection count.
+func (m *Metrics) ConnectionsTotal() int64 {
+	return m.connectionsTotal.Value()
 }
 
 // MessageReceived records a received message.
-func (b *BrokerMetrics) MessageReceived(qos byte) {
-	labels := MetricLabels{LabelQoS: string(rune('0' + qos))}
-	b.metrics.Counter(MetricMessagesReceived, labels).Inc()
+func (m *Metrics) MessageReceived(qos byte) {
+	if qos > 2 {
+		qos = 2
+	}
+	m.messagesReceived[qos].Add(1)
 }
 
 // MessageSent records a sent message.
-func (b *BrokerMetrics) MessageSent(qos byte) {
-	labels := MetricLabels{LabelQoS: string(rune('0' + qos))}
-	b.metrics.Counter(MetricMessagesSent, labels).Inc()
+func (m *Metrics) MessageSent(qos byte) {
+	if qos > 2 {
+		qos = 2
+	}
+	m.messagesSent[qos].Add(1)
 }
 
 // BytesReceived records received bytes.
-func (b *BrokerMetrics) BytesReceived(n int) {
-	b.metrics.Counter(MetricBytesReceived, nil).Add(float64(n))
+func (m *Metrics) BytesReceived(n int) {
+	m.bytesReceived.Add(int64(n))
 }
 
 // BytesSent records sent bytes.
-func (b *BrokerMetrics) BytesSent(n int) {
-	b.metrics.Counter(MetricBytesSent, nil).Add(float64(n))
+func (m *Metrics) BytesSent(n int) {
+	m.bytesSent.Add(int64(n))
 }
 
 // SubscriptionAdded records a new subscription.
-func (b *BrokerMetrics) SubscriptionAdded() {
-	b.metrics.Gauge(MetricSubscriptions, nil).Inc()
+func (m *Metrics) SubscriptionAdded() {
+	m.subscriptions.Add(1)
 }
 
 // SubscriptionRemoved records a removed subscription.
-func (b *BrokerMetrics) SubscriptionRemoved() {
-	b.metrics.Gauge(MetricSubscriptions, nil).Dec()
+func (m *Metrics) SubscriptionRemoved() {
+	m.subscriptions.Add(-1)
+}
+
+// Subscriptions returns the current subscription count.
+func (m *Metrics) Subscriptions() int64 {
+	return m.subscriptions.Value()
 }
 
 // RetainedMessageSet records a retained message being set.
-func (b *BrokerMetrics) RetainedMessageSet() {
-	b.metrics.Gauge(MetricRetainedMessages, nil).Inc()
+func (m *Metrics) RetainedMessageSet() {
+	m.retainedMessages.Add(1)
 }
 
 // RetainedMessageRemoved records a retained message being removed.
-func (b *BrokerMetrics) RetainedMessageRemoved() {
-	b.metrics.Gauge(MetricRetainedMessages, nil).Dec()
+func (m *Metrics) RetainedMessageRemoved() {
+	m.retainedMessages.Add(-1)
+}
+
+// RetainedMessages returns the current retained message count.
+func (m *Metrics) RetainedMessages() int64 {
+	return m.retainedMessages.Value()
 }
 
 // PublishLatency records publish processing latency.
-func (b *BrokerMetrics) PublishLatency(d time.Duration) {
-	b.metrics.Histogram(MetricPublishLatency, nil).ObserveDuration(d)
+func (m *Metrics) PublishLatency(d time.Duration) {
+	m.latencyCount.Add(1)
+	m.latencySum.Add(d.Seconds())
 }
 
 // PacketReceived records a received packet.
-func (b *BrokerMetrics) PacketReceived(packetType PacketType) {
-	labels := MetricLabels{LabelPacketType: packetType.String()}
-	b.metrics.Counter(MetricPacketsReceived, labels).Inc()
+func (m *Metrics) PacketReceived(packetType PacketType) {
+	m.mu.RLock()
+	counter, ok := m.packetsReceived[packetType]
+	m.mu.RUnlock()
+
+	if !ok {
+		m.mu.Lock()
+		if counter, ok = m.packetsReceived[packetType]; !ok {
+			counter = expvar.NewInt(MetricPacketsReceived + "_" + packetType.String())
+			m.packetsReceived[packetType] = counter
+		}
+		m.mu.Unlock()
+	}
+
+	counter.Add(1)
 }
 
 // PacketSent records a sent packet.
-func (b *BrokerMetrics) PacketSent(packetType PacketType) {
-	labels := MetricLabels{LabelPacketType: packetType.String()}
-	b.metrics.Counter(MetricPacketsSent, labels).Inc()
+func (m *Metrics) PacketSent(packetType PacketType) {
+	m.mu.RLock()
+	counter, ok := m.packetsSent[packetType]
+	m.mu.RUnlock()
+
+	if !ok {
+		m.mu.Lock()
+		if counter, ok = m.packetsSent[packetType]; !ok {
+			counter = expvar.NewInt(MetricPacketsSent + "_" + packetType.String())
+			m.packetsSent[packetType] = counter
+		}
+		m.mu.Unlock()
+	}
+
+	counter.Add(1)
+}
+
+// NoOpMetrics is a no-op implementation for when metrics are disabled.
+type NoOpMetrics struct{}
+
+// ConnectionOpened does nothing.
+func (n *NoOpMetrics) ConnectionOpened() {}
+
+// ConnectionClosed does nothing.
+func (n *NoOpMetrics) ConnectionClosed() {}
+
+// MessageReceived does nothing.
+func (n *NoOpMetrics) MessageReceived(_ byte) {}
+
+// MessageSent does nothing.
+func (n *NoOpMetrics) MessageSent(_ byte) {}
+
+// BytesReceived does nothing.
+func (n *NoOpMetrics) BytesReceived(_ int) {}
+
+// BytesSent does nothing.
+func (n *NoOpMetrics) BytesSent(_ int) {}
+
+// SubscriptionAdded does nothing.
+func (n *NoOpMetrics) SubscriptionAdded() {}
+
+// SubscriptionRemoved does nothing.
+func (n *NoOpMetrics) SubscriptionRemoved() {}
+
+// RetainedMessageSet does nothing.
+func (n *NoOpMetrics) RetainedMessageSet() {}
+
+// RetainedMessageRemoved does nothing.
+func (n *NoOpMetrics) RetainedMessageRemoved() {}
+
+// PublishLatency does nothing.
+func (n *NoOpMetrics) PublishLatency(_ time.Duration) {}
+
+// PacketReceived does nothing.
+func (n *NoOpMetrics) PacketReceived(_ PacketType) {}
+
+// PacketSent does nothing.
+func (n *NoOpMetrics) PacketSent(_ PacketType) {}
+
+// MetricsCollector defines the interface for metrics collection.
+type MetricsCollector interface {
+	ConnectionOpened()
+	ConnectionClosed()
+	MessageReceived(qos byte)
+	MessageSent(qos byte)
+	BytesReceived(n int)
+	BytesSent(n int)
+	SubscriptionAdded()
+	SubscriptionRemoved()
+	RetainedMessageSet()
+	RetainedMessageRemoved()
+	PublishLatency(d time.Duration)
+	PacketReceived(packetType PacketType)
+	PacketSent(packetType PacketType)
+}
+
+// MemoryMetrics is an in-memory implementation for testing without expvar side effects.
+type MemoryMetrics struct {
+	connections      atomic.Int64
+	connectionsTotal atomic.Int64
+	subscriptions    atomic.Int64
+	retainedMessages atomic.Int64
+	bytesReceived    atomic.Int64
+	bytesSent        atomic.Int64
+	latencyCount     atomic.Int64
+	latencySum       atomic.Uint64
+
+	mu               sync.RWMutex
+	messagesReceived map[byte]*atomic.Int64
+	messagesSent     map[byte]*atomic.Int64
+	packetsReceived  map[PacketType]*atomic.Int64
+	packetsSent      map[PacketType]*atomic.Int64
+}
+
+// NewMemoryMetrics creates a new in-memory metrics instance for testing.
+func NewMemoryMetrics() *MemoryMetrics {
+	m := &MemoryMetrics{
+		messagesReceived: make(map[byte]*atomic.Int64),
+		messagesSent:     make(map[byte]*atomic.Int64),
+		packetsReceived:  make(map[PacketType]*atomic.Int64),
+		packetsSent:      make(map[PacketType]*atomic.Int64),
+	}
+
+	for qos := byte(0); qos <= 2; qos++ {
+		m.messagesReceived[qos] = &atomic.Int64{}
+		m.messagesSent[qos] = &atomic.Int64{}
+	}
+
+	return m
+}
+
+// ConnectionOpened records a new connection.
+func (m *MemoryMetrics) ConnectionOpened() {
+	m.connections.Add(1)
+	m.connectionsTotal.Add(1)
+}
+
+// ConnectionClosed records a closed connection.
+func (m *MemoryMetrics) ConnectionClosed() {
+	m.connections.Add(-1)
+}
+
+// Connections returns the current connection count.
+func (m *MemoryMetrics) Connections() int64 {
+	return m.connections.Load()
+}
+
+// ConnectionsTotal returns the total connection count.
+func (m *MemoryMetrics) ConnectionsTotal() int64 {
+	return m.connectionsTotal.Load()
+}
+
+// MessageReceived records a received message.
+func (m *MemoryMetrics) MessageReceived(qos byte) {
+	if qos > 2 {
+		qos = 2
+	}
+	m.messagesReceived[qos].Add(1)
+}
+
+// MessagesReceived returns the message count for a QoS level.
+func (m *MemoryMetrics) MessagesReceived(qos byte) int64 {
+	if qos > 2 {
+		qos = 2
+	}
+	return m.messagesReceived[qos].Load()
+}
+
+// MessageSent records a sent message.
+func (m *MemoryMetrics) MessageSent(qos byte) {
+	if qos > 2 {
+		qos = 2
+	}
+	m.messagesSent[qos].Add(1)
+}
+
+// MessagesSent returns the message count for a QoS level.
+func (m *MemoryMetrics) MessagesSent(qos byte) int64 {
+	if qos > 2 {
+		qos = 2
+	}
+	return m.messagesSent[qos].Load()
+}
+
+// BytesReceived records received bytes.
+func (m *MemoryMetrics) BytesReceived(n int) {
+	m.bytesReceived.Add(int64(n))
+}
+
+// TotalBytesReceived returns total bytes received.
+func (m *MemoryMetrics) TotalBytesReceived() int64 {
+	return m.bytesReceived.Load()
+}
+
+// BytesSent records sent bytes.
+func (m *MemoryMetrics) BytesSent(n int) {
+	m.bytesSent.Add(int64(n))
+}
+
+// TotalBytesSent returns total bytes sent.
+func (m *MemoryMetrics) TotalBytesSent() int64 {
+	return m.bytesSent.Load()
+}
+
+// SubscriptionAdded records a new subscription.
+func (m *MemoryMetrics) SubscriptionAdded() {
+	m.subscriptions.Add(1)
+}
+
+// SubscriptionRemoved records a removed subscription.
+func (m *MemoryMetrics) SubscriptionRemoved() {
+	m.subscriptions.Add(-1)
+}
+
+// Subscriptions returns the current subscription count.
+func (m *MemoryMetrics) Subscriptions() int64 {
+	return m.subscriptions.Load()
+}
+
+// RetainedMessageSet records a retained message being set.
+func (m *MemoryMetrics) RetainedMessageSet() {
+	m.retainedMessages.Add(1)
+}
+
+// RetainedMessageRemoved records a retained message being removed.
+func (m *MemoryMetrics) RetainedMessageRemoved() {
+	m.retainedMessages.Add(-1)
+}
+
+// RetainedMessages returns the current retained message count.
+func (m *MemoryMetrics) RetainedMessages() int64 {
+	return m.retainedMessages.Load()
+}
+
+// PublishLatency records publish processing latency.
+func (m *MemoryMetrics) PublishLatency(d time.Duration) {
+	m.latencyCount.Add(1)
+	for {
+		old := m.latencySum.Load()
+		newSum := float64FromBits(old) + d.Seconds()
+		if m.latencySum.CompareAndSwap(old, float64ToBits(newSum)) {
+			break
+		}
+	}
+}
+
+// LatencyCount returns the number of latency observations.
+func (m *MemoryMetrics) LatencyCount() int64 {
+	return m.latencyCount.Load()
+}
+
+// LatencySum returns the sum of latencies in seconds.
+func (m *MemoryMetrics) LatencySum() float64 {
+	return float64FromBits(m.latencySum.Load())
+}
+
+// PacketReceived records a received packet.
+func (m *MemoryMetrics) PacketReceived(packetType PacketType) {
+	m.mu.RLock()
+	counter, ok := m.packetsReceived[packetType]
+	m.mu.RUnlock()
+
+	if !ok {
+		m.mu.Lock()
+		if counter, ok = m.packetsReceived[packetType]; !ok {
+			counter = &atomic.Int64{}
+			m.packetsReceived[packetType] = counter
+		}
+		m.mu.Unlock()
+	}
+
+	counter.Add(1)
+}
+
+// PacketsReceived returns the packet count for a type.
+func (m *MemoryMetrics) PacketsReceived(packetType PacketType) int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if counter, ok := m.packetsReceived[packetType]; ok {
+		return counter.Load()
+	}
+	return 0
+}
+
+// PacketSent records a sent packet.
+func (m *MemoryMetrics) PacketSent(packetType PacketType) {
+	m.mu.RLock()
+	counter, ok := m.packetsSent[packetType]
+	m.mu.RUnlock()
+
+	if !ok {
+		m.mu.Lock()
+		if counter, ok = m.packetsSent[packetType]; !ok {
+			counter = &atomic.Int64{}
+			m.packetsSent[packetType] = counter
+		}
+		m.mu.Unlock()
+	}
+
+	counter.Add(1)
+}
+
+// PacketsSent returns the packet count for a type.
+func (m *MemoryMetrics) PacketsSent(packetType PacketType) int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if counter, ok := m.packetsSent[packetType]; ok {
+		return counter.Load()
+	}
+	return 0
+}
+
+// float64ToBits converts a float64 to uint64 bits.
+func float64ToBits(f float64) uint64 {
+	return math.Float64bits(f)
+}
+
+// float64FromBits converts uint64 bits to float64.
+func float64FromBits(b uint64) float64 {
+	return math.Float64frombits(b)
 }

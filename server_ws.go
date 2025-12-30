@@ -97,14 +97,24 @@ func (s *WSServer) handleWSConnection(conn Conn) {
 func (s *WSServer) handleWSConn(conn Conn) {
 	defer conn.Close()
 
+	logger := s.config.logger.WithFields(LogFields{
+		LogFieldRemoteAddr: conn.RemoteAddr().String(),
+	})
+
 	// Read CONNECT packet
-	pkt, _, err := ReadPacket(conn, s.config.maxPacketSize)
+	pkt, n, err := ReadPacket(conn, s.config.maxPacketSize)
 	if err != nil {
+		logger.Debug("failed to read CONNECT", LogFields{LogFieldError: err.Error()})
 		return
 	}
+	s.config.metrics.BytesReceived(n)
+	s.config.metrics.PacketReceived(PacketCONNECT)
 
 	connect, ok := pkt.(*ConnectPacket)
 	if !ok {
+		logger.Warn("first packet not CONNECT", LogFields{
+			LogFieldPacketType: pkt.Type().String(),
+		})
 		return
 	}
 
@@ -114,6 +124,8 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		clientID = generateClientID()
 		connect.ClientID = clientID
 	}
+
+	logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 
 	// Authenticate
 	if s.config.auth != nil {
@@ -132,12 +144,16 @@ func (s *WSServer) handleWSConn(conn Conn) {
 			if result != nil {
 				reasonCode = result.ReasonCode
 			}
+			logger.Warn("authentication failed", LogFields{
+				LogFieldReasonCode: reasonCode.String(),
+			})
 			connack := &ConnackPacket{
 				ReasonCode: reasonCode,
 			}
 			WritePacket(conn, connack, s.config.maxPacketSize)
 			return
 		}
+		logger.Debug("authentication successful", nil)
 	}
 
 	// Create client with Conn wrapper
@@ -215,6 +231,10 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		return
 	}
 
+	// Metrics and logging
+	s.config.metrics.ConnectionOpened()
+	logger.Info("client connected", nil)
+
 	// Callback
 	if s.config.onConnect != nil {
 		s.config.onConnect(client)
@@ -226,10 +246,11 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		if session != nil {
 			for _, sub := range session.Subscriptions() {
 				s.subs.Subscribe(clientID, sub)
+				s.config.metrics.SubscriptionAdded()
 			}
 		}
 	}
 
 	// Handle packets
-	s.clientLoop(client)
+	s.clientLoop(client, logger)
 }

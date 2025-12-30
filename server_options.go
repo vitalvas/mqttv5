@@ -8,6 +8,8 @@ type serverConfig struct {
 	retainedStore     RetainedStore
 	auth              Authenticator
 	authz             Authorizer
+	logger            Logger
+	metrics           MetricsCollector
 	maxPacketSize     uint32
 	maxConnections    int
 	keepAliveOverride uint16
@@ -24,6 +26,8 @@ func defaultServerConfig() *serverConfig {
 	return &serverConfig{
 		sessionStore:   NewMemorySessionStore(),
 		retainedStore:  NewMemoryRetainedStore(),
+		logger:         NewNoOpLogger(),
+		metrics:        &NoOpMetrics{},
 		maxPacketSize:  256 * 1024, // 256KB
 		maxConnections: 0,          // unlimited
 		receiveMaximum: 65535,
@@ -130,5 +134,23 @@ func OnSubscribe(fn func(*ServerClient, []Subscription)) ServerOption {
 func OnUnsubscribe(fn func(*ServerClient, []string)) ServerOption {
 	return func(c *serverConfig) {
 		c.onUnsubscribe = fn
+	}
+}
+
+// WithLogger sets the logger.
+func WithLogger(logger Logger) ServerOption {
+	return func(c *serverConfig) {
+		if logger != nil {
+			c.logger = logger
+		}
+	}
+}
+
+// WithMetrics sets the metrics collector.
+func WithMetrics(metrics MetricsCollector) ServerOption {
+	return func(c *serverConfig) {
+		if metrics != nil {
+			c.metrics = metrics
+		}
 	}
 }

@@ -7,180 +7,155 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMetricType(t *testing.T) {
-	t.Run("string representation", func(t *testing.T) {
-		assert.Equal(t, "counter", MetricTypeCounter.String())
-		assert.Equal(t, "gauge", MetricTypeGauge.String())
-		assert.Equal(t, "histogram", MetricTypeHistogram.String())
-		assert.Equal(t, "unknown", MetricType(99).String())
-	})
-}
-
 func TestNoOpMetrics(t *testing.T) {
 	metrics := &NoOpMetrics{}
 
-	t.Run("counter operations", func(t *testing.T) {
-		counter := metrics.Counter("test", nil)
-		counter.Inc()
-		counter.Add(10)
-		assert.Equal(t, float64(0), counter.Value())
-	})
-
-	t.Run("gauge operations", func(t *testing.T) {
-		gauge := metrics.Gauge("test", nil)
-		gauge.Set(100)
-		gauge.Inc()
-		gauge.Dec()
-		gauge.Add(10)
-		gauge.Sub(5)
-		assert.Equal(t, float64(0), gauge.Value())
-	})
-
-	t.Run("histogram operations", func(t *testing.T) {
-		histogram := metrics.Histogram("test", nil)
-		histogram.Observe(1.5)
-		histogram.ObserveDuration(time.Second)
-		assert.Equal(t, uint64(0), histogram.Count())
-		assert.Equal(t, float64(0), histogram.Sum())
+	t.Run("all operations are no-ops", func(_ *testing.T) {
+		metrics.ConnectionOpened()
+		metrics.ConnectionClosed()
+		metrics.MessageReceived(0)
+		metrics.MessageSent(1)
+		metrics.BytesReceived(100)
+		metrics.BytesSent(200)
+		metrics.SubscriptionAdded()
+		metrics.SubscriptionRemoved()
+		metrics.RetainedMessageSet()
+		metrics.RetainedMessageRemoved()
+		metrics.PublishLatency(time.Millisecond)
+		metrics.PacketReceived(PacketCONNECT)
+		metrics.PacketSent(PacketCONNACK)
 	})
 }
 
-func TestBrokerMetrics(t *testing.T) {
+func TestMemoryMetrics(t *testing.T) {
 	t.Run("connection metrics", func(t *testing.T) {
 		m := NewMemoryMetrics()
-		bm := NewBrokerMetrics(m)
 
-		bm.ConnectionOpened()
-		bm.ConnectionOpened()
-		bm.ConnectionClosed()
+		m.ConnectionOpened()
+		m.ConnectionOpened()
+		m.ConnectionClosed()
 
-		connections := m.GetGauge(MetricConnections, nil)
-		assert.Equal(t, float64(1), connections.Value())
-
-		total := m.GetCounter(MetricConnectionsTotal, nil)
-		assert.Equal(t, float64(2), total.Value())
+		assert.Equal(t, int64(1), m.Connections())
+		assert.Equal(t, int64(2), m.ConnectionsTotal())
 	})
 
 	t.Run("message metrics", func(t *testing.T) {
 		m := NewMemoryMetrics()
-		bm := NewBrokerMetrics(m)
 
-		bm.MessageReceived(0)
-		bm.MessageReceived(1)
-		bm.MessageReceived(1)
-		bm.MessageSent(2)
+		m.MessageReceived(0)
+		m.MessageReceived(1)
+		m.MessageReceived(1)
+		m.MessageSent(2)
 
-		recv0 := m.GetCounter(MetricMessagesReceived, MetricLabels{LabelQoS: "0"})
-		recv1 := m.GetCounter(MetricMessagesReceived, MetricLabels{LabelQoS: "1"})
-		sent2 := m.GetCounter(MetricMessagesSent, MetricLabels{LabelQoS: "2"})
-
-		assert.Equal(t, float64(1), recv0.Value())
-		assert.Equal(t, float64(2), recv1.Value())
-		assert.Equal(t, float64(1), sent2.Value())
+		assert.Equal(t, int64(1), m.MessagesReceived(0))
+		assert.Equal(t, int64(2), m.MessagesReceived(1))
+		assert.Equal(t, int64(1), m.MessagesSent(2))
 	})
 
 	t.Run("bytes metrics", func(t *testing.T) {
 		m := NewMemoryMetrics()
-		bm := NewBrokerMetrics(m)
 
-		bm.BytesReceived(100)
-		bm.BytesReceived(200)
-		bm.BytesSent(150)
+		m.BytesReceived(100)
+		m.BytesReceived(200)
+		m.BytesSent(150)
 
-		recv := m.GetCounter(MetricBytesReceived, nil)
-		sent := m.GetCounter(MetricBytesSent, nil)
-
-		assert.Equal(t, float64(300), recv.Value())
-		assert.Equal(t, float64(150), sent.Value())
+		assert.Equal(t, int64(300), m.TotalBytesReceived())
+		assert.Equal(t, int64(150), m.TotalBytesSent())
 	})
 
 	t.Run("subscription metrics", func(t *testing.T) {
 		m := NewMemoryMetrics()
-		bm := NewBrokerMetrics(m)
 
-		bm.SubscriptionAdded()
-		bm.SubscriptionAdded()
-		bm.SubscriptionRemoved()
+		m.SubscriptionAdded()
+		m.SubscriptionAdded()
+		m.SubscriptionRemoved()
 
-		subs := m.GetGauge(MetricSubscriptions, nil)
-		assert.Equal(t, float64(1), subs.Value())
+		assert.Equal(t, int64(1), m.Subscriptions())
 	})
 
 	t.Run("retained message metrics", func(t *testing.T) {
 		m := NewMemoryMetrics()
-		bm := NewBrokerMetrics(m)
 
-		bm.RetainedMessageSet()
-		bm.RetainedMessageSet()
-		bm.RetainedMessageRemoved()
+		m.RetainedMessageSet()
+		m.RetainedMessageSet()
+		m.RetainedMessageRemoved()
 
-		retained := m.GetGauge(MetricRetainedMessages, nil)
-		assert.Equal(t, float64(1), retained.Value())
+		assert.Equal(t, int64(1), m.RetainedMessages())
 	})
 
 	t.Run("latency metrics", func(t *testing.T) {
 		m := NewMemoryMetrics()
-		bm := NewBrokerMetrics(m)
 
-		bm.PublishLatency(10 * time.Millisecond)
-		bm.PublishLatency(20 * time.Millisecond)
+		m.PublishLatency(10 * time.Millisecond)
+		m.PublishLatency(20 * time.Millisecond)
 
-		latency := m.GetHistogram(MetricPublishLatency, nil)
-		assert.Equal(t, uint64(2), latency.Count())
-		assert.InDelta(t, 0.03, latency.Sum(), 0.001)
+		assert.Equal(t, int64(2), m.LatencyCount())
+		assert.InDelta(t, 0.03, m.LatencySum(), 0.001)
 	})
 
 	t.Run("packet metrics", func(t *testing.T) {
 		m := NewMemoryMetrics()
-		bm := NewBrokerMetrics(m)
 
-		bm.PacketReceived(PacketCONNECT)
-		bm.PacketReceived(PacketPUBLISH)
-		bm.PacketReceived(PacketPUBLISH)
-		bm.PacketSent(PacketCONNACK)
+		m.PacketReceived(PacketCONNECT)
+		m.PacketReceived(PacketPUBLISH)
+		m.PacketReceived(PacketPUBLISH)
+		m.PacketSent(PacketCONNACK)
 
-		connect := m.GetCounter(MetricPacketsReceived, MetricLabels{LabelPacketType: "CONNECT"})
-		publish := m.GetCounter(MetricPacketsReceived, MetricLabels{LabelPacketType: "PUBLISH"})
-		connack := m.GetCounter(MetricPacketsSent, MetricLabels{LabelPacketType: "CONNACK"})
+		assert.Equal(t, int64(1), m.PacketsReceived(PacketCONNECT))
+		assert.Equal(t, int64(2), m.PacketsReceived(PacketPUBLISH))
+		assert.Equal(t, int64(1), m.PacketsSent(PacketCONNACK))
+	})
 
-		assert.Equal(t, float64(1), connect.Value())
-		assert.Equal(t, float64(2), publish.Value())
-		assert.Equal(t, float64(1), connack.Value())
+	t.Run("qos bounds", func(t *testing.T) {
+		m := NewMemoryMetrics()
+
+		m.MessageReceived(5) // should be capped to 2
+		m.MessageSent(10)    // should be capped to 2
+
+		assert.Equal(t, int64(1), m.MessagesReceived(2))
+		assert.Equal(t, int64(1), m.MessagesSent(2))
 	})
 }
 
-func BenchmarkNoOpCounter(b *testing.B) {
+func TestMetricsCollectorInterface(t *testing.T) {
+	t.Run("NoOpMetrics implements MetricsCollector", func(_ *testing.T) {
+		var _ MetricsCollector = &NoOpMetrics{}
+	})
+
+	t.Run("MemoryMetrics implements MetricsCollector", func(_ *testing.T) {
+		var _ MetricsCollector = NewMemoryMetrics()
+	})
+}
+
+func BenchmarkNoOpMetrics(b *testing.B) {
 	metrics := &NoOpMetrics{}
-	counter := metrics.Counter("test", nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for b.Loop() {
-		counter.Inc()
+		metrics.ConnectionOpened()
 	}
 }
 
-func BenchmarkBrokerMetricsConnectionOpened(b *testing.B) {
+func BenchmarkMemoryMetricsConnectionOpened(b *testing.B) {
 	m := NewMemoryMetrics()
-	bm := NewBrokerMetrics(m)
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for b.Loop() {
-		bm.ConnectionOpened()
+		m.ConnectionOpened()
 	}
 }
 
-func BenchmarkBrokerMetricsMessageReceived(b *testing.B) {
+func BenchmarkMemoryMetricsMessageReceived(b *testing.B) {
 	m := NewMemoryMetrics()
-	bm := NewBrokerMetrics(m)
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for b.Loop() {
-		bm.MessageReceived(1)
+		m.MessageReceived(1)
 	}
 }
