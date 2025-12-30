@@ -480,12 +480,14 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket) {
 	// Authorization
 	if s.config.authz != nil {
 		azCtx := &AuthzContext{
-			ClientID: clientID,
-			Username: client.Username(),
-			Topic:    topic,
-			Action:   AuthzActionPublish,
-			QoS:      pub.QoS,
-			Retain:   pub.Retain,
+			ClientID:   clientID,
+			Username:   client.Username(),
+			Topic:      topic,
+			Action:     AuthzActionPublish,
+			QoS:        pub.QoS,
+			Retain:     pub.Retain,
+			RemoteAddr: client.Conn().RemoteAddr(),
+			LocalAddr:  client.Conn().LocalAddr(),
 		}
 		result, err := s.config.authz.Authorize(authCtx, azCtx)
 		if err != nil || !result.Allowed {
@@ -622,11 +624,13 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket) {
 		// Authorization
 		if s.config.authz != nil {
 			azCtx := &AuthzContext{
-				ClientID: clientID,
-				Username: client.Username(),
-				Topic:    subscription.TopicFilter,
-				Action:   AuthzActionSubscribe,
-				QoS:      subscription.QoS,
+				ClientID:   clientID,
+				Username:   client.Username(),
+				Topic:      subscription.TopicFilter,
+				Action:     AuthzActionSubscribe,
+				QoS:        subscription.QoS,
+				RemoteAddr: client.Conn().RemoteAddr(),
+				LocalAddr:  client.Conn().LocalAddr(),
 			}
 			result, err := s.config.authz.Authorize(authCtx, azCtx)
 			if err != nil || !result.Allowed {

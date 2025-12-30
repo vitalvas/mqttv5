@@ -6,139 +6,26 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestAllowAllAuthenticator(t *testing.T) {
 	auth := &AllowAllAuthenticator{}
 	ctx := context.Background()
 
-	t.Run("allows any connection", func(t *testing.T) {
-		authCtx := &AuthContext{
-			ClientID: "test-client",
-			Username: "user",
-			Password: []byte("pass"),
-		}
-
-		result, err := auth.Authenticate(ctx, authCtx)
-		require.NoError(t, err)
-		assert.True(t, result.Success)
-		assert.Equal(t, ReasonSuccess, result.ReasonCode)
-	})
-
-	t.Run("allows empty credentials", func(t *testing.T) {
-		authCtx := &AuthContext{
-			ClientID: "test-client",
-		}
-
-		result, err := auth.Authenticate(ctx, authCtx)
-		require.NoError(t, err)
-		assert.True(t, result.Success)
-	})
+	result, err := auth.Authenticate(ctx, &AuthContext{ClientID: "test"})
+	assert.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, ReasonSuccess, result.ReasonCode)
 }
 
 func TestDenyAllAuthenticator(t *testing.T) {
 	auth := &DenyAllAuthenticator{}
 	ctx := context.Background()
 
-	t.Run("denies any connection", func(t *testing.T) {
-		authCtx := &AuthContext{
-			ClientID: "test-client",
-			Username: "user",
-			Password: []byte("pass"),
-		}
-
-		result, err := auth.Authenticate(ctx, authCtx)
-		require.NoError(t, err)
-		assert.False(t, result.Success)
-		assert.Equal(t, ReasonNotAuthorized, result.ReasonCode)
-	})
-
-	t.Run("denies empty credentials", func(t *testing.T) {
-		authCtx := &AuthContext{
-			ClientID: "test-client",
-		}
-
-		result, err := auth.Authenticate(ctx, authCtx)
-		require.NoError(t, err)
-		assert.False(t, result.Success)
-	})
-}
-
-func TestUsernamePasswordAuthenticator(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("valid credentials", func(t *testing.T) {
-		auth := &UsernamePasswordAuthenticator{
-			ValidateFunc: func(username string, password []byte) bool {
-				return username == "admin" && string(password) == "secret"
-			},
-		}
-
-		authCtx := &AuthContext{
-			ClientID: "test-client",
-			Username: "admin",
-			Password: []byte("secret"),
-		}
-
-		result, err := auth.Authenticate(ctx, authCtx)
-		require.NoError(t, err)
-		assert.True(t, result.Success)
-		assert.Equal(t, ReasonSuccess, result.ReasonCode)
-	})
-
-	t.Run("invalid username", func(t *testing.T) {
-		auth := &UsernamePasswordAuthenticator{
-			ValidateFunc: func(username string, password []byte) bool {
-				return username == "admin" && string(password) == "secret"
-			},
-		}
-
-		authCtx := &AuthContext{
-			ClientID: "test-client",
-			Username: "wrong",
-			Password: []byte("secret"),
-		}
-
-		result, err := auth.Authenticate(ctx, authCtx)
-		require.NoError(t, err)
-		assert.False(t, result.Success)
-		assert.Equal(t, ReasonBadUserNameOrPassword, result.ReasonCode)
-	})
-
-	t.Run("invalid password", func(t *testing.T) {
-		auth := &UsernamePasswordAuthenticator{
-			ValidateFunc: func(username string, password []byte) bool {
-				return username == "admin" && string(password) == "secret"
-			},
-		}
-
-		authCtx := &AuthContext{
-			ClientID: "test-client",
-			Username: "admin",
-			Password: []byte("wrong"),
-		}
-
-		result, err := auth.Authenticate(ctx, authCtx)
-		require.NoError(t, err)
-		assert.False(t, result.Success)
-		assert.Equal(t, ReasonBadUserNameOrPassword, result.ReasonCode)
-	})
-
-	t.Run("nil validate func", func(t *testing.T) {
-		auth := &UsernamePasswordAuthenticator{}
-
-		authCtx := &AuthContext{
-			ClientID: "test-client",
-			Username: "admin",
-			Password: []byte("secret"),
-		}
-
-		result, err := auth.Authenticate(ctx, authCtx)
-		require.NoError(t, err)
-		assert.False(t, result.Success)
-		assert.Equal(t, ReasonNotAuthorized, result.ReasonCode)
-	})
+	result, err := auth.Authenticate(ctx, &AuthContext{ClientID: "test"})
+	assert.NoError(t, err)
+	assert.False(t, result.Success)
+	assert.Equal(t, ReasonNotAuthorized, result.ReasonCode)
 }
 
 func TestAuthContext(t *testing.T) {
@@ -257,16 +144,16 @@ func TestEnhancedAuthResult(t *testing.T) {
 	})
 }
 
-// MockEnhancedAuthenticator implements EnhancedAuthenticator for testing.
-type MockEnhancedAuthenticator struct {
+// mockEnhancedAuthenticator implements EnhancedAuthenticator for testing.
+type mockEnhancedAuthenticator struct {
 	methods map[string]bool
 }
 
-func (m *MockEnhancedAuthenticator) SupportsMethod(method string) bool {
+func (m *mockEnhancedAuthenticator) SupportsMethod(method string) bool {
 	return m.methods[method]
 }
 
-func (m *MockEnhancedAuthenticator) AuthStart(_ context.Context, authCtx *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+func (m *mockEnhancedAuthenticator) AuthStart(_ context.Context, authCtx *EnhancedAuthContext) (*EnhancedAuthResult, error) {
 	if authCtx.AuthMethod == "PLAIN" {
 		return &EnhancedAuthResult{
 			Success:    true,
@@ -282,7 +169,7 @@ func (m *MockEnhancedAuthenticator) AuthStart(_ context.Context, authCtx *Enhanc
 	}, nil
 }
 
-func (m *MockEnhancedAuthenticator) AuthContinue(_ context.Context, authCtx *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+func (m *mockEnhancedAuthenticator) AuthContinue(_ context.Context, authCtx *EnhancedAuthContext) (*EnhancedAuthResult, error) {
 	if authCtx.State == "step1" && string(authCtx.AuthData) == "response" {
 		return &EnhancedAuthResult{
 			Success:    true,
@@ -297,7 +184,7 @@ func (m *MockEnhancedAuthenticator) AuthContinue(_ context.Context, authCtx *Enh
 }
 
 func TestMockEnhancedAuthenticator(t *testing.T) {
-	auth := &MockEnhancedAuthenticator{
+	auth := &mockEnhancedAuthenticator{
 		methods: map[string]bool{
 			"SCRAM-SHA-256": true,
 			"PLAIN":         true,
@@ -319,7 +206,7 @@ func TestMockEnhancedAuthenticator(t *testing.T) {
 		}
 
 		result, err := auth.AuthStart(ctx, authCtx)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		assert.True(t, result.Success)
 		assert.False(t, result.Continue)
 	})
@@ -332,7 +219,7 @@ func TestMockEnhancedAuthenticator(t *testing.T) {
 		}
 
 		result, err := auth.AuthStart(ctx, authCtx)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		assert.False(t, result.Success)
 		assert.True(t, result.Continue)
 		assert.Equal(t, []byte("challenge"), result.AuthData)
@@ -342,7 +229,7 @@ func TestMockEnhancedAuthenticator(t *testing.T) {
 		authCtx.AuthData = []byte("response")
 
 		result, err = auth.AuthContinue(ctx, authCtx)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		assert.True(t, result.Success)
 	})
 
@@ -354,69 +241,14 @@ func TestMockEnhancedAuthenticator(t *testing.T) {
 		}
 
 		result, err := auth.AuthStart(ctx, authCtx)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 
 		authCtx.State = result.State
 		authCtx.AuthData = []byte("wrong-response")
 
 		result, err = auth.AuthContinue(ctx, authCtx)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 		assert.False(t, result.Success)
 		assert.Equal(t, ReasonNotAuthorized, result.ReasonCode)
 	})
-}
-
-func BenchmarkAllowAllAuthenticator(b *testing.B) {
-	auth := &AllowAllAuthenticator{}
-	ctx := context.Background()
-	authCtx := &AuthContext{
-		ClientID: "test-client",
-		Username: "user",
-		Password: []byte("pass"),
-	}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for b.Loop() {
-		_, _ = auth.Authenticate(ctx, authCtx)
-	}
-}
-
-func BenchmarkDenyAllAuthenticator(b *testing.B) {
-	auth := &DenyAllAuthenticator{}
-	ctx := context.Background()
-	authCtx := &AuthContext{
-		ClientID: "test-client",
-		Username: "user",
-		Password: []byte("pass"),
-	}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for b.Loop() {
-		_, _ = auth.Authenticate(ctx, authCtx)
-	}
-}
-
-func BenchmarkUsernamePasswordAuthenticator(b *testing.B) {
-	auth := &UsernamePasswordAuthenticator{
-		ValidateFunc: func(username string, password []byte) bool {
-			return username == "admin" && string(password) == "secret"
-		},
-	}
-	ctx := context.Background()
-	authCtx := &AuthContext{
-		ClientID: "test-client",
-		Username: "admin",
-		Password: []byte("secret"),
-	}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	for b.Loop() {
-		_, _ = auth.Authenticate(ctx, authCtx)
-	}
 }

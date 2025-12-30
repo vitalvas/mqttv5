@@ -130,53 +130,18 @@ type EnhancedAuthenticator interface {
 	AuthContinue(ctx context.Context, authCtx *EnhancedAuthContext) (*EnhancedAuthResult, error)
 }
 
-// AllowAllAuthenticator is a simple authenticator that allows all connections.
-// This is useful for testing or when authentication is handled externally.
+// AllowAllAuthenticator allows all connections without checking credentials.
 type AllowAllAuthenticator struct{}
 
 // Authenticate always returns success.
 func (a *AllowAllAuthenticator) Authenticate(_ context.Context, _ *AuthContext) (*AuthResult, error) {
-	return &AuthResult{
-		Success:    true,
-		ReasonCode: ReasonSuccess,
-	}, nil
+	return &AuthResult{Success: true, ReasonCode: ReasonSuccess}, nil
 }
 
-// DenyAllAuthenticator is a simple authenticator that denies all connections.
+// DenyAllAuthenticator denies all connections.
 type DenyAllAuthenticator struct{}
 
 // Authenticate always returns not authorized.
 func (d *DenyAllAuthenticator) Authenticate(_ context.Context, _ *AuthContext) (*AuthResult, error) {
-	return &AuthResult{
-		Success:    false,
-		ReasonCode: ReasonNotAuthorized,
-	}, nil
-}
-
-// UsernamePasswordAuthenticator authenticates using username and password.
-type UsernamePasswordAuthenticator struct {
-	// ValidateFunc is called to validate the username and password.
-	ValidateFunc func(username string, password []byte) bool
-}
-
-// Authenticate validates the username and password.
-func (u *UsernamePasswordAuthenticator) Authenticate(_ context.Context, authCtx *AuthContext) (*AuthResult, error) {
-	if u.ValidateFunc == nil {
-		return &AuthResult{
-			Success:    false,
-			ReasonCode: ReasonNotAuthorized,
-		}, nil
-	}
-
-	if u.ValidateFunc(authCtx.Username, authCtx.Password) {
-		return &AuthResult{
-			Success:    true,
-			ReasonCode: ReasonSuccess,
-		}, nil
-	}
-
-	return &AuthResult{
-		Success:    false,
-		ReasonCode: ReasonBadUserNameOrPassword,
-	}, nil
+	return &AuthResult{Success: false, ReasonCode: ReasonNotAuthorized}, nil
 }

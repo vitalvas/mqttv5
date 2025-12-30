@@ -2,7 +2,9 @@ package mqttv5
 
 import (
 	"bytes"
+	"context"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +12,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testAuthenticator is a test authenticator with configurable behavior.
+type testAuthenticator struct {
+	authFunc func(context.Context, *AuthContext) (*AuthResult, error)
+}
+
+func (t *testAuthenticator) Authenticate(ctx context.Context, authCtx *AuthContext) (*AuthResult, error) {
+	return t.authFunc(ctx, authCtx)
+}
+
+// testAuthorizer is a test authorizer with configurable behavior.
+type testAuthorizer struct {
+	authzFunc func(context.Context, *AuthzContext) (*AuthzResult, error)
+}
+
+func (t *testAuthorizer) Authorize(ctx context.Context, authzCtx *AuthzContext) (*AuthzResult, error) {
+	return t.authzFunc(ctx, authzCtx)
+}
 
 func TestNewServer(t *testing.T) {
 	t.Run("creates server with valid address", func(t *testing.T) {
@@ -509,6 +529,304 @@ func TestServerAcceptLoopRetryDelay(t *testing.T) {
 		assert.True(t, srv.running.Load() || !srv.running.Load()) // Just checking no panic
 
 		srv.Close()
+	})
+}
+
+// TestServerAuthentication tests the server authentication flow
+func TestServerAuthentication(t *testing.T) {
+	// Custom authenticator for credential validation
+	credentialsAuth := &testAuthenticator{
+		authFunc: func(_ context.Context, ctx *AuthContext) (*AuthResult, error) {
+			if ctx.Username == "admin" && string(ctx.Password) == "secret" {
+				return &AuthResult{Success: true, ReasonCode: ReasonSuccess}, nil
+			}
+			return &AuthResult{Success: false, ReasonCode: ReasonBadUserNameOrPassword}, nil
+		},
+	}
+
+	tests := []struct {
+		name           string
+		auth           Authenticator
+		username       string
+		password       string
+		expectedReason ReasonCode
+	}{
+		{
+			name:           "valid credentials accepted",
+			auth:           credentialsAuth,
+			username:       "admin",
+			password:       "secret",
+			expectedReason: ReasonSuccess,
+		},
+		{
+			name:           "invalid credentials rejected",
+			auth:           credentialsAuth,
+			username:       "admin",
+			password:       "wrong-password",
+			expectedReason: ReasonBadUserNameOrPassword,
+		},
+		{
+			name:           "no auth configured allows all",
+			auth:           nil,
+			username:       "anyone",
+			password:       "anything",
+			expectedReason: ReasonSuccess,
+		},
+		{
+			name:           "deny all authenticator rejects all",
+			auth:           &DenyAllAuthenticator{},
+			username:       "",
+			password:       "",
+			expectedReason: ReasonNotAuthorized,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			listener, err := net.Listen("tcp", ":0")
+			require.NoError(t, err)
+
+			var opts []ServerOption
+			if tt.auth != nil {
+				opts = append(opts, WithServerAuth(tt.auth))
+			}
+			srv := NewServerWithListener(listener, opts...)
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				srv.ListenAndServe()
+			}()
+
+			time.Sleep(50 * time.Millisecond)
+
+			conn, err := net.Dial("tcp", listener.Addr().String())
+			require.NoError(t, err)
+
+			connect := &ConnectPacket{
+				ClientID: "test-client",
+				Username: tt.username,
+				Password: []byte(tt.password),
+			}
+			_, err = WritePacket(conn, connect, 256*1024)
+			require.NoError(t, err)
+
+			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			pkt, _, err := ReadPacket(conn, 256*1024)
+			require.NoError(t, err)
+
+			connack, ok := pkt.(*ConnackPacket)
+			require.True(t, ok)
+			assert.Equal(t, tt.expectedReason, connack.ReasonCode)
+
+			conn.Close()
+			srv.Close()
+			wg.Wait()
+		})
+	}
+}
+
+// TestServerAuthorization tests the server authorization flow
+func TestServerAuthorization(t *testing.T) {
+	t.Run("publish denied by authorizer", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		authz := &DenyAllAuthorizer{}
+		srv := NewServerWithListener(listener, WithServerAuthz(authz))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		// Connect
+		connect := &ConnectPacket{ClientID: "test-client"}
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Publish QoS 1 (will get PUBACK with error)
+		publish := &PublishPacket{
+			PacketID: 1,
+			Topic:    "test/topic",
+			Payload:  []byte("data"),
+			QoS:      1,
+		}
+		_, err = WritePacket(conn, publish, 256*1024)
+		require.NoError(t, err)
+
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		puback, ok := pkt.(*PubackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonNotAuthorized, puback.ReasonCode)
+
+		conn.Close()
+		srv.Close()
+		wg.Wait()
+	})
+
+	t.Run("subscribe denied by authorizer", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		authz := &DenyAllAuthorizer{}
+		srv := NewServerWithListener(listener, WithServerAuthz(authz))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		// Connect
+		connect := &ConnectPacket{ClientID: "test-client"}
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Subscribe
+		subscribe := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/topic", QoS: 0},
+			},
+		}
+		_, err = WritePacket(conn, subscribe, 256*1024)
+		require.NoError(t, err)
+
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		suback, ok := pkt.(*SubackPacket)
+		require.True(t, ok)
+		require.Len(t, suback.ReasonCodes, 1)
+		assert.Equal(t, ReasonNotAuthorized, suback.ReasonCodes[0])
+
+		conn.Close()
+		srv.Close()
+		wg.Wait()
+	})
+
+	t.Run("authorizer allows specific topics", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		// Custom authorizer that allows user1 to access user1/# topics only
+		authz := &testAuthorizer{
+			authzFunc: func(_ context.Context, ctx *AuthzContext) (*AuthzResult, error) {
+				if ctx.Username == "user1" && strings.HasPrefix(ctx.Topic, "user1/") {
+					return &AuthzResult{Allowed: true, MaxQoS: 2}, nil
+				}
+				return &AuthzResult{Allowed: false, ReasonCode: ReasonNotAuthorized}, nil
+			},
+		}
+
+		auth := &testAuthenticator{
+			authFunc: func(_ context.Context, ctx *AuthContext) (*AuthResult, error) {
+				if ctx.Username == "user1" && string(ctx.Password) == "pass1" {
+					return &AuthResult{Success: true, ReasonCode: ReasonSuccess}, nil
+				}
+				return &AuthResult{Success: false, ReasonCode: ReasonBadUserNameOrPassword}, nil
+			},
+		}
+
+		srv := NewServerWithListener(listener,
+			WithServerAuth(auth),
+			WithServerAuthz(authz),
+		)
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		// Connect with user1
+		connect := &ConnectPacket{
+			ClientID: "test-client",
+			Username: "user1",
+			Password: []byte("pass1"),
+		}
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		// Subscribe to allowed topic
+		subscribe := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "user1/data", QoS: 0},
+			},
+		}
+		_, err = WritePacket(conn, subscribe, 256*1024)
+		require.NoError(t, err)
+
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		suback, ok := pkt.(*SubackPacket)
+		require.True(t, ok)
+		require.Len(t, suback.ReasonCodes, 1)
+		assert.Equal(t, ReasonCode(0), suback.ReasonCodes[0]) // QoS 0 granted
+
+		// Subscribe to denied topic
+		subscribe2 := &SubscribePacket{
+			PacketID: 2,
+			Subscriptions: []Subscription{
+				{TopicFilter: "other/topic", QoS: 0},
+			},
+		}
+		_, err = WritePacket(conn, subscribe2, 256*1024)
+		require.NoError(t, err)
+
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		suback2, ok := pkt.(*SubackPacket)
+		require.True(t, ok)
+		require.Len(t, suback2.ReasonCodes, 1)
+		assert.Equal(t, ReasonNotAuthorized, suback2.ReasonCodes[0])
+
+		conn.Close()
+		srv.Close()
+		wg.Wait()
 	})
 }
 
