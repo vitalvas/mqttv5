@@ -98,7 +98,7 @@ func TestRequestResponse(t *testing.T) {
 				QoS:             0,
 				CorrelationData: msg.CorrelationData,
 			}
-			responder.PublishMessage(response)
+			responder.Publish(response)
 		})
 		require.NoError(t, err)
 
@@ -185,7 +185,7 @@ func TestMultipleSequentialRequests(t *testing.T) {
 			Payload:         msg.Payload,
 			CorrelationData: msg.CorrelationData,
 		}
-		responder.PublishMessage(response)
+		responder.Publish(response)
 	})
 	require.NoError(t, err)
 
@@ -243,7 +243,7 @@ func TestCallWithHeaders(t *testing.T) {
 			response.UserProperties = append(response.UserProperties,
 				mqttv5.StringPair{Key: "echo-" + prop.Key, Value: prop.Value})
 		}
-		responder.PublishMessage(response)
+		responder.Publish(response)
 	})
 	require.NoError(t, err)
 

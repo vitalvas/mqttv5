@@ -220,7 +220,7 @@ func TestPublish(t *testing.T) {
 		require.NoError(t, err)
 		defer client.Close()
 
-		err = client.Publish("test/topic", []byte("hello"), 0, false)
+		err = client.Publish(&Message{Topic: "test/topic", Payload: []byte("hello"), QoS: 0})
 		assert.NoError(t, err)
 
 		wg.Wait()
@@ -261,7 +261,7 @@ func TestPublish(t *testing.T) {
 		require.NoError(t, err)
 		defer client.Close()
 
-		err = client.Publish("test/topic", []byte("hello"), 1, false)
+		err = client.Publish(&Message{Topic: "test/topic", Payload: []byte("hello"), QoS: 1})
 		assert.NoError(t, err)
 
 		wg.Wait()
@@ -284,7 +284,7 @@ func TestPublish(t *testing.T) {
 		err = client.Close()
 		assert.NoError(t, err)
 
-		err = client.Publish("test/topic", []byte("hello"), 0, false)
+		err = client.Publish(&Message{Topic: "test/topic", Payload: []byte("hello"), QoS: 0})
 		assert.ErrorIs(t, err, ErrClientClosed)
 	})
 
@@ -301,7 +301,7 @@ func TestPublish(t *testing.T) {
 		require.NoError(t, err)
 		defer client.Close()
 
-		err = client.Publish("", []byte("hello"), 0, false)
+		err = client.Publish(&Message{Topic: "", Payload: []byte("hello"), QoS: 0})
 		assert.ErrorIs(t, err, ErrEmptyTopic)
 	})
 }

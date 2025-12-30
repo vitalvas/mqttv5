@@ -68,8 +68,8 @@ type Client interface {
 	// Unsubscribe unsubscribes from topic filters.
 	Unsubscribe(filters ...string) error
 
-	// PublishMessage sends a message with full control over all fields.
-	PublishMessage(msg *mqttv5.Message) error
+	// Publish sends a message to the broker.
+	Publish(msg *mqttv5.Message) error
 
 	// IsConnected returns true if the client is connected.
 	IsConnected() bool
@@ -169,7 +169,7 @@ func (h *Handler) Call(ctx context.Context, topic string, req *Request) (*Respon
 		}
 	}
 
-	if err := h.client.PublishMessage(msg); err != nil {
+	if err := h.client.Publish(msg); err != nil {
 		return nil, fmt.Errorf("rpc: failed to publish request: %w", err)
 	}
 

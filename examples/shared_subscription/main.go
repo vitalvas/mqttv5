@@ -141,7 +141,11 @@ func runPublisher(ctx context.Context, topic string) {
 		}
 
 		payload := fmt.Sprintf("Temperature reading %d: %.1fC", i, 20.0+float64(i)*0.5)
-		err := client.Publish(topic, []byte(payload), 1, false)
+		err := client.Publish(&mqttv5.Message{
+			Topic:   topic,
+			Payload: []byte(payload),
+			QoS:     1,
+		})
 		if err != nil {
 			log.Printf("[%s] Failed to publish message %d: %v", clientID, i, err)
 			continue

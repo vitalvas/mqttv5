@@ -39,7 +39,11 @@ func run() error {
 	}
 
 	// Publish a secure message
-	err = client.Publish("secure/topic", []byte("Secure message over TLS"), 0, false)
+	err = client.Publish(&mqttv5.Message{
+		Topic:   "secure/topic",
+		Payload: []byte("Secure message over TLS"),
+		QoS:     0,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to publish: %w", err)
 	}

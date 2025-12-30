@@ -49,7 +49,11 @@ func run() error {
 	fmt.Println("Subscribed to example/topic")
 
 	// Publish a message
-	err = client.Publish("example/topic", []byte("Hello, MQTT v5.0!"), 1, false)
+	err = client.Publish(&mqttv5.Message{
+		Topic:   "example/topic",
+		Payload: []byte("Hello, MQTT v5.0!"),
+		QoS:     1,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to publish: %w", err)
 	}

@@ -301,17 +301,7 @@ func (c *Client) ClientID() string {
 }
 
 // Publish sends a message to the broker.
-func (c *Client) Publish(topic string, payload []byte, qos byte, retain bool) error {
-	return c.PublishMessage(&Message{
-		Topic:   topic,
-		Payload: payload,
-		QoS:     qos,
-		Retain:  retain,
-	})
-}
-
-// PublishMessage sends a message with full control over all fields.
-func (c *Client) PublishMessage(msg *Message) error {
+func (c *Client) Publish(msg *Message) error {
 	if c.closed.Load() {
 		return ErrClientClosed
 	}

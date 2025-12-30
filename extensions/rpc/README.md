@@ -122,7 +122,7 @@ client.Subscribe("service/echo", 0, func(msg *mqttv5.Message) {
             {Key: "x-status", Value: "ok"},
         },
     }
-    client.PublishMessage(response)
+    client.Publish(response)
 })
 ```
 
