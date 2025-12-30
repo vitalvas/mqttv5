@@ -346,8 +346,15 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 	}
 
-	// Create client
-	client := NewServerClient(conn, connect, s.config.maxPacketSize)
+	// Determine max packet size for outbound messages (minimum of server and client limits)
+	// Per MQTT 5.0 spec, server must not send packets larger than client's advertised limit
+	clientMaxPacketSize := s.config.maxPacketSize
+	if clientLimit := connect.Props.GetUint32(PropMaximumPacketSize); clientLimit > 0 && clientLimit < clientMaxPacketSize {
+		clientMaxPacketSize = clientLimit
+	}
+
+	// Create client with the effective max packet size
+	client := NewServerClient(conn, connect, clientMaxPacketSize)
 
 	// Apply CONNECT properties from client
 	// Receive Maximum: how many QoS 1/2 messages server can send to this client concurrently
@@ -361,8 +368,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 	// Topic Alias Maximum: how many topic aliases server can use when sending to this client
 	clientTopicAliasMax := connect.Props.GetUint16(PropTopicAliasMaximum)
-	// Session Expiry Interval: stored for session management
-	// (session expiry is handled when client disconnects)
+
+	// Session Expiry Interval: stored for session management and will-delay interaction
+	// Set unconditionally (0 is the default meaning no session persistence)
+	client.SetSessionExpiryInterval(connect.Props.GetUint32(PropSessionExpiryInterval))
 
 	// Handle session
 	var sessionPresent bool
@@ -487,7 +496,9 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 		if client.IsCleanDisconnect() {
 			s.wills.Unregister(clientID)
 		} else {
-			s.wills.TriggerWill(clientID, 0)
+			// Pass session expiry interval to will manager for will-delay interaction
+			sessionExpiry := time.Duration(client.SessionExpiryInterval()) * time.Second
+			s.wills.TriggerWill(clientID, sessionExpiry)
 			logger.Debug("will message triggered", nil)
 		}
 
@@ -581,6 +592,15 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 			// Clean disconnect - mark it and close
 			logger.Debug("clean disconnect received", nil)
 			client.SetCleanDisconnect()
+			// Handle session expiry interval update from DISCONNECT
+			// Per MQTT 5.0 spec: client can update session expiry on DISCONNECT,
+			// but cannot set it to non-zero if CONNECT had zero
+			if sei := p.Props.GetUint32(PropSessionExpiryInterval); sei > 0 {
+				if client.SessionExpiryInterval() > 0 {
+					client.SetSessionExpiryInterval(sei)
+				}
+				// If original was 0, ignore per spec (protocol error, but we gracefully ignore)
+			}
 			client.Close()
 			return
 		}

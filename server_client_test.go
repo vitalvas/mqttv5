@@ -194,6 +194,152 @@ func TestServerClient(t *testing.T) {
 	})
 }
 
+// TestServerClientSendQuotaRollbackOnFailure tests that flow-control quota is released
+// and tracker entries are rolled back when WritePacket fails.
+// This tests the fix for the quota leak issue where Send acquired quota but didn't release
+// it when the write failed, eventually blocking all further QoS > 0 publishes.
+func TestServerClientSendQuotaRollbackOnFailure(t *testing.T) {
+	t.Run("QoS 1 quota released on write failure", func(t *testing.T) {
+		// Create a connection that will fail on write
+		conn := &failingConn{writeErr: net.ErrClosed}
+		connect := &ConnectPacket{ClientID: "test-client"}
+
+		client := NewServerClient(conn, connect, 256*1024)
+		client.SetSession(NewMemorySession("test-client"))
+
+		// Set a small receive maximum to make quota tracking visible
+		client.SetReceiveMaximum(2)
+
+		// Check initial quota
+		fc := client.FlowControl()
+		require.NotNil(t, fc)
+
+		// First send should fail but quota should be released
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: 1}
+		err := client.Send(msg)
+		assert.Error(t, err, "send should fail due to write error")
+
+		// Quota should still be available (was released on failure)
+		assert.True(t, fc.TryAcquire(), "quota should be available after failed send")
+		fc.Release() // Release what we just acquired
+
+		// Tracker should not have an entry (was rolled back)
+		_, ok := client.QoS1Tracker().Get(1)
+		assert.False(t, ok, "tracker entry should be rolled back on failure")
+	})
+
+	t.Run("QoS 2 quota released on write failure", func(t *testing.T) {
+		conn := &failingConn{writeErr: net.ErrClosed}
+		connect := &ConnectPacket{ClientID: "test-client"}
+
+		client := NewServerClient(conn, connect, 256*1024)
+		client.SetSession(NewMemorySession("test-client"))
+		client.SetReceiveMaximum(2)
+
+		fc := client.FlowControl()
+
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: 2}
+		err := client.Send(msg)
+		assert.Error(t, err)
+
+		// Quota should still be available
+		assert.True(t, fc.TryAcquire(), "quota should be available after failed QoS 2 send")
+		fc.Release()
+
+		// QoS 2 tracker should not have an entry
+		pending := client.QoS2Tracker().GetPendingRetries()
+		assert.Empty(t, pending, "QoS 2 tracker entry should be rolled back on failure")
+	})
+
+	t.Run("multiple failed sends don't exhaust quota", func(t *testing.T) {
+		conn := &failingConn{writeErr: net.ErrClosed}
+		connect := &ConnectPacket{ClientID: "test-client"}
+
+		client := NewServerClient(conn, connect, 256*1024)
+		client.SetSession(NewMemorySession("test-client"))
+
+		// Set very small receive maximum
+		client.SetReceiveMaximum(3)
+		fc := client.FlowControl()
+
+		// Send multiple messages that will all fail
+		for i := 0; i < 10; i++ {
+			msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: 1}
+			_ = client.Send(msg)
+		}
+
+		// Quota should still be fully available (all were released on failure)
+		for i := 0; i < 3; i++ {
+			assert.True(t, fc.TryAcquire(), "quota slot %d should be available", i)
+		}
+		// Now quota should be exhausted
+		assert.False(t, fc.TryAcquire(), "quota should be exhausted after acquiring all slots")
+
+		// Release them back
+		for i := 0; i < 3; i++ {
+			fc.Release()
+		}
+	})
+
+	t.Run("QoS 0 no quota management", func(t *testing.T) {
+		conn := &failingConn{writeErr: net.ErrClosed}
+		connect := &ConnectPacket{ClientID: "test-client"}
+
+		client := NewServerClient(conn, connect, 256*1024)
+		client.SetReceiveMaximum(1)
+		fc := client.FlowControl()
+
+		// QoS 0 should not affect quota
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: 0}
+		_ = client.Send(msg)
+
+		// Full quota should be available
+		assert.True(t, fc.TryAcquire(), "quota should be available - QoS 0 doesn't use quota")
+		fc.Release()
+	})
+}
+
+// failingConn is a mock connection that fails writes with a configurable error.
+type failingConn struct {
+	writeErr error
+}
+
+func (c *failingConn) Read(_ []byte) (int, error)  { return 0, nil }
+func (c *failingConn) Write(_ []byte) (int, error) { return 0, c.writeErr }
+func (c *failingConn) Close() error                { return nil }
+func (c *failingConn) LocalAddr() net.Addr {
+	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1883}
+}
+func (c *failingConn) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 12345}
+}
+func (c *failingConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *failingConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *failingConn) SetWriteDeadline(_ time.Time) error { return nil }
+
+// TestServerClientSessionExpiryInterval tests session expiry interval getter/setter.
+func TestServerClientSessionExpiryInterval(t *testing.T) {
+	t.Run("default value is zero", func(t *testing.T) {
+		conn := &mockConn{}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024)
+
+		assert.Equal(t, uint32(0), client.SessionExpiryInterval())
+	})
+
+	t.Run("set and get session expiry interval", func(t *testing.T) {
+		conn := &mockConn{}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024)
+
+		client.SetSessionExpiryInterval(3600)
+		assert.Equal(t, uint32(3600), client.SessionExpiryInterval())
+
+		client.SetSessionExpiryInterval(0)
+		assert.Equal(t, uint32(0), client.SessionExpiryInterval())
+	})
+}
+
 func TestServerClientConcurrency(_ *testing.T) {
 	conn := &mockConn{}
 	connect := &ConnectPacket{ClientID: "test-client"}

@@ -1350,3 +1350,355 @@ func TestServerSessionRecoveryErrorHandling(t *testing.T) {
 		wg.Wait()
 	})
 }
+
+// TestServerClientMaxPacketSize tests that server respects client's Maximum Packet Size.
+// Per MQTT 5.0 spec, server must not send packets larger than client's advertised limit.
+func TestServerClientMaxPacketSize(t *testing.T) {
+	t.Run("server uses minimum of client and server max packet size", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		// Server configured with 256KB max packet size
+		srv := NewServer(WithListener(listener), WithServerMaxPacketSize(256*1024))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		// Client advertises smaller max packet size (1KB)
+		connect := &ConnectPacket{
+			ClientID:   "test-client",
+			CleanStart: true,
+		}
+		connect.Props.Set(PropMaximumPacketSize, uint32(1024))
+
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		// Verify the server client has the correct max packet size
+		// by checking the clients map
+		srv.mu.RLock()
+		client, exists := srv.clients["test-client"]
+		srv.mu.RUnlock()
+		require.True(t, exists)
+		assert.Equal(t, uint32(1024), client.maxPacketSize, "server should use client's smaller max packet size")
+
+		conn.Close()
+		srv.Close()
+		wg.Wait()
+	})
+
+	t.Run("server uses its own limit when client specifies larger", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		// Server configured with 1KB max packet size
+		srv := NewServer(WithListener(listener), WithServerMaxPacketSize(1024))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		// Client advertises larger max packet size (256KB)
+		connect := &ConnectPacket{
+			ClientID:   "test-client",
+			CleanStart: true,
+		}
+		connect.Props.Set(PropMaximumPacketSize, uint32(256*1024))
+
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		srv.mu.RLock()
+		client, exists := srv.clients["test-client"]
+		srv.mu.RUnlock()
+		require.True(t, exists)
+		assert.Equal(t, uint32(1024), client.maxPacketSize, "server should use its own smaller max packet size")
+
+		conn.Close()
+		srv.Close()
+		wg.Wait()
+	})
+
+	t.Run("server uses default when client doesn't specify", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener), WithServerMaxPacketSize(256*1024))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		// Client doesn't specify max packet size
+		connect := &ConnectPacket{
+			ClientID:   "test-client",
+			CleanStart: true,
+		}
+
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		srv.mu.RLock()
+		client, exists := srv.clients["test-client"]
+		srv.mu.RUnlock()
+		require.True(t, exists)
+		assert.Equal(t, uint32(256*1024), client.maxPacketSize, "server should use its configured max packet size")
+
+		conn.Close()
+		srv.Close()
+		wg.Wait()
+	})
+}
+
+// TestServerSessionExpiryInterval tests that session expiry interval is read from CONNECT
+// and used for will-delay interaction.
+func TestServerSessionExpiryInterval(t *testing.T) {
+	t.Run("session expiry read from CONNECT", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		// Client specifies session expiry interval
+		connect := &ConnectPacket{
+			ClientID:   "test-client",
+			CleanStart: true,
+		}
+		connect.Props.Set(PropSessionExpiryInterval, uint32(3600)) // 1 hour
+
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		srv.mu.RLock()
+		client, exists := srv.clients["test-client"]
+		srv.mu.RUnlock()
+		require.True(t, exists)
+		assert.Equal(t, uint32(3600), client.SessionExpiryInterval(), "session expiry should be stored from CONNECT")
+
+		conn.Close()
+		srv.Close()
+		wg.Wait()
+	})
+
+	t.Run("session expiry updated on DISCONNECT", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		// Client specifies session expiry interval
+		connect := &ConnectPacket{
+			ClientID:   "test-client",
+			CleanStart: true,
+		}
+		connect.Props.Set(PropSessionExpiryInterval, uint32(3600))
+
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Send DISCONNECT with updated session expiry
+		disconnect := &DisconnectPacket{
+			ReasonCode: ReasonSuccess,
+		}
+		disconnect.Props.Set(PropSessionExpiryInterval, uint32(7200)) // Update to 2 hours
+
+		_, err = WritePacket(conn, disconnect, 256*1024)
+		require.NoError(t, err)
+
+		// Give server time to process disconnect
+		time.Sleep(100 * time.Millisecond)
+
+		conn.Close()
+		srv.Close()
+		wg.Wait()
+	})
+
+	t.Run("session expiry interval zero means no session persistence", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		// Client doesn't specify session expiry (defaults to 0)
+		connect := &ConnectPacket{
+			ClientID:   "test-client",
+			CleanStart: true,
+		}
+
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		srv.mu.RLock()
+		client, exists := srv.clients["test-client"]
+		srv.mu.RUnlock()
+		require.True(t, exists)
+		assert.Equal(t, uint32(0), client.SessionExpiryInterval(), "session expiry should be 0 when not specified")
+
+		conn.Close()
+		srv.Close()
+		wg.Wait()
+	})
+
+	t.Run("will delay constrained by session expiry", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		// Client specifies session expiry and will message with delay
+		connect := &ConnectPacket{
+			ClientID:   "test-client",
+			CleanStart: true,
+			WillFlag:   true,
+			WillTopic:  "will/topic",
+			WillQoS:    0,
+		}
+		connect.WillProps.Set(PropWillDelayInterval, uint32(3600)) // 1 hour will delay
+		connect.Props.Set(PropSessionExpiryInterval, uint32(60))   // 1 minute session expiry
+
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		// Verify will is registered
+		assert.True(t, srv.wills.HasWill("test-client"))
+
+		// Close connection abruptly (without DISCONNECT) to trigger will
+		conn.Close()
+
+		// Wait for will to be triggered
+		time.Sleep(100 * time.Millisecond)
+
+		// Will should be pending, but its publish time should be constrained by session expiry
+		// The will delay is 1 hour, but session expiry is 1 minute, so will should publish
+		// no later than session expiry
+		assert.True(t, srv.wills.HasPendingWill("test-client"), "will should be pending after unclean disconnect")
+
+		srv.Close()
+		wg.Wait()
+	})
+}

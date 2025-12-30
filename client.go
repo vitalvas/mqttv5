@@ -648,14 +648,21 @@ func (c *Client) handlePublish(pkt *PublishPacket) {
 }
 
 // deliverMessage delivers a message to matching subscription handlers.
+// Handlers are copied to avoid holding the lock during callback invocation,
+// which would cause deadlock if handlers call Subscribe/Unsubscribe.
 func (c *Client) deliverMessage(msg *Message, topic string) {
 	c.subscriptionsMu.RLock()
+	var handlers []MessageHandler
 	for filter, handler := range c.subscriptions {
 		if TopicMatch(filter, topic) {
-			handler(msg)
+			handlers = append(handlers, handler)
 		}
 	}
 	c.subscriptionsMu.RUnlock()
+
+	for _, handler := range handlers {
+		handler(msg)
+	}
 }
 
 // handlePuback processes a PUBACK packet.

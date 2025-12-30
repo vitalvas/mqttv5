@@ -790,6 +790,158 @@ func TestClientCancelOnDialErrors(t *testing.T) {
 	})
 }
 
+// TestDeliverMessageNoDeadlock tests that handlers can call Subscribe/Unsubscribe without deadlock.
+// This tests the fix for the deadlock issue where deliverMessage held subscriptionsMu.RLock()
+// while invoking user handlers, which would deadlock if handlers called Subscribe/Unsubscribe.
+func TestDeliverMessageNoDeadlock(t *testing.T) {
+	t.Run("handler can call Subscribe without deadlock", func(t *testing.T) {
+		addr, cleanup := mockServer(t, func(conn net.Conn) {
+			_ = readConnect(t, conn)
+			err := sendConnack(conn, false, ReasonSuccess)
+			assert.NoError(t, err)
+
+			// Handle subscribe packets
+			for {
+				pkt, _, err := ReadPacket(conn, 256*1024)
+				if err != nil {
+					return
+				}
+				switch p := pkt.(type) {
+				case *SubscribePacket:
+					suback := &SubackPacket{
+						PacketID:    p.PacketID,
+						ReasonCodes: make([]ReasonCode, len(p.Subscriptions)),
+					}
+					for i := range p.Subscriptions {
+						suback.ReasonCodes[i] = ReasonSuccess
+					}
+					_, _ = WritePacket(conn, suback, 256*1024)
+				case *PublishPacket:
+					// Send the message back to client to trigger handler
+					_, _ = WritePacket(conn, p, 256*1024)
+				}
+			}
+		})
+		defer cleanup()
+
+		client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+		require.NoError(t, err)
+		defer client.Close()
+
+		handlerCalled := make(chan struct{})
+		subscribeComplete := make(chan struct{})
+
+		// Subscribe with handler that calls Subscribe (would deadlock before fix)
+		err = client.Subscribe("test/topic", 0, func(_ *Message) {
+			// This would deadlock before the fix because deliverMessage held RLock
+			// and Subscribe needs to acquire Lock
+			go func() {
+				_ = client.Subscribe("test/other", 0, func(_ *Message) {})
+				close(subscribeComplete)
+			}()
+			close(handlerCalled)
+		})
+		require.NoError(t, err)
+
+		// Wait for subscription to be acknowledged
+		time.Sleep(50 * time.Millisecond)
+
+		// Publish a message to trigger the handler
+		err = client.Publish(&Message{Topic: "test/topic", Payload: []byte("trigger")})
+		require.NoError(t, err)
+
+		// Wait for handler to be called - with timeout to detect deadlock
+		select {
+		case <-handlerCalled:
+			// Handler was called successfully
+		case <-time.After(2 * time.Second):
+			t.Fatal("handler was not called - possible deadlock")
+		}
+
+		// Wait for nested subscribe to complete - with timeout to detect deadlock
+		select {
+		case <-subscribeComplete:
+			// Nested subscribe completed successfully
+		case <-time.After(2 * time.Second):
+			t.Fatal("nested Subscribe deadlocked")
+		}
+	})
+
+	t.Run("handler can call Unsubscribe without deadlock", func(t *testing.T) {
+		addr, cleanup := mockServer(t, func(conn net.Conn) {
+			_ = readConnect(t, conn)
+			err := sendConnack(conn, false, ReasonSuccess)
+			assert.NoError(t, err)
+
+			for {
+				pkt, _, err := ReadPacket(conn, 256*1024)
+				if err != nil {
+					return
+				}
+				switch p := pkt.(type) {
+				case *SubscribePacket:
+					suback := &SubackPacket{
+						PacketID:    p.PacketID,
+						ReasonCodes: make([]ReasonCode, len(p.Subscriptions)),
+					}
+					for i := range p.Subscriptions {
+						suback.ReasonCodes[i] = ReasonSuccess
+					}
+					_, _ = WritePacket(conn, suback, 256*1024)
+				case *UnsubscribePacket:
+					unsuback := &UnsubackPacket{
+						PacketID:    p.PacketID,
+						ReasonCodes: make([]ReasonCode, len(p.TopicFilters)),
+					}
+					for i := range p.TopicFilters {
+						unsuback.ReasonCodes[i] = ReasonSuccess
+					}
+					_, _ = WritePacket(conn, unsuback, 256*1024)
+				case *PublishPacket:
+					_, _ = WritePacket(conn, p, 256*1024)
+				}
+			}
+		})
+		defer cleanup()
+
+		client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+		require.NoError(t, err)
+		defer client.Close()
+
+		handlerCalled := make(chan struct{})
+		unsubscribeComplete := make(chan struct{})
+
+		// Subscribe with handler that calls Unsubscribe
+		err = client.Subscribe("test/topic", 0, func(_ *Message) {
+			go func() {
+				_ = client.Unsubscribe("test/topic")
+				close(unsubscribeComplete)
+			}()
+			close(handlerCalled)
+		})
+		require.NoError(t, err)
+
+		time.Sleep(50 * time.Millisecond)
+
+		err = client.Publish(&Message{Topic: "test/topic", Payload: []byte("trigger")})
+		require.NoError(t, err)
+
+		select {
+		case <-handlerCalled:
+			// Success
+		case <-time.After(2 * time.Second):
+			t.Fatal("handler was not called - possible deadlock")
+		}
+
+		select {
+		case <-unsubscribeComplete:
+			// Success
+		case <-time.After(2 * time.Second):
+			t.Fatal("nested Unsubscribe deadlocked")
+		}
+	})
+}
+
 // TestSubscriptionHandlerTiming tests that handlers are registered before SUBSCRIBE is sent (Issue 7)
 func TestSubscriptionHandlerTiming(t *testing.T) {
 	t.Run("handler registered before SUBSCRIBE sent", func(t *testing.T) {

@@ -8,22 +8,23 @@ import (
 
 // ServerClient represents a connected client on the server.
 type ServerClient struct {
-	mu                 sync.RWMutex
-	conn               Conn
-	clientID           string
-	username           string
-	session            Session
-	topicAliases       *TopicAliasManager
-	qos1Tracker        *QoS1Tracker
-	qos2Tracker        *QoS2Tracker
-	flowControl        *FlowController // outbound flow control (server → client)
-	inboundFlowControl *FlowController // inbound flow control (client → server)
-	properties         *ConnectPacket  // original connect properties
-	connected          atomic.Bool
-	cleanDisconnect    atomic.Bool // true if DISCONNECT packet was received
-	cleanStart         bool
-	keepAlive          uint16
-	maxPacketSize      uint32
+	mu                    sync.RWMutex
+	conn                  Conn
+	clientID              string
+	username              string
+	session               Session
+	topicAliases          *TopicAliasManager
+	qos1Tracker           *QoS1Tracker
+	qos2Tracker           *QoS2Tracker
+	flowControl           *FlowController // outbound flow control (server → client)
+	inboundFlowControl    *FlowController // inbound flow control (client → server)
+	properties            *ConnectPacket  // original connect properties
+	connected             atomic.Bool
+	cleanDisconnect       atomic.Bool // true if DISCONNECT packet was received
+	cleanStart            bool
+	keepAlive             uint16
+	maxPacketSize         uint32
+	sessionExpiryInterval uint32 // session expiry interval in seconds (from CONNECT or DISCONNECT)
 }
 
 // NewServerClient creates a new server client.
@@ -93,6 +94,20 @@ func (c *ServerClient) IsConnected() bool {
 // SetCleanDisconnect marks this as a clean disconnect (DISCONNECT packet received).
 func (c *ServerClient) SetCleanDisconnect() {
 	c.cleanDisconnect.Store(true)
+}
+
+// SessionExpiryInterval returns the session expiry interval in seconds.
+func (c *ServerClient) SessionExpiryInterval() uint32 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.sessionExpiryInterval
+}
+
+// SetSessionExpiryInterval sets the session expiry interval in seconds.
+func (c *ServerClient) SetSessionExpiryInterval(interval uint32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessionExpiryInterval = interval
 }
 
 // IsCleanDisconnect returns true if the client sent a DISCONNECT packet.
@@ -220,6 +235,16 @@ func (c *ServerClient) Send(msg *Message) error {
 	}
 
 	_, err := WritePacket(c.conn, pub, c.maxPacketSize)
+	if err != nil && msg.QoS > 0 {
+		// Rollback: release flow control quota and remove tracker entry
+		c.flowControl.Release()
+		switch msg.QoS {
+		case 1:
+			c.qos1Tracker.Acknowledge(pub.PacketID)
+		case 2:
+			c.qos2Tracker.HandlePubcomp(pub.PacketID)
+		}
+	}
 	return err
 }
 
