@@ -30,7 +30,8 @@ func TestDenyAllAuthenticator(t *testing.T) {
 
 func TestAuthContext(t *testing.T) {
 	t.Run("full context", func(t *testing.T) {
-		addr := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 1883}
+		remoteAddr := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 1883}
+		localAddr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1883}
 		connectPkt := &ConnectPacket{
 			ClientID:   "test-client",
 			Username:   "user",
@@ -42,7 +43,8 @@ func TestAuthContext(t *testing.T) {
 			ClientID:      "test-client",
 			Username:      "user",
 			Password:      []byte("pass"),
-			RemoteAddr:    addr,
+			RemoteAddr:    remoteAddr,
+			LocalAddr:     localAddr,
 			TLSCommonName: "client.example.com",
 			TLSVerified:   true,
 			ConnectPacket: connectPkt,
@@ -54,7 +56,8 @@ func TestAuthContext(t *testing.T) {
 		assert.Equal(t, "test-client", authCtx.ClientID)
 		assert.Equal(t, "user", authCtx.Username)
 		assert.Equal(t, []byte("pass"), authCtx.Password)
-		assert.Equal(t, addr, authCtx.RemoteAddr)
+		assert.Equal(t, remoteAddr, authCtx.RemoteAddr)
+		assert.Equal(t, localAddr, authCtx.LocalAddr)
 		assert.Equal(t, "client.example.com", authCtx.TLSCommonName)
 		assert.True(t, authCtx.TLSVerified)
 		assert.Equal(t, connectPkt, authCtx.ConnectPacket)

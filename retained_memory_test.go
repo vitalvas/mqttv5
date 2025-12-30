@@ -3,6 +3,7 @@ package mqttv5
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -207,6 +208,128 @@ func TestMemoryRetainedStore(t *testing.T) {
 		assert.Contains(t, topics, "a/b")
 		assert.Contains(t, topics, "c/d")
 		assert.Contains(t, topics, "e/f")
+	})
+
+	t.Run("set and get with metadata", func(t *testing.T) {
+		store := NewMemoryRetainedStore()
+
+		msg := &RetainedMessage{
+			Topic:           "test/topic",
+			Payload:         []byte("data"),
+			QoS:             1,
+			PayloadFormat:   1,
+			MessageExpiry:   3600,
+			PublishedAt:     time.Now(),
+			ContentType:     "application/json",
+			ResponseTopic:   "response/topic",
+			CorrelationData: []byte("correlation"),
+			UserProperties:  []StringPair{{Key: "key1", Value: "value1"}},
+		}
+
+		err := store.Set(msg)
+		require.NoError(t, err)
+
+		got, ok := store.Get("test/topic")
+		require.True(t, ok)
+		assert.Equal(t, msg.Topic, got.Topic)
+		assert.Equal(t, msg.Payload, got.Payload)
+		assert.Equal(t, msg.QoS, got.QoS)
+		assert.Equal(t, msg.PayloadFormat, got.PayloadFormat)
+		assert.Equal(t, msg.MessageExpiry, got.MessageExpiry)
+		assert.Equal(t, msg.ContentType, got.ContentType)
+		assert.Equal(t, msg.ResponseTopic, got.ResponseTopic)
+		assert.Equal(t, msg.CorrelationData, got.CorrelationData)
+		assert.Equal(t, msg.UserProperties, got.UserProperties)
+	})
+
+	t.Run("match filters out expired messages", func(t *testing.T) {
+		store := NewMemoryRetainedStore()
+
+		// Active message (no expiry)
+		store.Set(&RetainedMessage{
+			Topic:   "active/topic",
+			Payload: []byte("active"),
+		})
+
+		// Already expired message (published 2 seconds ago with 1 second expiry)
+		store.Set(&RetainedMessage{
+			Topic:         "expired/topic",
+			Payload:       []byte("expired"),
+			MessageExpiry: 1,
+			PublishedAt:   time.Now().Add(-2 * time.Second),
+		})
+
+		matched := store.Match("#")
+		assert.Len(t, matched, 1)
+		assert.Equal(t, "active/topic", matched[0].Topic)
+	})
+}
+
+func TestRetainedMessageExpiry(t *testing.T) {
+	t.Run("IsExpired returns false when no expiry set", func(t *testing.T) {
+		msg := &RetainedMessage{
+			Topic:   "test",
+			Payload: []byte("data"),
+		}
+		assert.False(t, msg.IsExpired())
+	})
+
+	t.Run("IsExpired returns false when PublishedAt is zero", func(t *testing.T) {
+		msg := &RetainedMessage{
+			Topic:         "test",
+			Payload:       []byte("data"),
+			MessageExpiry: 60,
+		}
+		assert.False(t, msg.IsExpired())
+	})
+
+	t.Run("IsExpired returns false for non-expired message", func(t *testing.T) {
+		msg := &RetainedMessage{
+			Topic:         "test",
+			Payload:       []byte("data"),
+			MessageExpiry: 60,
+			PublishedAt:   time.Now(),
+		}
+		assert.False(t, msg.IsExpired())
+	})
+
+	t.Run("IsExpired returns true for expired message", func(t *testing.T) {
+		msg := &RetainedMessage{
+			Topic:         "test",
+			Payload:       []byte("data"),
+			MessageExpiry: 1,
+			PublishedAt:   time.Now().Add(-2 * time.Second),
+		}
+		assert.True(t, msg.IsExpired())
+	})
+
+	t.Run("RemainingExpiry returns 0 when no expiry set", func(t *testing.T) {
+		msg := &RetainedMessage{
+			Topic:   "test",
+			Payload: []byte("data"),
+		}
+		assert.Equal(t, uint32(0), msg.RemainingExpiry())
+	})
+
+	t.Run("RemainingExpiry returns remaining seconds", func(t *testing.T) {
+		msg := &RetainedMessage{
+			Topic:         "test",
+			Payload:       []byte("data"),
+			MessageExpiry: 60,
+			PublishedAt:   time.Now(),
+		}
+		remaining := msg.RemainingExpiry()
+		assert.True(t, remaining >= 59 && remaining <= 60)
+	})
+
+	t.Run("RemainingExpiry returns 0 for expired message", func(t *testing.T) {
+		msg := &RetainedMessage{
+			Topic:         "test",
+			Payload:       []byte("data"),
+			MessageExpiry: 1,
+			PublishedAt:   time.Now().Add(-2 * time.Second),
+		}
+		assert.Equal(t, uint32(0), msg.RemainingExpiry())
 	})
 }
 

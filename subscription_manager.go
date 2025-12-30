@@ -28,9 +28,9 @@ func (e SubscriptionEntry) MatchSubscriber(other any) bool {
 type SubscriptionManager struct {
 	mu               sync.RWMutex
 	matcher          *TopicMatcher
-	subscriptions    map[string][]SubscriptionEntry   // clientID -> subscriptions
-	sharedGroupIndex map[string][]SubscriptionEntry   // shareGroup -> subscriptions for round-robin
-	sharedCounters   map[string]*atomic.Uint64        // shareGroup -> round-robin counter
+	subscriptions    map[string][]SubscriptionEntry // clientID -> subscriptions
+	sharedGroupIndex map[string][]SubscriptionEntry // shareGroup -> subscriptions for round-robin
+	sharedCounters   map[string]*atomic.Uint64      // shareGroup -> round-robin counter
 }
 
 // NewSubscriptionManager creates a new subscription manager.

@@ -195,6 +195,67 @@ func TestMemorySession(t *testing.T) {
 		removed = session.RemoveInflightQoS2(1)
 		assert.False(t, removed)
 	})
+
+	t.Run("inflight QoS2 receiver-side state", func(t *testing.T) {
+		session := NewMemorySession("client-1")
+
+		// Receiver-side QoS 2 message (IsSender = false)
+		msg := &QoS2Message{
+			PacketID:     1,
+			Message:      &Message{Topic: "test/topic", Payload: []byte("data")},
+			State:        QoS2AwaitingPubrel,
+			IsSender:     false,
+			SentAt:       time.Now(),
+			RetryTimeout: 30 * time.Second,
+		}
+		session.AddInflightQoS2(1, msg)
+
+		got, ok := session.GetInflightQoS2(1)
+		require.True(t, ok)
+		assert.Equal(t, msg.PacketID, got.PacketID)
+		assert.False(t, got.IsSender)
+		assert.Equal(t, QoS2AwaitingPubrel, got.State)
+
+		// Verify it persists with state
+		msgs := session.InflightQoS2()
+		assert.Len(t, msgs, 1)
+		assert.False(t, msgs[1].IsSender)
+	})
+
+	t.Run("inflight QoS2 sender and receiver", func(t *testing.T) {
+		session := NewMemorySession("client-1")
+
+		// Add sender-side message
+		senderMsg := &QoS2Message{
+			PacketID: 1,
+			Message:  &Message{Topic: "sender/topic", Payload: []byte("sender")},
+			State:    QoS2AwaitingPubrec,
+			IsSender: true,
+		}
+		session.AddInflightQoS2(1, senderMsg)
+
+		// Add receiver-side message (different packet ID)
+		receiverMsg := &QoS2Message{
+			PacketID: 2,
+			Message:  &Message{Topic: "receiver/topic", Payload: []byte("receiver")},
+			State:    QoS2AwaitingPubrel,
+			IsSender: false,
+		}
+		session.AddInflightQoS2(2, receiverMsg)
+
+		msgs := session.InflightQoS2()
+		assert.Len(t, msgs, 2)
+
+		// Verify sender
+		got1, ok := session.GetInflightQoS2(1)
+		require.True(t, ok)
+		assert.True(t, got1.IsSender)
+
+		// Verify receiver
+		got2, ok := session.GetInflightQoS2(2)
+		require.True(t, ok)
+		assert.False(t, got2.IsSender)
+	})
 }
 
 func TestMemorySessionStore(t *testing.T) {

@@ -727,15 +727,24 @@ func (c *Client) handleSuback(pkt *SubackPacket) {
 	// Release packet ID
 	_ = c.packetIDMgr.Release(pkt.PacketID)
 
-	// Check reason codes and remove handlers for failed subscriptions
+	// Check reason codes and update handlers/session for subscriptions
 	c.subscriptionsMu.Lock()
 	for i, code := range pkt.ReasonCodes {
 		if i >= len(filters) {
 			break
 		}
+		filter := filters[i]
 		// Reason codes >= 0x80 indicate failure
 		if code.IsError() {
-			delete(c.subscriptions, filters[i])
+			delete(c.subscriptions, filter)
+		} else if c.session != nil {
+			// Persist successful subscription to session with granted QoS
+			// The reason code for success is the granted QoS (0, 1, or 2)
+			grantedQoS := byte(code)
+			c.session.AddSubscription(Subscription{
+				TopicFilter: filter,
+				QoS:         grantedQoS,
+			})
 		}
 	}
 	c.subscriptionsMu.Unlock()
@@ -762,9 +771,14 @@ func (c *Client) handleUnsuback(pkt *UnsubackPacket) {
 		if i >= len(filters) {
 			break
 		}
+		filter := filters[i]
 		// Only remove handler if unsubscribe was successful
 		if code.IsSuccess() {
-			delete(c.subscriptions, filters[i])
+			delete(c.subscriptions, filter)
+			// Also remove from session
+			if c.session != nil {
+				c.session.RemoveSubscription(filter)
+			}
 		}
 	}
 	c.subscriptionsMu.Unlock()
@@ -916,7 +930,7 @@ func (c *Client) restoreSubscriptions() {
 		}
 
 		subPkt := &SubscribePacket{
-			PacketID: packetID,
+			PacketID:      packetID,
 			Subscriptions: []Subscription{sub},
 		}
 

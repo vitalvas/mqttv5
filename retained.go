@@ -1,11 +1,42 @@
 package mqttv5
 
+import "time"
+
 // RetainedMessage represents a retained message.
 type RetainedMessage struct {
-	Topic   string
-	Payload []byte
-	QoS     byte
-	Props   Properties
+	Topic           string
+	Payload         []byte
+	QoS             byte
+	PayloadFormat   byte
+	MessageExpiry   uint32
+	PublishedAt     time.Time
+	ContentType     string
+	ResponseTopic   string
+	CorrelationData []byte
+	UserProperties  []StringPair
+	Props           Properties
+}
+
+// IsExpired returns true if the message has expired.
+func (m *RetainedMessage) IsExpired() bool {
+	if m.MessageExpiry == 0 || m.PublishedAt.IsZero() {
+		return false
+	}
+	expiryTime := m.PublishedAt.Add(time.Duration(m.MessageExpiry) * time.Second)
+	return time.Now().After(expiryTime)
+}
+
+// RemainingExpiry returns the remaining expiry in seconds, or 0 if not set/expired.
+func (m *RetainedMessage) RemainingExpiry() uint32 {
+	if m.MessageExpiry == 0 || m.PublishedAt.IsZero() {
+		return 0
+	}
+	elapsed := time.Since(m.PublishedAt)
+	remaining := time.Duration(m.MessageExpiry)*time.Second - elapsed
+	if remaining <= 0 {
+		return 0
+	}
+	return uint32(remaining.Seconds())
 }
 
 // RetainedStore defines the interface for retained message storage.

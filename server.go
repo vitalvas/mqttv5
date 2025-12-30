@@ -2,6 +2,7 @@ package mqttv5
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -11,6 +12,55 @@ import (
 )
 
 var authCtx = context.Background()
+
+// setupSession handles session creation/retrieval based on CleanStart flag.
+// Returns true if an existing session was found.
+func (s *Server) setupSession(client *ServerClient, clientID string, cleanStart bool) bool {
+	if cleanStart {
+		s.config.sessionStore.Delete(clientID)
+		session := NewMemorySession(clientID)
+		s.config.sessionStore.Create(session)
+		client.SetSession(session)
+		return false
+	}
+
+	existing, err := s.config.sessionStore.Get(clientID)
+	if err == nil {
+		client.SetSession(existing)
+		return true
+	}
+
+	session := NewMemorySession(clientID)
+	s.config.sessionStore.Create(session)
+	client.SetSession(session)
+	return false
+}
+
+// buildAuthContext creates an AuthContext from connection and CONNECT packet info.
+func buildAuthContext(conn net.Conn, connect *ConnectPacket, clientID string) *AuthContext {
+	actx := &AuthContext{
+		ClientID:      clientID,
+		Username:      connect.Username,
+		Password:      connect.Password,
+		RemoteAddr:    conn.RemoteAddr(),
+		LocalAddr:     conn.LocalAddr(),
+		ConnectPacket: connect,
+		CleanStart:    connect.CleanStart,
+		AuthMethod:    connect.Props.GetString(PropAuthenticationMethod),
+		AuthData:      connect.Props.GetBinary(PropAuthenticationData),
+	}
+
+	// Extract TLS certificate information if available
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		state := tlsConn.ConnectionState()
+		if len(state.PeerCertificates) > 0 {
+			actx.TLSCommonName = state.PeerCertificates[0].Subject.CommonName
+			actx.TLSVerified = len(state.VerifiedChains) > 0
+		}
+	}
+
+	return actx
+}
 
 var (
 	ErrServerClosed     = errors.New("server closed")
@@ -186,9 +236,16 @@ func (s *Server) Publish(msg *Message) error {
 			s.config.retainedStore.Delete(msg.Topic)
 		} else {
 			s.config.retainedStore.Set(&RetainedMessage{
-				Topic:   msg.Topic,
-				Payload: msg.Payload,
-				QoS:     msg.QoS,
+				Topic:           msg.Topic,
+				Payload:         msg.Payload,
+				QoS:             msg.QoS,
+				PayloadFormat:   msg.PayloadFormat,
+				MessageExpiry:   msg.MessageExpiry,
+				PublishedAt:     msg.PublishedAt,
+				ContentType:     msg.ContentType,
+				ResponseTopic:   msg.ResponseTopic,
+				CorrelationData: msg.CorrelationData,
+				UserProperties:  msg.UserProperties,
 			})
 		}
 	}
@@ -325,15 +382,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	// Authenticate
 	var authResult *AuthResult
 	if s.config.auth != nil {
-		actx := &AuthContext{
-			ClientID:      clientID,
-			Username:      connect.Username,
-			Password:      connect.Password,
-			RemoteAddr:    conn.RemoteAddr(),
-			ConnectPacket: connect,
-			CleanStart:    connect.CleanStart,
-		}
-
+		actx := buildAuthContext(conn, connect, clientID)
 		result, err := s.config.auth.Authenticate(authCtx, actx)
 		if err != nil || !result.Success {
 			reasonCode := ReasonNotAuthorized
@@ -389,25 +438,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	client.SetSessionExpiryInterval(connect.Props.GetUint32(PropSessionExpiryInterval))
 
 	// Handle session
-	var sessionPresent bool
-	if connect.CleanStart {
-		s.config.sessionStore.Delete(clientID)
-		session := NewMemorySession(clientID)
-		s.config.sessionStore.Create(session)
-		client.SetSession(session)
-	} else {
-		existing, err := s.config.sessionStore.Get(clientID)
-		if err == nil {
-			sessionPresent = true
-			client.SetSession(existing)
-		} else {
-			// Session doesn't exist or error - create a new one
-			// Only claim sessionPresent if we successfully retrieved an existing session
-			session := NewMemorySession(clientID)
-			s.config.sessionStore.Create(session)
-			client.SetSession(session)
-		}
-	}
+	sessionPresent := s.setupSession(client, clientID, connect.CleanStart)
 
 	// Check for existing connection with same client ID
 	s.mu.Lock()
@@ -571,62 +602,16 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 			s.handlePublish(client, p, logger)
 
 		case *PubackPacket:
-			if _, ok := client.QoS1Tracker().Acknowledge(p.PacketID); ok {
-				client.FlowControl().Release()
-				// Remove from session persistence
-				if session := client.Session(); session != nil {
-					session.RemoveInflightQoS1(p.PacketID)
-				}
-			}
+			s.handlePuback(client, p)
 
 		case *PubrecPacket:
-			if _, ok := client.QoS2Tracker().HandlePubrec(p.PacketID); ok {
-				pubrel := &PubrelPacket{PacketID: p.PacketID}
-				if n, err := WritePacket(conn, pubrel, s.config.maxPacketSize); err == nil {
-					s.config.metrics.BytesSent(n)
-					s.config.metrics.PacketSent(PacketPUBREL)
-				}
-				// Update session with new state (awaiting PUBCOMP)
-				if session := client.Session(); session != nil {
-					if qos2Msg, exists := session.GetInflightQoS2(p.PacketID); exists {
-						qos2Msg.State = QoS2AwaitingPubcomp
-						qos2Msg.SentAt = time.Now()
-					}
-				}
-			}
+			s.handlePubrec(client, p)
 
 		case *PubrelPacket:
-			msg, ok := client.QoS2Tracker().HandlePubrel(p.PacketID)
-			if ok {
-				pubcomp := &PubcompPacket{PacketID: p.PacketID}
-				if n, err := WritePacket(conn, pubcomp, s.config.maxPacketSize); err == nil {
-					s.config.metrics.BytesSent(n)
-					s.config.metrics.PacketSent(PacketPUBCOMP)
-				}
-
-				// Release inbound quota for QoS 2 message
-				client.InboundFlowControl().Release()
-
-				// Deliver the QoS 2 message now that the flow is complete
-				if msg != nil && msg.Message != nil {
-					// Callback
-					if s.config.onMessage != nil {
-						s.config.onMessage(client, msg.Message)
-					}
-
-					// Publish to subscribers
-					s.publishToSubscribers(clientID, msg.Message)
-				}
-			}
+			s.handlePubrel(client, p)
 
 		case *PubcompPacket:
-			if _, ok := client.QoS2Tracker().HandlePubcomp(p.PacketID); ok {
-				client.FlowControl().Release()
-				// Remove from session persistence
-				if session := client.Session(); session != nil {
-					session.RemoveInflightQoS2(p.PacketID)
-				}
-			}
+			s.handlePubcomp(client, p)
 
 		case *SubscribePacket:
 			s.handleSubscribe(client, p, logger)
@@ -656,6 +641,66 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 			}
 			client.Close()
 			return
+		}
+	}
+}
+
+func (s *Server) handlePuback(client *ServerClient, p *PubackPacket) {
+	if _, ok := client.QoS1Tracker().Acknowledge(p.PacketID); ok {
+		client.FlowControl().Release()
+		if session := client.Session(); session != nil {
+			session.RemoveInflightQoS1(p.PacketID)
+		}
+	}
+}
+
+func (s *Server) handlePubrec(client *ServerClient, p *PubrecPacket) {
+	if _, ok := client.QoS2Tracker().HandlePubrec(p.PacketID); ok {
+		pubrel := &PubrelPacket{PacketID: p.PacketID}
+		if n, err := WritePacket(client.Conn(), pubrel, s.config.maxPacketSize); err == nil {
+			s.config.metrics.BytesSent(n)
+			s.config.metrics.PacketSent(PacketPUBREL)
+		}
+		if session := client.Session(); session != nil {
+			if qos2Msg, exists := session.GetInflightQoS2(p.PacketID); exists {
+				qos2Msg.State = QoS2AwaitingPubcomp
+				qos2Msg.SentAt = time.Now()
+			}
+		}
+	}
+}
+
+func (s *Server) handlePubrel(client *ServerClient, p *PubrelPacket) {
+	msg, ok := client.QoS2Tracker().HandlePubrel(p.PacketID)
+	if !ok {
+		return
+	}
+
+	pubcomp := &PubcompPacket{PacketID: p.PacketID}
+	if n, err := WritePacket(client.Conn(), pubcomp, s.config.maxPacketSize); err == nil {
+		s.config.metrics.BytesSent(n)
+		s.config.metrics.PacketSent(PacketPUBCOMP)
+	}
+
+	client.InboundFlowControl().Release()
+
+	if session := client.Session(); session != nil {
+		session.RemoveInflightQoS2(p.PacketID)
+	}
+
+	if msg != nil && msg.Message != nil {
+		if s.config.onMessage != nil {
+			s.config.onMessage(client, msg.Message)
+		}
+		s.publishToSubscribers(client.ClientID(), msg.Message)
+	}
+}
+
+func (s *Server) handlePubcomp(client *ServerClient, p *PubcompPacket) {
+	if _, ok := client.QoS2Tracker().HandlePubcomp(p.PacketID); ok {
+		client.FlowControl().Release()
+		if session := client.Session(); session != nil {
+			session.RemoveInflightQoS2(p.PacketID)
 		}
 	}
 }
@@ -809,6 +854,19 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 	// Per MQTT 5.0 spec, message delivery happens after PUBREL is received
 	if pub.QoS == 2 {
 		client.QoS2Tracker().TrackReceive(pub.PacketID, msg)
+
+		// Persist receiver-side QoS 2 state for session resume
+		if session := client.Session(); session != nil {
+			session.AddInflightQoS2(pub.PacketID, &QoS2Message{
+				PacketID:     pub.PacketID,
+				Message:      msg,
+				State:        QoS2ReceivedPublish,
+				SentAt:       time.Now(),
+				RetryTimeout: 30 * time.Second,
+				IsSender:     false,
+			})
+		}
+
 		pubrec := &PubrecPacket{
 			PacketID:   pub.PacketID,
 			ReasonCode: ReasonSuccess,
@@ -817,6 +875,14 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 			s.config.metrics.BytesSent(n)
 			s.config.metrics.PacketSent(PacketPUBREC)
 			client.QoS2Tracker().SendPubrec(pub.PacketID)
+
+			// Update session state after PUBREC sent
+			if session := client.Session(); session != nil {
+				if qos2Msg, exists := session.GetInflightQoS2(pub.PacketID); exists {
+					qos2Msg.State = QoS2AwaitingPubrel
+					qos2Msg.SentAt = time.Now()
+				}
+			}
 		}
 		// QoS 2 message delivery is deferred until PUBREL is received
 		return
@@ -843,9 +909,16 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 			s.config.retainedStore.Delete(msg.Topic)
 		} else {
 			s.config.retainedStore.Set(&RetainedMessage{
-				Topic:   msg.Topic,
-				Payload: msg.Payload,
-				QoS:     msg.QoS,
+				Topic:           msg.Topic,
+				Payload:         msg.Payload,
+				QoS:             msg.QoS,
+				PayloadFormat:   msg.PayloadFormat,
+				MessageExpiry:   msg.MessageExpiry,
+				PublishedAt:     msg.PublishedAt,
+				ContentType:     msg.ContentType,
+				ResponseTopic:   msg.ResponseTopic,
+				CorrelationData: msg.CorrelationData,
+				UserProperties:  msg.UserProperties,
 			})
 		}
 	}
@@ -963,17 +1036,33 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 		// Send retained messages
 		if ShouldSendRetained(subscription.RetainHandling, isNew) {
 			retained := s.config.retainedStore.Match(subscription.TopicFilter)
-			for _, msg := range retained {
-				deliveryQoS := msg.QoS
+			for _, retMsg := range retained {
+				deliveryQoS := retMsg.QoS
 				if subscription.QoS < deliveryQoS {
 					deliveryQoS = subscription.QoS
 				}
 
+				// Per MQTT v5 spec, retain flag respects RetainAsPublish subscription option
+				retainFlag := true
+				if !subscription.RetainAsPublish {
+					retainFlag = false
+				}
+
+				// Calculate remaining expiry for delivery
+				remainingExpiry := retMsg.RemainingExpiry()
+
 				client.Send(&Message{
-					Topic:   msg.Topic,
-					Payload: msg.Payload,
-					QoS:     deliveryQoS,
-					Retain:  true,
+					Topic:           retMsg.Topic,
+					Payload:         retMsg.Payload,
+					QoS:             deliveryQoS,
+					Retain:          retainFlag,
+					PayloadFormat:   retMsg.PayloadFormat,
+					MessageExpiry:   remainingExpiry,
+					PublishedAt:     retMsg.PublishedAt,
+					ContentType:     retMsg.ContentType,
+					ResponseTopic:   retMsg.ResponseTopic,
+					CorrelationData: retMsg.CorrelationData,
+					UserProperties:  retMsg.UserProperties,
 				})
 			}
 		}
@@ -1085,50 +1174,62 @@ func (s *Server) restoreInflightMessages(client *ServerClient, session Session, 
 
 	// Restore QoS 2 messages
 	for packetID, msg := range session.InflightQoS2() {
-		// Only restore sender-side messages
-		if !msg.IsSender {
-			continue
-		}
+		if msg.IsSender {
+			// Restore sender-side messages
+			switch msg.State {
+			case QoS2AwaitingPubrec:
+				// Restore to tracker and resend PUBLISH with DUP
+				client.QoS2Tracker().TrackSend(packetID, msg.Message)
 
-		switch msg.State {
-		case QoS2AwaitingPubrec:
-			// Restore to tracker and resend PUBLISH with DUP
-			client.QoS2Tracker().TrackSend(packetID, msg.Message)
+				// Acquire flow control for the resend
+				if !client.FlowControl().TryAcquire() {
+					logger.Warn("flow control exhausted during session restore", nil)
+					continue
+				}
 
-			// Acquire flow control for the resend
-			if !client.FlowControl().TryAcquire() {
-				logger.Warn("flow control exhausted during session restore", nil)
-				continue
+				pub := &PublishPacket{
+					PacketID: packetID,
+					Topic:    msg.Message.Topic,
+					Payload:  msg.Message.Payload,
+					QoS:      2,
+					Retain:   msg.Message.Retain,
+					DUP:      true,
+				}
+				if n, err := WritePacket(conn, pub, s.config.maxPacketSize); err == nil {
+					s.config.metrics.BytesSent(n)
+					s.config.metrics.PacketSent(PacketPUBLISH)
+				}
+
+			case QoS2AwaitingPubcomp:
+				// Restore to tracker (already past PUBREC) and resend PUBREL
+				client.QoS2Tracker().TrackSend(packetID, msg.Message)
+				client.QoS2Tracker().HandlePubrec(packetID) // Transition to AwaitingPubcomp state
+
+				// Acquire flow control for the resend
+				if !client.FlowControl().TryAcquire() {
+					logger.Warn("flow control exhausted during session restore", nil)
+					continue
+				}
+
+				pubrel := &PubrelPacket{PacketID: packetID}
+				if n, err := WritePacket(conn, pubrel, s.config.maxPacketSize); err == nil {
+					s.config.metrics.BytesSent(n)
+					s.config.metrics.PacketSent(PacketPUBREL)
+				}
 			}
-
-			pub := &PublishPacket{
-				PacketID: packetID,
-				Topic:    msg.Message.Topic,
-				Payload:  msg.Message.Payload,
-				QoS:      2,
-				Retain:   msg.Message.Retain,
-				DUP:      true,
-			}
-			if n, err := WritePacket(conn, pub, s.config.maxPacketSize); err == nil {
-				s.config.metrics.BytesSent(n)
-				s.config.metrics.PacketSent(PacketPUBLISH)
-			}
-
-		case QoS2AwaitingPubcomp:
-			// Restore to tracker (already past PUBREC) and resend PUBREL
-			client.QoS2Tracker().TrackSend(packetID, msg.Message)
-			client.QoS2Tracker().HandlePubrec(packetID) // Transition to AwaitingPubcomp state
-
-			// Acquire flow control for the resend
-			if !client.FlowControl().TryAcquire() {
-				logger.Warn("flow control exhausted during session restore", nil)
-				continue
-			}
-
-			pubrel := &PubrelPacket{PacketID: packetID}
-			if n, err := WritePacket(conn, pubrel, s.config.maxPacketSize); err == nil {
-				s.config.metrics.BytesSent(n)
-				s.config.metrics.PacketSent(PacketPUBREL)
+		} else {
+			// Restore receiver-side messages
+			// Per MQTT v5 spec, if we received a PUBLISH and sent PUBREC but haven't
+			// received PUBREL yet, we need to be ready to respond to PUBREL
+			switch msg.State {
+			case QoS2ReceivedPublish, QoS2AwaitingPubrel:
+				// Restore to tracker - client will resend PUBREL which we'll respond to
+				client.QoS2Tracker().TrackReceive(packetID, msg.Message)
+				if msg.State == QoS2AwaitingPubrel {
+					client.QoS2Tracker().SendPubrec(packetID)
+				}
+				// Acquire inbound flow control quota for the restored message
+				client.InboundFlowControl().TryAcquire()
 			}
 		}
 	}

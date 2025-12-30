@@ -1,7 +1,9 @@
 package mqttv5
 
 import (
+	"fmt"
 	"net/http"
+	"time"
 )
 
 // WSServer is an MQTT v5.0 broker server over WebSocket.
@@ -71,7 +73,9 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		LogFieldRemoteAddr: conn.RemoteAddr().String(),
 	})
 
-	// Read CONNECT packet
+	// Read CONNECT packet with timeout (matching TCP behavior)
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+
 	pkt, n, err := ReadPacket(conn, s.config.maxPacketSize)
 	if err != nil {
 		logger.Debug("failed to read CONNECT", LogFields{LogFieldError: err.Error()})
@@ -79,6 +83,8 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	}
 	s.config.metrics.BytesReceived(n)
 	s.config.metrics.PacketReceived(PacketCONNECT)
+
+	conn.SetReadDeadline(time.Time{})
 
 	connect, ok := pkt.(*ConnectPacket)
 	if !ok {
@@ -88,26 +94,31 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		return
 	}
 
-	// Generate client ID if empty
+	// Validate and handle client ID (matching TCP behavior)
 	clientID := connect.ClientID
+	var assignedClientID string
 	if clientID == "" {
-		clientID = generateClientID()
+		// Per MQTT 5.0 spec: If CleanStart=false and ClientID is empty, reject
+		if !connect.CleanStart {
+			logger.Warn("empty client ID with CleanStart=false", nil)
+			connack := &ConnackPacket{
+				ReasonCode: ReasonClientIDNotValid,
+			}
+			WritePacket(conn, connack, s.config.maxPacketSize)
+			return
+		}
+		// CleanStart=true with empty ClientID: assign one
+		clientID = fmt.Sprintf("auto-%d", time.Now().UnixNano())
+		assignedClientID = clientID
 		connect.ClientID = clientID
 	}
 
 	logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 
 	// Authenticate
+	var authResult *AuthResult
 	if s.config.auth != nil {
-		actx := &AuthContext{
-			ClientID:      clientID,
-			Username:      connect.Username,
-			Password:      connect.Password,
-			RemoteAddr:    conn.RemoteAddr(),
-			ConnectPacket: connect,
-			CleanStart:    connect.CleanStart,
-		}
-
+		actx := buildAuthContext(conn, connect, clientID)
 		result, err := s.config.auth.Authenticate(authCtx, actx)
 		if err != nil || !result.Success {
 			reasonCode := ReasonNotAuthorized
@@ -123,7 +134,16 @@ func (s *WSServer) handleWSConn(conn Conn) {
 			WritePacket(conn, connack, s.config.maxPacketSize)
 			return
 		}
+		authResult = result
 		logger.Debug("authentication successful", nil)
+
+		// Apply AuthResult fields
+		if result.AssignedClientID != "" {
+			clientID = result.AssignedClientID
+			assignedClientID = clientID
+			connect.ClientID = clientID
+			logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
+		}
 	}
 
 	// Determine max packet size for outbound messages (minimum of server and client limits)
@@ -152,23 +172,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	client.SetSessionExpiryInterval(connect.Props.GetUint32(PropSessionExpiryInterval))
 
 	// Handle session
-	var sessionPresent bool
-	if connect.CleanStart {
-		s.config.sessionStore.Delete(clientID)
-		session := NewMemorySession(clientID)
-		s.config.sessionStore.Create(session)
-		client.SetSession(session)
-	} else {
-		existing, err := s.config.sessionStore.Get(clientID)
-		if err == nil {
-			sessionPresent = true
-			client.SetSession(existing)
-		} else {
-			session := NewMemorySession(clientID)
-			s.config.sessionStore.Create(session)
-			client.SetSession(session)
-		}
-	}
+	sessionPresent := s.setupSession(client, clientID, connect.CleanStart)
 
 	// Check for existing connection with same client ID
 	s.mu.Lock()
@@ -192,6 +196,23 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	connack := &ConnackPacket{
 		SessionPresent: sessionPresent,
 		ReasonCode:     ReasonSuccess,
+	}
+
+	// Apply AuthResult fields to CONNACK (matching TCP behavior)
+	if authResult != nil {
+		// AuthResult.SessionPresent can override session presence
+		if authResult.SessionPresent {
+			connack.SessionPresent = true
+		}
+		// Merge AuthResult properties into CONNACK
+		if authResult.Properties.Len() > 0 {
+			connack.Props.Merge(&authResult.Properties)
+		}
+	}
+
+	// Set Assigned Client Identifier if we generated one
+	if assignedClientID != "" {
+		connack.Props.Set(PropAssignedClientIdentifier, assignedClientID)
 	}
 
 	if s.config.keepAliveOverride > 0 {
@@ -228,6 +249,14 @@ func (s *WSServer) handleWSConn(conn Conn) {
 				s.subs.Subscribe(clientID, sub)
 				s.config.metrics.SubscriptionAdded()
 			}
+		}
+	}
+
+	// Restore and resend inflight QoS messages from session (matching TCP behavior)
+	if sessionPresent {
+		session := client.Session()
+		if session != nil {
+			s.restoreInflightMessages(client, session, logger)
 		}
 	}
 

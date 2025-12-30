@@ -58,13 +58,14 @@ func (s *MemoryRetainedStore) Delete(topic string) bool {
 }
 
 // Match returns all retained messages matching a topic filter.
+// Expired messages are excluded from the result.
 func (s *MemoryRetainedStore) Match(filter string) []*RetainedMessage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var matched []*RetainedMessage
 	for topic, msg := range s.messages {
-		if TopicMatch(filter, topic) {
+		if TopicMatch(filter, topic) && !msg.IsExpired() {
 			matched = append(matched, msg)
 		}
 	}
