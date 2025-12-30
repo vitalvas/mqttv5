@@ -2,7 +2,6 @@ package mqttv5
 
 import (
 	"net/http"
-	"time"
 )
 
 // WSServer is an MQTT v5.0 broker server over WebSocket.
@@ -31,10 +30,11 @@ func (s *WSServer) Start() {
 		return
 	}
 
-	s.wg.Add(3)
+	s.wg.Add(4)
 	go s.keepAliveLoop()
 	go s.willLoop()
 	go s.qosRetryLoop()
+	go s.sessionExpiryLoop()
 }
 
 // handleWSConnection handles a new WebSocket MQTT connection.
@@ -126,21 +126,30 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		logger.Debug("authentication successful", nil)
 	}
 
-	// Create client with Conn wrapper
-	client := &ServerClient{
-		conn:          conn,
-		clientID:      clientID,
-		username:      connect.Username,
-		properties:    connect,
-		cleanStart:    connect.CleanStart,
-		keepAlive:     connect.KeepAlive,
-		maxPacketSize: s.config.maxPacketSize,
-		topicAliases:  NewTopicAliasManager(0, 0),
-		qos1Tracker:   NewQoS1Tracker(20*time.Second, 3),
-		qos2Tracker:   NewQoS2Tracker(20*time.Second, 3),
-		flowControl:   NewFlowController(65535),
+	// Determine max packet size for outbound messages (minimum of server and client limits)
+	clientMaxPacketSize := s.config.maxPacketSize
+	if clientLimit := connect.Props.GetUint32(PropMaximumPacketSize); clientLimit > 0 && clientLimit < clientMaxPacketSize {
+		clientMaxPacketSize = clientLimit
 	}
-	client.connected.Store(true)
+
+	// Create client using the constructor to ensure all fields are initialized
+	client := NewServerClient(conn, connect, clientMaxPacketSize)
+
+	// Apply CONNECT properties from client
+	if rm := connect.Props.GetUint16(PropReceiveMaximum); rm > 0 {
+		client.SetReceiveMaximum(rm)
+	}
+
+	// Set server's receive maximum (how many QoS 1/2 messages client can send to server)
+	if s.config.receiveMaximum < 65535 {
+		client.SetInboundReceiveMaximum(s.config.receiveMaximum)
+	}
+
+	// Topic Alias Maximum: how many topic aliases server can use when sending to this client
+	clientTopicAliasMax := connect.Props.GetUint16(PropTopicAliasMaximum)
+
+	// Session Expiry Interval: stored for session management and will-delay interaction
+	client.SetSessionExpiryInterval(connect.Props.GetUint32(PropSessionExpiryInterval))
 
 	// Handle session
 	var sessionPresent bool
@@ -190,8 +199,9 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	}
 	if s.config.topicAliasMax > 0 {
 		connack.Props.Set(PropTopicAliasMaximum, s.config.topicAliasMax)
-		client.SetTopicAliasMax(s.config.topicAliasMax, 0)
 	}
+	// Set topic alias limits: inbound from server config, outbound from client's CONNECT
+	client.SetTopicAliasMax(s.config.topicAliasMax, clientTopicAliasMax)
 	if s.config.receiveMaximum < 65535 {
 		connack.Props.Set(PropReceiveMaximum, s.config.receiveMaximum)
 	}

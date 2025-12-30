@@ -367,6 +367,13 @@ func (c *Client) Publish(msg *Message) error {
 	if err := c.writePacket(pkt); err != nil {
 		if msg.QoS > 0 {
 			_ = c.packetIDMgr.Release(pkt.PacketID)
+			// Also remove from tracker to prevent retries with reused packet ID
+			switch msg.QoS {
+			case 1:
+				c.qos1Tracker.Acknowledge(pkt.PacketID)
+			case 2:
+				c.qos2Tracker.HandlePubcomp(pkt.PacketID)
+			}
 		}
 		return err
 	}

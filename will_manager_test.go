@@ -146,7 +146,7 @@ func TestWillManager(t *testing.T) {
 		assert.True(t, m.HasPendingWill("client2"))
 	})
 
-	t.Run("session expiry limits will delay", func(t *testing.T) {
+	t.Run("session expiry does not limit will delay", func(t *testing.T) {
 		m := NewWillManager()
 
 		will := &WillMessage{
@@ -156,31 +156,39 @@ func TestWillManager(t *testing.T) {
 		}
 
 		m.Register("client1", will)
-		entry := m.TriggerWill("client1", 5*time.Second) // But session expires in 5 seconds
+		entry := m.TriggerWill("client1", 5*time.Second) // Session expires in 5 seconds
 
 		require.NotNil(t, entry)
-		// PublishAt should be limited to session expiry
-		assert.True(t, entry.PublishAt.Before(time.Now().Add(10*time.Second)))
+		// Per MQTT v5: PublishAt should be set to will delay time (not limited by session expiry)
+		// The will is stored but will be discarded when session expires before delay
+		assert.True(t, entry.PublishAt.After(time.Now().Add(time.Hour-time.Minute)))
+		assert.True(t, entry.SessionExpiry.Before(time.Now().Add(10*time.Second)))
 	})
 
-	t.Run("session expired triggers will immediately", func(t *testing.T) {
+	t.Run("session expired discards will", func(t *testing.T) {
+		// Per MQTT v5 spec: if session expires before will delay, the will is NOT published
 		m := NewWillManager()
 
 		will := &WillMessage{
 			Topic:         "status",
 			Payload:       []byte("offline"),
-			DelayInterval: 60,
+			DelayInterval: 60, // Will delay is 60 seconds
 		}
 
 		m.Register("client1", will)
-		entry := m.TriggerWill("client1", 1*time.Millisecond)
+		entry := m.TriggerWill("client1", 1*time.Millisecond) // Session expires in 1ms
 
 		time.Sleep(10 * time.Millisecond)
 
 		assert.True(t, entry.IsSessionExpired())
+		assert.False(t, entry.IsReady()) // Will delay hasn't passed
 
+		// Will should be discarded, not published
 		ready := m.GetReadyWills()
-		require.Len(t, ready, 1)
+		require.Len(t, ready, 0)
+
+		// Will should be removed from pending
+		assert.False(t, m.HasPendingWill("client1"))
 	})
 
 	t.Run("get next publish time", func(t *testing.T) {

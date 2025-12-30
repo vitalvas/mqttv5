@@ -73,10 +73,11 @@ func (s *Server) ListenAndServe() error {
 	}
 
 	// Start background tasks
-	s.wg.Add(3)
+	s.wg.Add(4)
 	go s.keepAliveLoop()
 	go s.willLoop()
 	go s.qosRetryLoop()
+	go s.sessionExpiryLoop()
 
 	// Start accept loop for each listener (all but last in goroutines)
 	for i, listener := range s.config.listeners {
@@ -502,6 +503,17 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 			logger.Debug("will message triggered", nil)
 		}
 
+		// Set session expiry time for cleanup
+		if session := client.Session(); session != nil {
+			expiryInterval := client.SessionExpiryInterval()
+			if expiryInterval > 0 {
+				session.SetExpiryTime(time.Now().Add(time.Duration(expiryInterval) * time.Second))
+			} else {
+				// Session expiry of 0 means session ends immediately on disconnect
+				session.SetExpiryTime(time.Now())
+			}
+		}
+
 		s.removeClient(clientID)
 	}()
 
@@ -678,13 +690,21 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 				LogFieldTopic:      topic,
 				LogFieldReasonCode: reasonCode.String(),
 			})
-			if pub.QoS > 0 {
+			switch pub.QoS {
+			case 1:
 				puback := &PubackPacket{
 					PacketID:   pub.PacketID,
 					ReasonCode: reasonCode,
 				}
 				WritePacket(client.Conn(), puback, s.config.maxPacketSize)
-				// Release inbound quota on authorization failure
+				client.InboundFlowControl().Release()
+			case 2:
+				// QoS 2 requires PUBREC, not PUBACK
+				pubrec := &PubrecPacket{
+					PacketID:   pub.PacketID,
+					ReasonCode: reasonCode,
+				}
+				WritePacket(client.Conn(), pubrec, s.config.maxPacketSize)
 				client.InboundFlowControl().Release()
 			}
 			return
@@ -862,10 +882,11 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 			}
 		}
 
-		// Check if this is a new subscription
-		isNew := !s.subs.Unsubscribe(clientID, subscription.TopicFilter)
+		// Check if this is a new subscription (without removing the existing one)
+		// Subscribe() handles removal of existing subscription atomically after validation
+		isNew := !s.subs.HasSubscription(clientID, subscription.TopicFilter)
 
-		// Add subscription
+		// Add subscription (this validates first, then removes any existing, then adds)
 		if err := s.subs.Subscribe(clientID, subscription); err != nil {
 			logger.Warn("subscription failed", LogFields{
 				LogFieldTopic: subscription.TopicFilter,
@@ -1086,4 +1107,20 @@ func (s *Server) retryClientMessages(client *ServerClient) {
 	client.QoS1Tracker().CleanupExpired()
 	client.QoS2Tracker().CleanupExpired()
 	client.QoS2Tracker().CleanupCompleted()
+}
+
+func (s *Server) sessionExpiryLoop() {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			s.config.sessionStore.Cleanup()
+		}
+	}
 }

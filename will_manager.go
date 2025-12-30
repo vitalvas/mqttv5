@@ -87,14 +87,8 @@ func (m *WillManager) TriggerWill(clientID string, sessionExpiry time.Duration) 
 	var sessionExpiryTime time.Time
 	if sessionExpiry > 0 {
 		sessionExpiryTime = now.Add(sessionExpiry)
-		// Will must be published before session expires (subtract 1 second buffer)
-		if !sessionExpiryTime.IsZero() && publishAt.After(sessionExpiryTime) {
-			publishAt = sessionExpiryTime.Add(-time.Second)
-			// Ensure we don't go before 'now'
-			if publishAt.Before(now) {
-				publishAt = now
-			}
-		}
+		// Per MQTT v5 spec: if session expires before will delay, the will should NOT
+		// be published. We store session expiry for later check in GetReadyWills.
 	}
 
 	entry := &WillEntry{
@@ -121,13 +115,20 @@ func (m *WillManager) CancelPending(clientID string) bool {
 }
 
 // GetReadyWills returns wills that are ready to be published.
+// Per MQTT v5 spec: if session expires before will delay, the will is discarded.
 func (m *WillManager) GetReadyWills() []*WillEntry {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	var ready []*WillEntry
 	for clientID, entry := range m.pending {
-		if entry.IsReady() || entry.IsSessionExpired() {
+		if entry.IsSessionExpired() {
+			// Session expired before will delay - discard the will (don't publish)
+			delete(m.pending, clientID)
+			continue
+		}
+		if entry.IsReady() {
+			// Will delay has passed - publish it
 			ready = append(ready, entry)
 			delete(m.pending, clientID)
 		}

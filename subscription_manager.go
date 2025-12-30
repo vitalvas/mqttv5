@@ -88,6 +88,19 @@ func (m *SubscriptionManager) UnsubscribeAll(clientID string) {
 	delete(m.subscriptions, clientID)
 }
 
+// HasSubscription checks if a client has a subscription to the given filter.
+func (m *SubscriptionManager) HasSubscription(clientID string, filter string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, entry := range m.subscriptions[clientID] {
+		if entry.Subscription.TopicFilter == filter {
+			return true
+		}
+	}
+	return false
+}
+
 // GetSubscriptions returns all subscriptions for a client.
 func (m *SubscriptionManager) GetSubscriptions(clientID string) []Subscription {
 	m.mu.RLock()
