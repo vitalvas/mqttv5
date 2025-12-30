@@ -56,16 +56,27 @@
 //
 // Use the high-level Server API for building MQTT brokers:
 //
-//	srv, err := mqttv5.NewServer(":1883",
+//	listener, _ := net.Listen("tcp", ":1883")
+//	srv := mqttv5.NewServer(
+//	    mqttv5.WithListener(listener),
 //	    mqttv5.OnConnect(func(c *mqttv5.ServerClient) { ... }),
 //	    mqttv5.OnMessage(func(c *mqttv5.ServerClient, m *mqttv5.Message) { ... }),
 //	)
 //	srv.ListenAndServe()
 //
-// For TLS server, create a TLS listener and use NewServerWithListener:
+// For TLS server, create a TLS listener:
 //
-//	listener, _ := tls.Listen("tcp", ":8883", tlsConfig)
-//	srv := mqttv5.NewServerWithListener(listener)
+//	tlsListener, _ := tls.Listen("tcp", ":8883", tlsConfig)
+//	srv := mqttv5.NewServer(mqttv5.WithListener(tlsListener))
+//
+// Multiple listeners can be added to serve on multiple ports:
+//
+//	tcpListener, _ := net.Listen("tcp", ":1883")
+//	tlsListener, _ := tls.Listen("tcp", ":8883", tlsConfig)
+//	srv := mqttv5.NewServer(
+//	    mqttv5.WithListener(tcpListener),
+//	    mqttv5.WithListener(tlsListener),
+//	)
 //
 // For WebSocket server, use WSServer as an http.Handler:
 //

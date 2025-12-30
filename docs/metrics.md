@@ -58,6 +58,7 @@ The MQTT v5.0 SDK provides built-in metrics collection using Go's `expvar` packa
 package main
 
 import (
+    "net"
     "net/http"
     "os"
 
@@ -65,17 +66,21 @@ import (
 )
 
 func main() {
+    // Create listener
+    listener, err := net.Listen("tcp", ":1883")
+    if err != nil {
+        panic(err)
+    }
+
     // Create metrics collector (expvar-based)
     metrics := mqttv5.NewMetrics()
 
     // Create server with metrics
-    srv, err := mqttv5.NewServer(":1883",
+    srv := mqttv5.NewServer(
+        mqttv5.WithListener(listener),
         mqttv5.WithMetrics(metrics),
         mqttv5.WithLogger(mqttv5.NewStdLogger(os.Stdout, mqttv5.LogLevelInfo)),
     )
-    if err != nil {
-        panic(err)
-    }
 
     // Expose expvar metrics on HTTP endpoint
     // Metrics available at http://localhost:8080/debug/vars
@@ -92,15 +97,18 @@ func main() {
 package main
 
 import (
+    "net"
     "testing"
 
     "github.com/vitalvas/mqttv5"
 )
 
 func TestWithMetrics(t *testing.T) {
+    listener, _ := net.Listen("tcp", ":0")
     metrics := mqttv5.NewMemoryMetrics()
 
-    srv, _ := mqttv5.NewServer(":0",
+    srv := mqttv5.NewServer(
+        mqttv5.WithListener(listener),
         mqttv5.WithMetrics(metrics),
     )
     defer srv.Close()
@@ -116,7 +124,9 @@ func TestWithMetrics(t *testing.T) {
 
 ```go
 // NoOpMetrics is used by default, or can be explicitly set
-srv, _ := mqttv5.NewServer(":1883",
+listener, _ := net.Listen("tcp", ":1883")
+srv := mqttv5.NewServer(
+    mqttv5.WithListener(listener),
     mqttv5.WithMetrics(&mqttv5.NoOpMetrics{}),
 )
 ```
@@ -131,6 +141,7 @@ package main
 import (
     "expvar"
     "fmt"
+    "net"
     "net/http"
     "os"
     "strings"
@@ -139,15 +150,18 @@ import (
 )
 
 func main() {
-    metrics := mqttv5.NewMetrics()
-
-    srv, err := mqttv5.NewServer(":1883",
-        mqttv5.WithMetrics(metrics),
-        mqttv5.WithLogger(mqttv5.NewStdLogger(os.Stdout, mqttv5.LogLevelInfo)),
-    )
+    listener, err := net.Listen("tcp", ":1883")
     if err != nil {
         panic(err)
     }
+
+    metrics := mqttv5.NewMetrics()
+
+    srv := mqttv5.NewServer(
+        mqttv5.WithListener(listener),
+        mqttv5.WithMetrics(metrics),
+        mqttv5.WithLogger(mqttv5.NewStdLogger(os.Stdout, mqttv5.LogLevelInfo)),
+    )
 
     // Custom Prometheus metrics endpoint
     http.HandleFunc("/metrics", prometheusHandler)

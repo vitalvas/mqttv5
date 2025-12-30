@@ -37,7 +37,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
-	defer client.Close()
 
 	// Publish a secure message
 	err = client.Publish("secure/topic", []byte("Secure message over TLS"), 0, false)
@@ -46,7 +45,10 @@ func run() error {
 	}
 
 	fmt.Println("Published secure message!")
+
+	// Graceful disconnect - Close() sends DISCONNECT packet to broker
 	fmt.Println("Disconnecting...")
+	client.Close()
 
 	return nil
 }

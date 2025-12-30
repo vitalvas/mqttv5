@@ -32,32 +32,17 @@ func (t *testAuthorizer) Authorize(ctx context.Context, authzCtx *AuthzContext) 
 }
 
 func TestNewServer(t *testing.T) {
-	t.Run("creates server with valid address", func(t *testing.T) {
-		srv, err := NewServer(":0")
-		require.NoError(t, err)
-		require.NotNil(t, srv)
-		defer srv.Close()
-
-		assert.NotNil(t, srv.Addr())
-	})
-
-	t.Run("fails with invalid address", func(t *testing.T) {
-		srv, err := NewServer("invalid:address:port")
-		assert.Error(t, err)
-		assert.Nil(t, srv)
-	})
-}
-
-func TestNewServerWithListener(t *testing.T) {
-	t.Run("creates server with custom listener", func(t *testing.T) {
+	t.Run("creates server with listener", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
+		srv := NewServer(WithListener(listener))
 		require.NotNil(t, srv)
 		defer srv.Close()
 
-		assert.Equal(t, listener.Addr(), srv.Addr())
+		addrs := srv.Addrs()
+		require.Len(t, addrs, 1)
+		assert.Equal(t, listener.Addr(), addrs[0])
 	})
 
 	t.Run("applies options", func(t *testing.T) {
@@ -65,7 +50,8 @@ func TestNewServerWithListener(t *testing.T) {
 		require.NoError(t, err)
 
 		var connected bool
-		srv := NewServerWithListener(listener,
+		srv := NewServer(
+			WithListener(listener),
 			WithMaxConnections(100),
 			OnConnect(func(_ *ServerClient) {
 				connected = true
@@ -85,13 +71,21 @@ func TestNewServerWithListener(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener,
+		srv := NewServer(
+			WithListener(listener),
 			WithServerKeepAlive(120),
 		)
 		require.NotNil(t, srv)
 		defer srv.Close()
 
 		assert.Equal(t, uint16(120), srv.keepAlive.ServerOverride())
+	})
+
+	t.Run("no listeners returns error", func(t *testing.T) {
+		srv := NewServer()
+		err := srv.ListenAndServe()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no listeners configured")
 	})
 }
 
@@ -100,7 +94,7 @@ func TestServerClients(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
+		srv := NewServer(WithListener(listener))
 		defer srv.Close()
 
 		assert.Equal(t, 0, srv.ClientCount())
@@ -113,7 +107,7 @@ func TestServerPublish(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
+		srv := NewServer(WithListener(listener))
 		// Don't start the server
 
 		msg := &Message{Topic: "test", Payload: []byte("data")}
@@ -127,7 +121,7 @@ func TestServerPublish(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
+		srv := NewServer(WithListener(listener))
 		defer srv.Close()
 
 		// Manually set running to true for this test
@@ -153,7 +147,7 @@ func TestServerPublish(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
+		srv := NewServer(WithListener(listener))
 		defer srv.Close()
 
 		srv.running.Store(true)
@@ -185,7 +179,7 @@ func TestServerClose(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
+		srv := NewServer(WithListener(listener))
 
 		// Start server in background
 		go srv.ListenAndServe()
@@ -205,27 +199,180 @@ func TestServerClose(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
+		srv := NewServer(WithListener(listener))
 
 		err = srv.Close()
 		require.NoError(t, err)
 	})
-}
 
-func TestServerAddr(t *testing.T) {
-	t.Run("returns listener address", func(t *testing.T) {
+	t.Run("close disconnects connected clients", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
-		defer srv.Close()
+		var disconnectReceived bool
+		var disconnectReason ReasonCode
+		var mu sync.Mutex
 
-		assert.Equal(t, listener.Addr(), srv.Addr())
+		srv := NewServer(
+			WithListener(listener),
+			OnDisconnect(func(_ *ServerClient) {
+				mu.Lock()
+				disconnectReceived = true
+				mu.Unlock()
+			}),
+		)
+
+		go srv.ListenAndServe()
+		time.Sleep(50 * time.Millisecond)
+
+		// Connect a client
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+
+		// Send CONNECT
+		connect := &ConnectPacket{ClientID: "test-client"}
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		// Read CONNACK
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Verify client is connected
+		assert.Equal(t, 1, srv.ClientCount())
+
+		// Close server - should disconnect client with ReasonServerShuttingDown
+		go func() {
+			// Read DISCONNECT from server
+			pkt, _, err := ReadPacket(conn, 256*1024)
+			if err == nil {
+				if disc, ok := pkt.(*DisconnectPacket); ok {
+					mu.Lock()
+					disconnectReason = disc.ReasonCode
+					mu.Unlock()
+				}
+			}
+		}()
+
+		err = srv.Close()
+		require.NoError(t, err)
+
+		// Wait for disconnect to be processed
+		time.Sleep(100 * time.Millisecond)
+
+		mu.Lock()
+		assert.True(t, disconnectReceived)
+		assert.Equal(t, ReasonServerShuttingDown, disconnectReason)
+		mu.Unlock()
+
+		// Client count should be 0 after close
+		assert.Equal(t, 0, srv.ClientCount())
 	})
 
-	t.Run("returns nil when no listener", func(t *testing.T) {
-		srv := &Server{}
-		assert.Nil(t, srv.Addr())
+	t.Run("close with multiple listeners", func(t *testing.T) {
+		listener1, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+		listener2, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(
+			WithListener(listener1),
+			WithListener(listener2),
+		)
+
+		go srv.ListenAndServe()
+		time.Sleep(50 * time.Millisecond)
+
+		// Connect to both listeners
+		conn1, err := net.Dial("tcp", listener1.Addr().String())
+		require.NoError(t, err)
+		conn2, err := net.Dial("tcp", listener2.Addr().String())
+		require.NoError(t, err)
+
+		// Send CONNECT on both
+		connect1 := &ConnectPacket{ClientID: "client1"}
+		_, err = WritePacket(conn1, connect1, 256*1024)
+		require.NoError(t, err)
+
+		connect2 := &ConnectPacket{ClientID: "client2"}
+		_, err = WritePacket(conn2, connect2, 256*1024)
+		require.NoError(t, err)
+
+		// Read CONNACKs
+		_, _, _ = ReadPacket(conn1, 256*1024)
+		_, _, _ = ReadPacket(conn2, 256*1024)
+
+		time.Sleep(50 * time.Millisecond)
+		assert.Equal(t, 2, srv.ClientCount())
+
+		// Close should disconnect both clients
+		err = srv.Close()
+		require.NoError(t, err)
+
+		assert.Equal(t, 0, srv.ClientCount())
+	})
+
+	t.Run("close completes within timeout", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+
+		go srv.ListenAndServe()
+		time.Sleep(50 * time.Millisecond)
+
+		// Close should complete quickly
+		done := make(chan struct{})
+		go func() {
+			srv.Close()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Success
+		case <-time.After(5 * time.Second):
+			t.Fatal("Close did not complete within timeout")
+		}
+	})
+}
+
+func TestServerAddrs(t *testing.T) {
+	t.Run("returns listener addresses", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		addrs := srv.Addrs()
+		require.Len(t, addrs, 1)
+		assert.Equal(t, listener.Addr(), addrs[0])
+	})
+
+	t.Run("returns empty when no listeners", func(t *testing.T) {
+		srv := NewServer()
+		assert.Empty(t, srv.Addrs())
+	})
+
+	t.Run("returns multiple addresses", func(t *testing.T) {
+		listener1, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+		listener2, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(
+			WithListener(listener1),
+			WithListener(listener2),
+		)
+		defer srv.Close()
+
+		addrs := srv.Addrs()
+		require.Len(t, addrs, 2)
+		assert.Equal(t, listener1.Addr(), addrs[0])
+		assert.Equal(t, listener2.Addr(), addrs[1])
 	})
 }
 
@@ -234,7 +381,7 @@ func TestServerListenAndServe(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
+		srv := NewServer(WithListener(listener))
 
 		// Start first instance
 		go srv.ListenAndServe()
@@ -262,7 +409,7 @@ func TestServerConcurrency(t *testing.T) {
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
-	srv := NewServerWithListener(listener)
+	srv := NewServer(WithListener(listener))
 	defer srv.Close()
 
 	srv.running.Store(true)
@@ -297,7 +444,7 @@ func TestServerEmptyTopicValidation(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
+		srv := NewServer(WithListener(listener))
 
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -361,7 +508,7 @@ func TestServerQoSRetryLogic(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
+		srv := NewServer(WithListener(listener))
 		defer srv.Close()
 
 		// Create a mock client with a pending QoS 1 message
@@ -405,7 +552,7 @@ func TestServerQoSRetryLogic(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
+		srv := NewServer(WithListener(listener))
 		defer srv.Close()
 
 		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
@@ -441,7 +588,7 @@ func TestServerQoSRetryLogic(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
+		srv := NewServer(WithListener(listener))
 		defer srv.Close()
 
 		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
@@ -513,7 +660,7 @@ func TestServerAcceptLoopRetryDelay(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener)
+		srv := NewServer(WithListener(listener))
 
 		// Start server
 		go srv.ListenAndServe()
@@ -590,7 +737,8 @@ func TestServerAuthentication(t *testing.T) {
 			if tt.auth != nil {
 				opts = append(opts, WithServerAuth(tt.auth))
 			}
-			srv := NewServerWithListener(listener, opts...)
+			opts = append([]ServerOption{WithListener(listener)}, opts...)
+			srv := NewServer(opts...)
 
 			var wg sync.WaitGroup
 			wg.Add(1)
@@ -634,7 +782,7 @@ func TestServerAuthorization(t *testing.T) {
 		require.NoError(t, err)
 
 		authz := &DenyAllAuthorizer{}
-		srv := NewServerWithListener(listener, WithServerAuthz(authz))
+		srv := NewServer(WithListener(listener), WithServerAuthz(authz))
 
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -686,7 +834,7 @@ func TestServerAuthorization(t *testing.T) {
 		require.NoError(t, err)
 
 		authz := &DenyAllAuthorizer{}
-		srv := NewServerWithListener(listener, WithServerAuthz(authz))
+		srv := NewServer(WithListener(listener), WithServerAuthz(authz))
 
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -757,7 +905,8 @@ func TestServerAuthorization(t *testing.T) {
 			},
 		}
 
-		srv := NewServerWithListener(listener,
+		srv := NewServer(
+			WithListener(listener),
 			WithServerAuth(auth),
 			WithServerAuthz(authz),
 		)
@@ -837,7 +986,7 @@ func TestServerSessionRecoveryErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		sessionStore := NewMemorySessionStore()
-		srv := NewServerWithListener(listener, WithSessionStore(sessionStore))
+		srv := NewServer(WithListener(listener), WithSessionStore(sessionStore))
 
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -888,7 +1037,7 @@ func TestServerSessionRecoveryErrorHandling(t *testing.T) {
 		err = sessionStore.Create(existingSession)
 		require.NoError(t, err)
 
-		srv := NewServerWithListener(listener, WithSessionStore(sessionStore))
+		srv := NewServer(WithListener(listener), WithSessionStore(sessionStore))
 
 		var wg sync.WaitGroup
 		wg.Add(1)

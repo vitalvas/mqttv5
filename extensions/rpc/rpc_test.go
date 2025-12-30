@@ -16,7 +16,7 @@ func setupTestServer(t *testing.T) (string, func()) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	server := mqttv5.NewServerWithListener(listener)
+	server := mqttv5.NewServer(mqttv5.WithListener(listener))
 	go server.ListenAndServe()
 
 	cleanup := func() {

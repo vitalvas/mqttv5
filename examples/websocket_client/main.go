@@ -36,7 +36,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
-	defer client.Close()
 
 	// Subscribe to a topic with message handler
 	err = client.Subscribe("websocket/test", 1, func(msg *mqttv5.Message) {
@@ -65,7 +64,9 @@ func run() error {
 		fmt.Println("\nTimeout reached")
 	}
 
+	// Graceful disconnect - Close() sends DISCONNECT packet to broker
 	fmt.Println("Disconnecting...")
+	client.Close()
 
 	return nil
 }

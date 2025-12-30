@@ -13,38 +13,7 @@ type WSServer struct {
 
 // NewWSServer creates a new WebSocket MQTT server.
 func NewWSServer(opts ...ServerOption) *WSServer {
-	config := defaultServerConfig()
-	for _, opt := range opts {
-		opt(config)
-	}
-
-	if config.keepAliveOverride > 0 {
-		ka := NewKeepAliveManager()
-		ka.SetServerOverride(config.keepAliveOverride)
-
-		srv := &Server{
-			config:    config,
-			clients:   make(map[string]*ServerClient),
-			subs:      NewSubscriptionManager(),
-			keepAlive: ka,
-			wills:     NewWillManager(),
-			done:      make(chan struct{}),
-		}
-
-		ws := &WSServer{Server: srv}
-		ws.handler = NewWSHandler(ws.handleWSConnection)
-		return ws
-	}
-
-	srv := &Server{
-		config:    config,
-		clients:   make(map[string]*ServerClient),
-		subs:      NewSubscriptionManager(),
-		keepAlive: NewKeepAliveManager(),
-		wills:     NewWillManager(),
-		done:      make(chan struct{}),
-	}
-
+	srv := NewServer(opts...)
 	ws := &WSServer{Server: srv}
 	ws.handler = NewWSHandler(ws.handleWSConnection)
 	return ws
@@ -62,9 +31,10 @@ func (s *WSServer) Start() {
 		return
 	}
 
-	s.wg.Add(2)
+	s.wg.Add(3)
 	go s.keepAliveLoop()
 	go s.willLoop()
+	go s.qosRetryLoop()
 }
 
 // handleWSConnection handles a new WebSocket MQTT connection.

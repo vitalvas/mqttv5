@@ -33,9 +33,8 @@ func run() error {
 		}),
 	)
 
-	// Start background tasks
+	// Start MQTT background tasks
 	srv.Start()
-	defer srv.Close()
 
 	// Create HTTP server with multiple endpoints
 	mux := http.NewServeMux()
@@ -64,7 +63,7 @@ func run() error {
 		Handler: mux,
 	}
 
-	// Handle shutdown
+	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -72,10 +71,21 @@ func run() error {
 		<-sigCh
 		log.Println("Shutting down...")
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Create shutdown context with timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		httpServer.Shutdown(ctx)
+		// Stop accepting new HTTP connections and wait for existing requests
+		if err := httpServer.Shutdown(ctx); err != nil {
+			log.Printf("HTTP server shutdown error: %v", err)
+		}
+
+		// Close MQTT server (disconnects all clients gracefully)
+		if err := srv.Close(); err != nil {
+			log.Printf("MQTT server shutdown error: %v", err)
+		}
+
+		log.Println("Shutdown complete")
 	}()
 
 	log.Println("MQTT WebSocket server listening on :8080")

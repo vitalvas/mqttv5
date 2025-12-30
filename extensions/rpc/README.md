@@ -145,8 +145,9 @@ import (
 func main() {
     listener, _ := net.Listen("tcp", ":1883")
 
-    server := mqttv5.NewServerWithListener(listener,
-        mqttv5.WithOnMessage(handleRPCRequest),
+    server := mqttv5.NewServer(
+        mqttv5.WithListener(listener),
+        mqttv5.OnMessage(handleRPCRequest),
     )
 
     server.ListenAndServe()

@@ -3,8 +3,8 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"path"
@@ -55,18 +55,23 @@ func run() error {
 	auth := &Auth{Users: map[string]string{"admin": "admin", "user1": "pass1"}}
 	authz := &Authz{}
 
-	srv, err := mqttv5.NewServer(":1883",
+	listener, err := net.Listen("tcp", ":1883")
+	if err != nil {
+		return err
+	}
+
+	srv := mqttv5.NewServer(
+		mqttv5.WithListener(listener),
 		mqttv5.WithServerAuth(auth),
 		mqttv5.WithServerAuthz(authz),
 	)
-	if err != nil {
-		return fmt.Errorf("failed to create server: %w", err)
-	}
 
+	// Handle graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
+		log.Println("Shutting down...")
 		srv.Close()
 	}()
 

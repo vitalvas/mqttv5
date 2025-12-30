@@ -36,7 +36,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
-	defer client.Close()
 
 	fmt.Printf("Client ID: %s\n", client.ClientID())
 
@@ -67,7 +66,9 @@ func run() error {
 		fmt.Println("\nTimeout reached")
 	}
 
+	// Graceful disconnect - Close() sends DISCONNECT packet to broker
 	fmt.Println("Disconnecting...")
+	client.Close()
 
 	return nil
 }

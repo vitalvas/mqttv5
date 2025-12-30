@@ -22,7 +22,6 @@ var (
 type Server struct {
 	mu        sync.RWMutex
 	config    *serverConfig
-	listener  net.Listener
 	clients   map[string]*ServerClient
 	subs      *SubscriptionManager
 	keepAlive *KeepAliveManager
@@ -33,42 +32,23 @@ type Server struct {
 }
 
 // NewServer creates a new MQTT server.
-func NewServer(addr string, opts ...ServerOption) (*Server, error) {
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewServerWithListener(listener, opts...), nil
-}
-
-// NewServerWithListener creates a new MQTT server with a custom listener.
-func NewServerWithListener(listener net.Listener, opts ...ServerOption) *Server {
+// Use WithListener to add one or more listeners before calling ListenAndServe.
+func NewServer(opts ...ServerOption) *Server {
 	config := defaultServerConfig()
 	for _, opt := range opts {
 		opt(config)
 	}
 
+	ka := NewKeepAliveManager()
 	if config.keepAliveOverride > 0 {
-		ka := NewKeepAliveManager()
 		ka.SetServerOverride(config.keepAliveOverride)
-		return &Server{
-			config:    config,
-			listener:  listener,
-			clients:   make(map[string]*ServerClient),
-			subs:      NewSubscriptionManager(),
-			keepAlive: ka,
-			wills:     NewWillManager(),
-			done:      make(chan struct{}),
-		}
 	}
 
 	return &Server{
 		config:    config,
-		listener:  listener,
 		clients:   make(map[string]*ServerClient),
 		subs:      NewSubscriptionManager(),
-		keepAlive: NewKeepAliveManager(),
+		keepAlive: ka,
 		wills:     NewWillManager(),
 		done:      make(chan struct{}),
 	}
@@ -80,9 +60,17 @@ func (s *Server) ListenAndServe() error {
 		return errors.New("server already running")
 	}
 
-	s.config.logger.Info("server started", LogFields{
-		LogFieldRemoteAddr: s.listener.Addr().String(),
-	})
+	if len(s.config.listeners) == 0 {
+		s.running.Store(false)
+		return errors.New("no listeners configured")
+	}
+
+	// Log all listeners
+	for _, listener := range s.config.listeners {
+		s.config.logger.Info("server started", LogFields{
+			LogFieldRemoteAddr: listener.Addr().String(),
+		})
+	}
 
 	// Start background tasks
 	s.wg.Add(3)
@@ -90,18 +78,36 @@ func (s *Server) ListenAndServe() error {
 	go s.willLoop()
 	go s.qosRetryLoop()
 
+	// Start accept loop for each listener (all but last in goroutines)
+	for i, listener := range s.config.listeners {
+		if i < len(s.config.listeners)-1 {
+			s.wg.Add(1)
+			go func(l net.Listener) {
+				defer s.wg.Done()
+				s.acceptLoop(l)
+			}(listener)
+		}
+	}
+
+	// Run last listener in current goroutine (blocking)
+	s.acceptLoop(s.config.listeners[len(s.config.listeners)-1])
+
+	s.config.logger.Info("server stopped", nil)
+	return ErrServerClosed
+}
+
+// acceptLoop accepts connections from a listener.
+func (s *Server) acceptLoop(listener net.Listener) {
 	for {
-		conn, err := s.listener.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
 			select {
 			case <-s.done:
-				s.config.logger.Info("server stopped", nil)
-				return ErrServerClosed
+				return
 			default:
 				s.config.logger.Error("accept error", LogFields{
 					LogFieldError: err.Error(),
 				})
-				// Add backoff delay to prevent CPU burn on persistent errors
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
@@ -135,9 +141,9 @@ func (s *Server) Close() error {
 
 	close(s.done)
 
-	// Close listener
-	if s.listener != nil {
-		s.listener.Close()
+	// Close all listeners
+	for _, listener := range s.config.listeners {
+		listener.Close()
 	}
 
 	// Disconnect all clients
@@ -238,12 +244,13 @@ func (s *Server) ClientCount() int {
 	return len(s.clients)
 }
 
-// Addr returns the server's network address.
-func (s *Server) Addr() net.Addr {
-	if s.listener == nil {
-		return nil
+// Addrs returns all listener network addresses.
+func (s *Server) Addrs() []net.Addr {
+	addrs := make([]net.Addr, len(s.config.listeners))
+	for i, l := range s.config.listeners {
+		addrs[i] = l.Addr()
 	}
-	return s.listener.Addr()
+	return addrs
 }
 
 func (s *Server) handleConnection(conn net.Conn) {

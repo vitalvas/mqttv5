@@ -111,6 +111,27 @@ func TestWSServerClose(t *testing.T) {
 		err := srv.Close()
 		require.NoError(t, err)
 	})
+
+	t.Run("close completes within timeout", func(t *testing.T) {
+		srv := NewWSServer()
+		srv.Start()
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Close should complete quickly
+		done := make(chan struct{})
+		go func() {
+			srv.Close()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Success
+		case <-time.After(5 * time.Second):
+			t.Fatal("Close did not complete within timeout")
+		}
+	})
 }
 
 func TestWSServerPublish(t *testing.T) {

@@ -1,9 +1,12 @@
 package mqttv5
 
+import "net"
+
 // ServerOption configures a Server.
 type ServerOption func(*serverConfig)
 
 type serverConfig struct {
+	listeners         []net.Listener
 	sessionStore      SessionStore
 	retainedStore     RetainedStore
 	auth              Authenticator
@@ -24,6 +27,7 @@ type serverConfig struct {
 
 func defaultServerConfig() *serverConfig {
 	return &serverConfig{
+		listeners:      make([]net.Listener, 0),
 		sessionStore:   NewMemorySessionStore(),
 		retainedStore:  NewMemoryRetainedStore(),
 		logger:         NewNoOpLogger(),
@@ -31,6 +35,13 @@ func defaultServerConfig() *serverConfig {
 		maxPacketSize:  256 * 1024, // 256KB
 		maxConnections: 0,          // unlimited
 		receiveMaximum: 65535,
+	}
+}
+
+// WithListener adds a listener to the server.
+func WithListener(listener net.Listener) ServerOption {
+	return func(c *serverConfig) {
+		c.listeners = append(c.listeners, listener)
 	}
 }
 

@@ -2,8 +2,8 @@
 package main
 
 import (
-	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -18,7 +18,13 @@ func main() {
 }
 
 func run() error {
-	srv, err := mqttv5.NewServer(":1883",
+	listener, err := net.Listen("tcp", ":1883")
+	if err != nil {
+		return err
+	}
+
+	srv := mqttv5.NewServer(
+		mqttv5.WithListener(listener),
 		mqttv5.OnConnect(func(client *mqttv5.ServerClient) {
 			log.Printf("Client connected: %s", client.ClientID())
 		}),
@@ -41,9 +47,6 @@ func run() error {
 			}
 		}),
 	)
-	if err != nil {
-		return fmt.Errorf("failed to create server: %w", err)
-	}
 
 	// Handle shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -55,6 +58,9 @@ func run() error {
 		srv.Close()
 	}()
 
-	log.Printf("MQTT broker listening on %s", srv.Addr())
+	addrs := srv.Addrs()
+	if len(addrs) > 0 {
+		log.Printf("MQTT broker listening on %s", addrs[0])
+	}
 	return srv.ListenAndServe()
 }

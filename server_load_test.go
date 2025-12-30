@@ -118,7 +118,7 @@ func TestConcurrentConnections(t *testing.T) {
 	require.NoError(t, err)
 	defer listener.Close()
 
-	server := NewServerWithListener(listener)
+	server := NewServer(WithListener(listener))
 	go server.ListenAndServe()
 	defer server.Close()
 
@@ -165,7 +165,7 @@ func TestMessageThroughput(t *testing.T) {
 	require.NoError(t, err)
 	defer listener.Close()
 
-	server := NewServerWithListener(listener)
+	server := NewServer(WithListener(listener))
 	go server.ListenAndServe()
 	defer server.Close()
 
@@ -229,7 +229,7 @@ func TestResourceUsage(t *testing.T) {
 	require.NoError(t, err)
 	defer listener.Close()
 
-	server := NewServerWithListener(listener)
+	server := NewServer(WithListener(listener))
 	go server.ListenAndServe()
 	defer server.Close()
 
@@ -274,7 +274,7 @@ func setupTestServer(t *testing.T) (string, func()) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	server := NewServerWithListener(listener)
+	server := NewServer(WithListener(listener))
 	go server.ListenAndServe()
 
 	cleanup := func() {
@@ -655,7 +655,7 @@ func BenchmarkConnectionRate(b *testing.B) {
 	}
 	defer listener.Close()
 
-	server := NewServerWithListener(listener)
+	server := NewServer(WithListener(listener))
 	go server.ListenAndServe()
 	defer server.Close()
 
@@ -680,7 +680,7 @@ func BenchmarkParallelConnections(b *testing.B) {
 	}
 	defer listener.Close()
 
-	server := NewServerWithListener(listener)
+	server := NewServer(WithListener(listener))
 	go server.ListenAndServe()
 	defer server.Close()
 
@@ -711,7 +711,7 @@ func BenchmarkPublishQoS0(b *testing.B) {
 	}
 	defer listener.Close()
 
-	server := NewServerWithListener(listener)
+	server := NewServer(WithListener(listener))
 	go server.ListenAndServe()
 	defer server.Close()
 
@@ -742,7 +742,7 @@ func BenchmarkPublishQoS0Parallel(b *testing.B) {
 	}
 	defer listener.Close()
 
-	server := NewServerWithListener(listener)
+	server := NewServer(WithListener(listener))
 	go server.ListenAndServe()
 	defer server.Close()
 
@@ -794,7 +794,7 @@ func BenchmarkFanout(b *testing.B) {
 			}
 			defer listener.Close()
 
-			server := NewServerWithListener(listener)
+			server := NewServer(WithListener(listener))
 			go server.ListenAndServe()
 			defer server.Close()
 
@@ -851,7 +851,7 @@ func BenchmarkManyClientsPublishing(b *testing.B) {
 			}
 			defer listener.Close()
 
-			server := NewServerWithListener(listener)
+			server := NewServer(WithListener(listener))
 			go server.ListenAndServe()
 			defer server.Close()
 
@@ -901,7 +901,7 @@ func BenchmarkSubscribeUnsubscribe(b *testing.B) {
 	}
 	defer listener.Close()
 
-	server := NewServerWithListener(listener)
+	server := NewServer(WithListener(listener))
 	go server.ListenAndServe()
 	defer server.Close()
 
@@ -969,7 +969,7 @@ func BenchmarkPingPong(b *testing.B) {
 	}
 	defer listener.Close()
 
-	server := NewServerWithListener(listener)
+	server := NewServer(WithListener(listener))
 	go server.ListenAndServe()
 	defer server.Close()
 
