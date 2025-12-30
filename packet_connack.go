@@ -12,6 +12,7 @@ var (
 )
 
 // ConnackPacket represents an MQTT CONNACK packet.
+// MQTT v5.0 spec: Section 3.2
 type ConnackPacket struct {
 	// SessionPresent indicates if a session exists from a previous connection.
 	SessionPresent bool

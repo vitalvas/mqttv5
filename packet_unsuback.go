@@ -7,6 +7,7 @@ import (
 )
 
 // UnsubackPacket represents an MQTT UNSUBACK packet.
+// MQTT v5.0 spec: Section 3.11
 type UnsubackPacket struct {
 	PacketID    uint16
 	Props       Properties

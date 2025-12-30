@@ -1,9 +1,11 @@
 package mqttv5
 
 // ReasonCode represents an MQTT v5.0 reason code.
+// MQTT v5.0 spec: Section 2.4
 type ReasonCode byte
 
 // Reason codes as defined in MQTT v5.0 specification.
+// MQTT v5.0 spec: Section 2.4
 const (
 	// Success / Normal disconnection / Granted QoS 0
 	ReasonSuccess ReasonCode = 0x00

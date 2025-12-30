@@ -6,9 +6,11 @@ import (
 )
 
 // PropertyID represents an MQTT v5.0 property identifier.
+// MQTT v5.0 spec: Section 2.2.2.2
 type PropertyID byte
 
-// Property identifiers as defined in MQTT v5.0 specification.
+// Property identifiers.
+// MQTT v5.0 spec: Section 2.2.2.2
 const (
 	PropPayloadFormatIndicator   PropertyID = 0x01
 	PropMessageExpiryInterval    PropertyID = 0x02
@@ -99,6 +101,7 @@ var (
 )
 
 // Properties represents a collection of MQTT v5.0 properties.
+// MQTT v5.0 spec: Section 2.2.2
 type Properties struct {
 	props []property
 }

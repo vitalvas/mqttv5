@@ -11,6 +11,7 @@ var (
 
 // FlowController manages flow control for MQTT v5.0 connections.
 // It tracks the receive maximum and manages in-flight message quotas.
+// MQTT v5.0 spec: Section 4.9
 type FlowController struct {
 	mu             sync.Mutex
 	receiveMaximum uint16
@@ -114,6 +115,7 @@ func (f *FlowController) Reset() {
 }
 
 // BidirectionalFlowController manages flow control for both sending and receiving.
+// MQTT v5.0 spec: Section 4.9
 type BidirectionalFlowController struct {
 	send    *FlowController
 	receive *FlowController

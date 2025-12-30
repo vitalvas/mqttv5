@@ -6,6 +6,7 @@ import (
 )
 
 // UnsubscribePacket represents an MQTT UNSUBSCRIBE packet.
+// MQTT v5.0 spec: Section 3.10
 type UnsubscribePacket struct {
 	PacketID     uint16
 	Props        Properties

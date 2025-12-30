@@ -3,6 +3,7 @@ package mqttv5
 import "io"
 
 // PingreqPacket represents an MQTT PINGREQ packet.
+// MQTT v5.0 spec: Section 3.12
 type PingreqPacket struct{}
 
 // Type returns the packet type.
@@ -38,6 +39,7 @@ func (p *PingreqPacket) Validate() error {
 }
 
 // PingrespPacket represents an MQTT PINGRESP packet.
+// MQTT v5.0 spec: Section 3.13
 type PingrespPacket struct{}
 
 // Type returns the packet type.

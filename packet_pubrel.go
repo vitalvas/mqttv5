@@ -3,6 +3,7 @@ package mqttv5
 import "io"
 
 // PubrelPacket represents an MQTT PUBREL packet.
+// MQTT v5.0 spec: Section 3.6
 type PubrelPacket struct {
 	PacketID   uint16
 	ReasonCode ReasonCode

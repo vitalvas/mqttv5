@@ -7,6 +7,7 @@ import (
 )
 
 // DisconnectPacket represents an MQTT DISCONNECT packet.
+// MQTT v5.0 spec: Section 3.14
 type DisconnectPacket struct {
 	ReasonCode ReasonCode
 	Props      Properties

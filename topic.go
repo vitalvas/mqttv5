@@ -20,6 +20,7 @@ const (
 
 // ValidateTopicName validates a topic name according to MQTT v5.0 specification.
 // Topic names cannot contain wildcards and must be valid UTF-8.
+// MQTT v5.0 spec: Section 4.7.1
 func ValidateTopicName(topic string) error {
 	if topic == "" {
 		return ErrEmptyTopic
@@ -44,6 +45,7 @@ func ValidateTopicName(topic string) error {
 
 // ValidateTopicFilter validates a topic filter according to MQTT v5.0 specification.
 // Topic filters can contain wildcards but must follow wildcard rules.
+// MQTT v5.0 spec: Section 4.7.1
 func ValidateTopicFilter(filter string) error {
 	if filter == "" {
 		return ErrEmptyTopic
@@ -85,6 +87,7 @@ func ValidateTopicFilter(filter string) error {
 }
 
 // TopicMatch checks if a topic name matches a topic filter.
+// MQTT v5.0 spec: Section 4.7
 func TopicMatch(filter, topic string) bool {
 	if filter == "" || topic == "" {
 		return false
@@ -136,6 +139,7 @@ func IsSystemTopic(topic string) bool {
 }
 
 // SharedSubscription represents a parsed shared subscription.
+// MQTT v5.0 spec: Section 4.8.2
 type SharedSubscription struct {
 	ShareName   string
 	TopicFilter string
@@ -143,6 +147,7 @@ type SharedSubscription struct {
 
 // ParseSharedSubscription parses a shared subscription filter.
 // Shared subscriptions have the format: $share/{ShareName}/{TopicFilter}
+// MQTT v5.0 spec: Section 4.8.2
 func ParseSharedSubscription(filter string) (*SharedSubscription, error) {
 	const prefix = "$share/"
 

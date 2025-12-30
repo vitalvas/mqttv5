@@ -31,6 +31,7 @@ var (
 )
 
 // ConnectPacket represents an MQTT CONNECT packet.
+// MQTT v5.0 spec: Section 3.1
 type ConnectPacket struct {
 	// ClientID is the client identifier.
 	ClientID string

@@ -14,6 +14,7 @@ var (
 )
 
 // PublishPacket represents an MQTT PUBLISH packet.
+// MQTT v5.0 spec: Section 3.3
 type PublishPacket struct {
 	// Topic is the topic name.
 	Topic string

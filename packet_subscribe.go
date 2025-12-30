@@ -12,6 +12,7 @@ var (
 )
 
 // Subscription represents a topic filter with subscription options.
+// MQTT v5.0 spec: Section 3.8.3.1
 type Subscription struct {
 	TopicFilter     string
 	QoS             byte
@@ -22,6 +23,7 @@ type Subscription struct {
 }
 
 // SubscribePacket represents an MQTT SUBSCRIBE packet.
+// MQTT v5.0 spec: Section 3.8
 type SubscribePacket struct {
 	PacketID      uint16
 	Props         Properties

@@ -6,9 +6,11 @@ import (
 )
 
 // PacketType represents an MQTT control packet type.
+// MQTT v5.0 spec: Section 2.1.2
 type PacketType byte
 
-// MQTT control packet types as defined in the specification.
+// MQTT control packet types.
+// MQTT v5.0 spec: Section 2.1.2
 const (
 	PacketCONNECT     PacketType = 1
 	PacketCONNACK     PacketType = 2
@@ -78,9 +80,15 @@ var (
 )
 
 // FixedHeader represents the fixed header of an MQTT control packet.
+// MQTT v5.0 spec: Section 2.1.1
 type FixedHeader struct {
-	PacketType      PacketType
-	Flags           byte
+	// PacketType is the MQTT Control Packet type (Section 2.1.2).
+	PacketType PacketType
+
+	// Flags are specific to each MQTT Control Packet type (Section 2.1.3).
+	Flags byte
+
+	// RemainingLength is the number of bytes remaining within the current Control Packet (Section 2.1.4).
 	RemainingLength uint32
 }
 

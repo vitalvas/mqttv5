@@ -3,6 +3,8 @@ package mqttv5
 
 import "io"
 
+// PubcompPacket represents an MQTT PUBCOMP packet.
+// MQTT v5.0 spec: Section 3.7
 type PubcompPacket struct {
 	PacketID   uint16
 	ReasonCode ReasonCode

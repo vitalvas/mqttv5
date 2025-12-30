@@ -7,6 +7,7 @@ import (
 )
 
 // SubackPacket represents an MQTT SUBACK packet.
+// MQTT v5.0 spec: Section 3.9
 type SubackPacket struct {
 	PacketID    uint16
 	Props       Properties

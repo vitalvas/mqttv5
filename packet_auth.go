@@ -7,6 +7,7 @@ import (
 )
 
 // AuthPacket represents an MQTT AUTH packet.
+// MQTT v5.0 spec: Section 3.15
 type AuthPacket struct {
 	ReasonCode ReasonCode
 	Props      Properties

@@ -13,6 +13,7 @@ var (
 )
 
 // PacketIDManager manages allocation and release of packet IDs (1-65535).
+// MQTT v5.0 spec: Section 2.2.1
 type PacketIDManager struct {
 	mu     sync.Mutex
 	used   map[uint16]struct{}
@@ -87,6 +88,7 @@ func (m *PacketIDManager) InUse() int {
 }
 
 // QoS1State represents the state of a QoS 1 publish flow.
+// MQTT v5.0 spec: Section 4.3.2
 type QoS1State int
 
 const (
@@ -113,6 +115,7 @@ func (m *QoS1Message) ShouldRetry() bool {
 }
 
 // QoS1Tracker tracks QoS 1 messages awaiting acknowledgment.
+// MQTT v5.0 spec: Section 4.3.2
 type QoS1Tracker struct {
 	mu           sync.RWMutex
 	messages     map[uint16]*QoS1Message
@@ -201,6 +204,7 @@ func (t *QoS1Tracker) Count() int {
 }
 
 // QoS2State represents the state of a QoS 2 publish flow.
+// MQTT v5.0 spec: Section 4.3.3
 type QoS2State int
 
 const (
@@ -235,6 +239,7 @@ func (m *QoS2Message) ShouldRetry() bool {
 }
 
 // QoS2Tracker tracks QoS 2 messages in the publish flow.
+// MQTT v5.0 spec: Section 4.3.3
 type QoS2Tracker struct {
 	mu           sync.RWMutex
 	messages     map[uint16]*QoS2Message

@@ -3,6 +3,8 @@ package mqttv5
 
 import "io"
 
+// PubackPacket represents an MQTT PUBACK packet.
+// MQTT v5.0 spec: Section 3.4
 type PubackPacket struct {
 	PacketID   uint16
 	ReasonCode ReasonCode

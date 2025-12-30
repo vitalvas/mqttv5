@@ -3,8 +3,10 @@ package mqttv5
 import "io"
 
 // Packet is the interface that all MQTT control packets implement.
+// MQTT v5.0 spec: Section 2.1
 type Packet interface {
 	// Type returns the packet type.
+	// MQTT v5.0 spec: Section 2.1.2
 	Type() PacketType
 
 	// Encode writes the packet to the writer.
@@ -21,6 +23,7 @@ type Packet interface {
 }
 
 // PacketWithID is implemented by packets that have a packet identifier.
+// MQTT v5.0 spec: Section 2.2.1
 type PacketWithID interface {
 	Packet
 
@@ -32,6 +35,7 @@ type PacketWithID interface {
 }
 
 // PacketWithProperties is implemented by packets that have properties.
+// MQTT v5.0 spec: Section 2.2.2
 type PacketWithProperties interface {
 	Packet
 
