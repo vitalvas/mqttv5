@@ -302,7 +302,7 @@ func TestPublish(t *testing.T) {
 		defer client.Close()
 
 		err = client.Publish("", []byte("hello"), 0, false)
-		assert.ErrorIs(t, err, ErrInvalidTopic)
+		assert.ErrorIs(t, err, ErrEmptyTopic)
 	})
 }
 

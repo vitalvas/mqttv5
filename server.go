@@ -165,6 +165,10 @@ func (s *Server) Publish(msg *Message) error {
 		return ErrServerClosed
 	}
 
+	if err := ValidateTopicName(msg.Topic); err != nil {
+		return err
+	}
+
 	// Handle retained messages
 	if msg.Retain {
 		if len(msg.Payload) == 0 {

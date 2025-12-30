@@ -319,8 +319,8 @@ func (c *Client) PublishMessage(msg *Message) error {
 		return ErrNotConnected
 	}
 
-	if msg.Topic == "" {
-		return ErrInvalidTopic
+	if err := ValidateTopicName(msg.Topic); err != nil {
+		return err
 	}
 
 	pkt := &PublishPacket{}
