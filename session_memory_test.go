@@ -143,6 +143,58 @@ func TestMemorySession(t *testing.T) {
 		matched = session.MatchSubscriptions("no/match")
 		assert.Len(t, matched, 0)
 	})
+
+	t.Run("inflight QoS1", func(t *testing.T) {
+		session := NewMemorySession("client-1")
+
+		msg := &QoS1Message{
+			PacketID: 1,
+			Message:  &Message{Topic: "test/topic", Payload: []byte("data")},
+		}
+		session.AddInflightQoS1(1, msg)
+
+		got, ok := session.GetInflightQoS1(1)
+		require.True(t, ok)
+		assert.Equal(t, msg.PacketID, got.PacketID)
+
+		_, ok = session.GetInflightQoS1(2)
+		assert.False(t, ok)
+
+		msgs := session.InflightQoS1()
+		assert.Len(t, msgs, 1)
+
+		removed := session.RemoveInflightQoS1(1)
+		assert.True(t, removed)
+
+		removed = session.RemoveInflightQoS1(1)
+		assert.False(t, removed)
+	})
+
+	t.Run("inflight QoS2", func(t *testing.T) {
+		session := NewMemorySession("client-1")
+
+		msg := &QoS2Message{
+			PacketID: 1,
+			Message:  &Message{Topic: "test/topic", Payload: []byte("data")},
+		}
+		session.AddInflightQoS2(1, msg)
+
+		got, ok := session.GetInflightQoS2(1)
+		require.True(t, ok)
+		assert.Equal(t, msg.PacketID, got.PacketID)
+
+		_, ok = session.GetInflightQoS2(2)
+		assert.False(t, ok)
+
+		msgs := session.InflightQoS2()
+		assert.Len(t, msgs, 1)
+
+		removed := session.RemoveInflightQoS2(1)
+		assert.True(t, removed)
+
+		removed = session.RemoveInflightQoS2(1)
+		assert.False(t, removed)
+	})
 }
 
 func TestMemorySessionStore(t *testing.T) {

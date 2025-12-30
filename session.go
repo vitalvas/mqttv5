@@ -62,6 +62,30 @@ type Session interface {
 
 	// UpdateLastActivity updates the last activity time.
 	UpdateLastActivity()
+
+	// AddInflightQoS1 adds a QoS 1 message awaiting PUBACK.
+	AddInflightQoS1(packetID uint16, msg *QoS1Message)
+
+	// GetInflightQoS1 retrieves a QoS 1 inflight message.
+	GetInflightQoS1(packetID uint16) (*QoS1Message, bool)
+
+	// RemoveInflightQoS1 removes a QoS 1 inflight message.
+	RemoveInflightQoS1(packetID uint16) bool
+
+	// InflightQoS1 returns all QoS 1 inflight messages.
+	InflightQoS1() map[uint16]*QoS1Message
+
+	// AddInflightQoS2 adds a QoS 2 message in the publish flow.
+	AddInflightQoS2(packetID uint16, msg *QoS2Message)
+
+	// GetInflightQoS2 retrieves a QoS 2 inflight message.
+	GetInflightQoS2(packetID uint16) (*QoS2Message, bool)
+
+	// RemoveInflightQoS2 removes a QoS 2 inflight message.
+	RemoveInflightQoS2(packetID uint16) bool
+
+	// InflightQoS2 returns all QoS 2 inflight messages.
+	InflightQoS2() map[uint16]*QoS2Message
 }
 
 // SessionStore defines the interface for session persistence.

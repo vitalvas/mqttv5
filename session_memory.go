@@ -12,6 +12,8 @@ type MemorySession struct {
 	clientID        string
 	subscriptions   map[string]Subscription
 	pendingMessages map[uint16]*Message
+	inflightQoS1    map[uint16]*QoS1Message
+	inflightQoS2    map[uint16]*QoS2Message
 	packetIDCounter uint16
 	expiryTime      time.Time
 	createdAt       time.Time
@@ -25,6 +27,8 @@ func NewMemorySession(clientID string) *MemorySession {
 		clientID:        clientID,
 		subscriptions:   make(map[string]Subscription),
 		pendingMessages: make(map[uint16]*Message),
+		inflightQoS1:    make(map[uint16]*QoS1Message),
+		inflightQoS2:    make(map[uint16]*QoS2Message),
 		createdAt:       now,
 		lastActivity:    now,
 	}
@@ -170,6 +174,72 @@ func (s *MemorySession) MatchSubscriptions(topic string) []Subscription {
 		}
 	}
 	return matched
+}
+
+func (s *MemorySession) AddInflightQoS1(packetID uint16, msg *QoS1Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inflightQoS1[packetID] = msg
+}
+
+func (s *MemorySession) GetInflightQoS1(packetID uint16) (*QoS1Message, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	msg, ok := s.inflightQoS1[packetID]
+	return msg, ok
+}
+
+func (s *MemorySession) RemoveInflightQoS1(packetID uint16) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.inflightQoS1[packetID]; ok {
+		delete(s.inflightQoS1, packetID)
+		return true
+	}
+	return false
+}
+
+func (s *MemorySession) InflightQoS1() map[uint16]*QoS1Message {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	msgs := make(map[uint16]*QoS1Message, len(s.inflightQoS1))
+	maps.Copy(msgs, s.inflightQoS1)
+	return msgs
+}
+
+func (s *MemorySession) AddInflightQoS2(packetID uint16, msg *QoS2Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inflightQoS2[packetID] = msg
+}
+
+func (s *MemorySession) GetInflightQoS2(packetID uint16) (*QoS2Message, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	msg, ok := s.inflightQoS2[packetID]
+	return msg, ok
+}
+
+func (s *MemorySession) RemoveInflightQoS2(packetID uint16) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.inflightQoS2[packetID]; ok {
+		delete(s.inflightQoS2, packetID)
+		return true
+	}
+	return false
+}
+
+func (s *MemorySession) InflightQoS2() map[uint16]*QoS2Message {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	msgs := make(map[uint16]*QoS2Message, len(s.inflightQoS2))
+	maps.Copy(msgs, s.inflightQoS2)
+	return msgs
 }
 
 // MemorySessionStore is an in-memory implementation of SessionStore.
