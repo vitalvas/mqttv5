@@ -21,7 +21,7 @@ type Client struct {
 	addr    string
 
 	// Session state
-	session     *MemorySession
+	session     Session
 	packetIDMgr *PacketIDManager
 	qos1Tracker *QoS1Tracker
 	qos2Tracker *QoS2Tracker
@@ -79,7 +79,7 @@ func DialContext(ctx context.Context, addr string, opts ...Option) (*Client, err
 	if options.clientID == "" {
 		options.clientID = generateClientID()
 	}
-	c.session = NewMemorySession(options.clientID)
+	c.session = options.sessionFactory(options.clientID)
 
 	// Connect with timeout
 	connectCtx, connectCancel := context.WithTimeout(ctx, options.connectTimeout)
@@ -199,7 +199,7 @@ func (c *Client) connect(ctx context.Context) error {
 		// Assigned Client Identifier - server assigned us a new client ID
 		if assignedID := props.GetString(PropAssignedClientIdentifier); assignedID != "" {
 			c.options.clientID = assignedID
-			c.session = NewMemorySession(assignedID)
+			c.session = c.options.sessionFactory(assignedID)
 		}
 		// Server Keep Alive - server overrides our keep-alive
 		if serverKA := props.GetUint16(PropServerKeepAlive); serverKA > 0 {
@@ -421,7 +421,10 @@ func (c *Client) SubscribeMultiple(filters map[string]byte, handler MessageHandl
 	}
 
 	// Build subscription list with validation
+	// Build both subs and topicFilters in a single loop to preserve order
+	// (Go map iteration order is randomized, so we must use the same iteration for both)
 	subs := make([]Subscription, 0, len(filters))
+	topicFilters := make([]string, 0, len(filters))
 	for filter, qos := range filters {
 		if filter == "" {
 			return ErrInvalidTopic
@@ -434,6 +437,7 @@ func (c *Client) SubscribeMultiple(filters map[string]byte, handler MessageHandl
 			TopicFilter: filter,
 			QoS:         qos,
 		})
+		topicFilters = append(topicFilters, filter)
 	}
 
 	packetID, err := c.packetIDMgr.Allocate()
@@ -444,12 +448,6 @@ func (c *Client) SubscribeMultiple(filters map[string]byte, handler MessageHandl
 	pkt := &SubscribePacket{
 		PacketID:      packetID,
 		Subscriptions: subs,
-	}
-
-	// Build list of topic filters for tracking
-	topicFilters := make([]string, 0, len(filters))
-	for filter := range filters {
-		topicFilters = append(topicFilters, filter)
 	}
 
 	// Register handlers BEFORE sending packet to avoid race with incoming messages
@@ -583,6 +581,12 @@ func (c *Client) readLoop() {
 			}
 
 			c.connected.Store(false)
+
+			// Close connection to avoid stale/half-open sockets
+			if c.conn != nil {
+				c.conn.Close()
+			}
+
 			c.emit(NewConnectionLostError(err))
 
 			if c.options.autoReconnect && !c.closed.Load() {

@@ -18,7 +18,7 @@ var authCtx = context.Background()
 func (s *Server) setupSession(client *ServerClient, clientID string, cleanStart bool) bool {
 	if cleanStart {
 		s.config.sessionStore.Delete(clientID)
-		session := NewMemorySession(clientID)
+		session := s.config.sessionFactory(clientID)
 		s.config.sessionStore.Create(session)
 		client.SetSession(session)
 		return false
@@ -30,10 +30,67 @@ func (s *Server) setupSession(client *ServerClient, clientID string, cleanStart 
 		return true
 	}
 
-	session := NewMemorySession(clientID)
+	session := s.config.sessionFactory(clientID)
 	s.config.sessionStore.Create(session)
 	client.SetSession(session)
 	return false
+}
+
+// authenticateClient performs authentication (standard or enhanced) and returns
+// the auth result, any assigned client ID, and whether authentication succeeded.
+func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clientID string, logger Logger) (*AuthResult, string, bool) {
+	// Check for enhanced authentication (AuthMethod in CONNECT properties)
+	authMethod := connect.Props.GetString(PropAuthenticationMethod)
+	if authMethod != "" {
+		// Client requested enhanced authentication
+		if s.config.enhancedAuth == nil || !s.config.enhancedAuth.SupportsMethod(authMethod) {
+			logger.Warn("unsupported authentication method", LogFields{
+				"authMethod": authMethod,
+			})
+			connack := &ConnackPacket{
+				ReasonCode: ReasonBadAuthMethod,
+			}
+			WritePacket(conn, connack, s.config.maxPacketSize)
+			return nil, "", false
+		}
+
+		// Perform enhanced authentication
+		enhancedResult, ok := s.performEnhancedAuth(conn, connect, clientID, authMethod, logger)
+		if !ok {
+			return nil, "", false
+		}
+
+		// Return assigned client ID if set
+		if enhancedResult != nil && enhancedResult.AssignedClientID != "" {
+			return nil, enhancedResult.AssignedClientID, true
+		}
+		return nil, "", true
+	}
+
+	// Standard authentication
+	if s.config.auth != nil {
+		actx := buildAuthContext(conn, connect, clientID)
+		result, err := s.config.auth.Authenticate(authCtx, actx)
+		if err != nil || result == nil || !result.Success {
+			reasonCode := ReasonNotAuthorized
+			if result != nil {
+				reasonCode = result.ReasonCode
+			}
+			logger.Warn("authentication failed", LogFields{
+				LogFieldReasonCode: reasonCode.String(),
+			})
+			connack := &ConnackPacket{
+				ReasonCode: reasonCode,
+			}
+			WritePacket(conn, connack, s.config.maxPacketSize)
+			return nil, "", false
+		}
+		logger.Debug("authentication successful", nil)
+		return result, result.AssignedClientID, true
+	}
+
+	// No authentication configured
+	return nil, "", true
 }
 
 // buildAuthContext creates an AuthContext from connection and CONNECT packet info.
@@ -379,35 +436,16 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 
-	// Authenticate
-	var authResult *AuthResult
-	if s.config.auth != nil {
-		actx := buildAuthContext(conn, connect, clientID)
-		result, err := s.config.auth.Authenticate(authCtx, actx)
-		if err != nil || !result.Success {
-			reasonCode := ReasonNotAuthorized
-			if result != nil {
-				reasonCode = result.ReasonCode
-			}
-			logger.Warn("authentication failed", LogFields{
-				LogFieldReasonCode: reasonCode.String(),
-			})
-			connack := &ConnackPacket{
-				ReasonCode: reasonCode,
-			}
-			WritePacket(conn, connack, s.config.maxPacketSize)
-			return
-		}
-		authResult = result
-		logger.Debug("authentication successful", nil)
-
-		// Apply AuthResult fields
-		if result.AssignedClientID != "" {
-			clientID = result.AssignedClientID
-			assignedClientID = clientID
-			connect.ClientID = clientID
-			logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
-		}
+	// Perform authentication (standard or enhanced)
+	authResult, newClientID, ok := s.authenticateClient(conn, connect, clientID, logger)
+	if !ok {
+		return // Auth failed, connection closed
+	}
+	if newClientID != "" && newClientID != clientID {
+		clientID = newClientID
+		assignedClientID = clientID
+		connect.ClientID = clientID
+		logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 	}
 
 	// Determine max packet size for outbound messages (minimum of server and client limits)
@@ -767,7 +805,7 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 			LocalAddr:  client.Conn().LocalAddr(),
 		}
 		result, err := s.config.authz.Authorize(authCtx, azCtx)
-		if err != nil || !result.Allowed {
+		if err != nil || result == nil || !result.Allowed {
 			reasonCode := ReasonNotAuthorized
 			if result != nil {
 				reasonCode = result.ReasonCode
@@ -987,7 +1025,7 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 				LocalAddr:  client.Conn().LocalAddr(),
 			}
 			result, err := s.config.authz.Authorize(authCtx, azCtx)
-			if err != nil || !result.Allowed {
+			if err != nil || result == nil || !result.Allowed {
 				reasonCode := ReasonNotAuthorized
 				if result != nil {
 					reasonCode = result.ReasonCode
@@ -1368,4 +1406,115 @@ func (s *Server) sessionExpiryLoop() {
 			s.config.sessionStore.Cleanup()
 		}
 	}
+}
+
+// performEnhancedAuth performs enhanced authentication with AUTH packet exchanges.
+// Returns the final EnhancedAuthResult and true if successful, or nil and false if failed.
+func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, clientID, authMethod string, logger Logger) (*EnhancedAuthResult, bool) {
+	// Build initial context from CONNECT
+	eaCtx := &EnhancedAuthContext{
+		ClientID:   clientID,
+		AuthMethod: authMethod,
+		AuthData:   connect.Props.GetBinary(PropAuthenticationData),
+		ReasonCode: ReasonSuccess,
+		RemoteAddr: conn.RemoteAddr(),
+	}
+
+	// Start enhanced auth
+	result, err := s.config.enhancedAuth.AuthStart(authCtx, eaCtx)
+	if err != nil || result == nil {
+		logger.Warn("enhanced auth start failed", LogFields{
+			"authMethod": authMethod,
+		})
+		connack := &ConnackPacket{
+			ReasonCode: ReasonNotAuthorized,
+		}
+		WritePacket(conn, connack, s.config.maxPacketSize)
+		return nil, false
+	}
+
+	// Loop for multi-step authentication
+	for result.Continue {
+		// Send AUTH packet to client
+		authPkt := &AuthPacket{
+			ReasonCode: ReasonContinueAuth,
+		}
+		authPkt.Props.Set(PropAuthenticationMethod, authMethod)
+		if len(result.AuthData) > 0 {
+			authPkt.Props.Set(PropAuthenticationData, result.AuthData)
+		}
+		authPkt.Props.Merge(&result.Properties)
+
+		if _, err := WritePacket(conn, authPkt, s.config.maxPacketSize); err != nil {
+			logger.Warn("failed to send AUTH packet", LogFields{
+				LogFieldError: err.Error(),
+			})
+			return nil, false
+		}
+
+		// Read client's AUTH response
+		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		pkt, _, err := ReadPacket(conn, s.config.maxPacketSize)
+		conn.SetReadDeadline(time.Time{})
+
+		if err != nil {
+			logger.Warn("failed to read AUTH response", LogFields{
+				LogFieldError: err.Error(),
+			})
+			return nil, false
+		}
+
+		clientAuth, ok := pkt.(*AuthPacket)
+		if !ok {
+			logger.Warn("expected AUTH packet, got different type", LogFields{
+				LogFieldPacketType: pkt.Type().String(),
+			})
+			connack := &ConnackPacket{
+				ReasonCode: ReasonProtocolError,
+			}
+			WritePacket(conn, connack, s.config.maxPacketSize)
+			return nil, false
+		}
+
+		// Update context for next step
+		eaCtx.AuthData = clientAuth.Props.GetBinary(PropAuthenticationData)
+		eaCtx.ReasonCode = clientAuth.ReasonCode
+		eaCtx.State = result.State
+
+		// Continue authentication
+		result, err = s.config.enhancedAuth.AuthContinue(authCtx, eaCtx)
+		if err != nil || result == nil {
+			logger.Warn("enhanced auth continue failed", LogFields{
+				"authMethod": authMethod,
+			})
+			connack := &ConnackPacket{
+				ReasonCode: ReasonNotAuthorized,
+			}
+			WritePacket(conn, connack, s.config.maxPacketSize)
+			return nil, false
+		}
+	}
+
+	// Check final result
+	if !result.Success {
+		reasonCode := result.ReasonCode
+		if reasonCode == 0 {
+			reasonCode = ReasonNotAuthorized
+		}
+		logger.Warn("enhanced authentication failed", LogFields{
+			"authMethod":       authMethod,
+			LogFieldReasonCode: reasonCode.String(),
+		})
+		connack := &ConnackPacket{
+			ReasonCode: reasonCode,
+		}
+		WritePacket(conn, connack, s.config.maxPacketSize)
+		return nil, false
+	}
+
+	logger.Debug("enhanced authentication successful", LogFields{
+		"authMethod": authMethod,
+	})
+
+	return result, true
 }

@@ -9,6 +9,7 @@ import (
 // ServerClient represents a connected client on the server.
 type ServerClient struct {
 	mu                    sync.RWMutex
+	writeMu               sync.Mutex // protects concurrent writes to conn
 	conn                  Conn
 	clientID              string
 	username              string
@@ -257,7 +258,10 @@ func (c *ServerClient) Send(msg *Message) error {
 		pub.Props.Set(PropSubscriptionIdentifier, subID)
 	}
 
+	c.writeMu.Lock()
 	_, err := WritePacket(c.conn, pub, c.maxPacketSize)
+	c.writeMu.Unlock()
+
 	if err != nil && msg.QoS > 0 {
 		// Rollback: release flow control quota and remove tracker entry
 		c.flowControl.Release()
@@ -283,7 +287,10 @@ func (c *ServerClient) SendPacket(packet Packet) error {
 		return ErrNotConnected
 	}
 
+	c.writeMu.Lock()
 	_, err := WritePacket(c.conn, packet, c.maxPacketSize)
+	c.writeMu.Unlock()
+
 	return err
 }
 
@@ -305,6 +312,9 @@ func (c *ServerClient) Disconnect(reason ReasonCode) error {
 		ReasonCode: reason,
 	}
 
+	c.writeMu.Lock()
 	WritePacket(c.conn, disconnect, c.maxPacketSize)
+	c.writeMu.Unlock()
+
 	return c.Close()
 }

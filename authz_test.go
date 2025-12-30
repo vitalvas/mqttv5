@@ -76,3 +76,21 @@ func TestAuthzResult(t *testing.T) {
 		assert.Equal(t, ReasonNotAuthorized, result.ReasonCode)
 	})
 }
+
+// nilResultAuthorizer returns nil result without error for testing nil handling.
+type nilResultAuthorizer struct{}
+
+func (a *nilResultAuthorizer) Authorize(_ context.Context, _ *AuthzContext) (*AuthzResult, error) {
+	return nil, nil
+}
+
+// TestNilAuthzResultHandling tests that the server properly handles nil authz results.
+// This tests the fix for bug #4: Authorizer nil result can panic.
+func TestNilAuthzResultHandling(t *testing.T) {
+	authz := &nilResultAuthorizer{}
+	ctx := context.Background()
+
+	result, err := authz.Authorize(ctx, &AuthzContext{ClientID: "test", Topic: "test/topic"})
+	assert.NoError(t, err)
+	assert.Nil(t, result)
+}

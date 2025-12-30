@@ -47,6 +47,9 @@ type clientOptions struct {
 	receiveMaximum        uint16
 	topicAliasMaximum     uint16
 	userProperties        map[string]string
+
+	// Session factory for creating custom sessions
+	sessionFactory SessionFactory
 }
 
 // defaultOptions returns options with sensible defaults.
@@ -63,6 +66,7 @@ func defaultOptions() *clientOptions {
 		maxBackoff:       60 * time.Second,
 		maxPacketSize:    256 * 1024,
 		receiveMaximum:   65535,
+		sessionFactory:   DefaultSessionFactory(),
 	}
 }
 
@@ -220,6 +224,16 @@ func WithUserProperties(props map[string]string) Option {
 func OnEvent(handler EventHandler) Option {
 	return func(o *clientOptions) {
 		o.onEvent = handler
+	}
+}
+
+// WithClientSessionFactory sets the session factory for creating client sessions.
+// This allows custom Session implementations to be used.
+func WithClientSessionFactory(factory SessionFactory) Option {
+	return func(o *clientOptions) {
+		if factory != nil {
+			o.sessionFactory = factory
+		}
 	}
 }
 

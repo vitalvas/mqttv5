@@ -111,3 +111,14 @@ type SessionStore interface {
 
 // SessionExpiryHandler is called when a session expires.
 type SessionExpiryHandler func(session Session)
+
+// SessionFactory creates new Session instances.
+// This allows custom session implementations to be used with the server.
+type SessionFactory func(clientID string) Session
+
+// DefaultSessionFactory returns a factory that creates MemorySession instances.
+func DefaultSessionFactory() SessionFactory {
+	return func(clientID string) Session {
+		return NewMemorySession(clientID)
+	}
+}

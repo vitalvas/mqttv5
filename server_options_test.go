@@ -150,4 +150,42 @@ func TestServerOptions(t *testing.T) {
 		cfg.onUnsubscribe(nil, nil)
 		assert.True(t, called)
 	})
+
+	t.Run("with enhanced auth", func(t *testing.T) {
+		auth := &mockEnhancedAuthenticator{methods: map[string]bool{"PLAIN": true}}
+		cfg := defaultServerConfig()
+		WithEnhancedAuth(auth)(cfg)
+
+		assert.Equal(t, auth, cfg.enhancedAuth)
+	})
+
+	t.Run("with session factory", func(t *testing.T) {
+		customFactory := func(clientID string) Session {
+			return NewMemorySession("custom-" + clientID)
+		}
+		cfg := defaultServerConfig()
+		WithSessionFactory(customFactory)(cfg)
+
+		session := cfg.sessionFactory("test")
+		assert.Equal(t, "custom-test", session.ClientID())
+	})
+
+	t.Run("with session factory nil", func(t *testing.T) {
+		cfg := defaultServerConfig()
+		originalFactory := cfg.sessionFactory
+		WithSessionFactory(nil)(cfg)
+
+		// Should not change when nil
+		assert.NotNil(t, cfg.sessionFactory)
+		session := cfg.sessionFactory("test")
+		assert.Equal(t, originalFactory("test").ClientID(), session.ClientID())
+	})
+
+	t.Run("default session factory", func(t *testing.T) {
+		cfg := defaultServerConfig()
+		assert.NotNil(t, cfg.sessionFactory)
+
+		session := cfg.sessionFactory("test-client")
+		assert.Equal(t, "test-client", session.ClientID())
+	})
 }

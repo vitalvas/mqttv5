@@ -508,3 +508,42 @@ func BenchmarkMemorySessionStoreGet(b *testing.B) {
 		_, _ = store.Get("client-1")
 	}
 }
+
+// TestSessionFactory tests the SessionFactory type and DefaultSessionFactory.
+// This tests the fix for bug #6 and #7: hardcoded MemorySession.
+func TestSessionFactory(t *testing.T) {
+	t.Run("default session factory creates MemorySession", func(t *testing.T) {
+		factory := DefaultSessionFactory()
+		session := factory("test-client")
+
+		assert.NotNil(t, session)
+		assert.Equal(t, "test-client", session.ClientID())
+
+		// Verify it's actually a usable session
+		session.AddSubscription(Subscription{TopicFilter: "test/topic", QoS: 1})
+		assert.True(t, session.HasSubscription("test/topic"))
+	})
+
+	t.Run("custom session factory", func(t *testing.T) {
+		// Custom factory that adds a prefix
+		customFactory := func(clientID string) Session {
+			return NewMemorySession("prefix-" + clientID)
+		}
+
+		session := customFactory("test-client")
+		assert.Equal(t, "prefix-test-client", session.ClientID())
+	})
+
+	t.Run("session factory with custom implementation", func(t *testing.T) {
+		// This demonstrates that custom Session implementations can be used
+		factory := func(clientID string) Session {
+			s := NewMemorySession(clientID)
+			// Pre-populate with some data
+			s.AddSubscription(Subscription{TopicFilter: "$SYS/#", QoS: 0})
+			return s
+		}
+
+		session := factory("test-client")
+		assert.True(t, session.HasSubscription("$SYS/#"))
+	})
+}

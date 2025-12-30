@@ -180,3 +180,45 @@ func TestOptionsOverride(t *testing.T) {
 	)
 	assert.Equal(t, "second", opts.clientID)
 }
+
+func TestWithMaxSubscriptions(t *testing.T) {
+	t.Run("set value", func(t *testing.T) {
+		opts := applyOptions(WithMaxSubscriptions(100))
+		assert.Equal(t, 100, opts.maxSubscriptions)
+	})
+
+	t.Run("unlimited (0)", func(t *testing.T) {
+		opts := applyOptions(WithMaxSubscriptions(0))
+		assert.Equal(t, 0, opts.maxSubscriptions)
+	})
+}
+
+// TestWithClientSessionFactory tests the client session factory option.
+// This tests the fix for bug #7: client session type hardcoded to MemorySession.
+func TestWithClientSessionFactory(t *testing.T) {
+	t.Run("default session factory", func(t *testing.T) {
+		opts := defaultOptions()
+		assert.NotNil(t, opts.sessionFactory)
+
+		session := opts.sessionFactory("test-client")
+		assert.Equal(t, "test-client", session.ClientID())
+	})
+
+	t.Run("custom session factory", func(t *testing.T) {
+		customFactory := func(clientID string) Session {
+			return NewMemorySession("custom-" + clientID)
+		}
+		opts := applyOptions(WithClientSessionFactory(customFactory))
+
+		session := opts.sessionFactory("test")
+		assert.Equal(t, "custom-test", session.ClientID())
+	})
+
+	t.Run("nil factory does not change default", func(t *testing.T) {
+		opts := applyOptions(WithClientSessionFactory(nil))
+		assert.NotNil(t, opts.sessionFactory)
+
+		session := opts.sessionFactory("test-client")
+		assert.Equal(t, "test-client", session.ClientID())
+	})
+}

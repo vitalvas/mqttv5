@@ -186,6 +186,37 @@ func (m *mockEnhancedAuthenticator) AuthContinue(_ context.Context, authCtx *Enh
 	}, nil
 }
 
+// TestEnhancedAuthResultAssignedClientID tests that EnhancedAuthResult has AssignedClientID field.
+// This tests part of the fix for bug #5: enhanced auth wiring.
+func TestEnhancedAuthResultAssignedClientID(t *testing.T) {
+	result := &EnhancedAuthResult{
+		Success:          true,
+		ReasonCode:       ReasonSuccess,
+		AssignedClientID: "server-assigned-id",
+	}
+
+	assert.True(t, result.Success)
+	assert.Equal(t, "server-assigned-id", result.AssignedClientID)
+}
+
+// nilResultAuthenticator returns nil result without error for testing nil handling.
+type nilResultAuthenticator struct{}
+
+func (a *nilResultAuthenticator) Authenticate(_ context.Context, _ *AuthContext) (*AuthResult, error) {
+	return nil, nil
+}
+
+// TestNilAuthResultHandling tests that the server properly handles nil auth results.
+// This tests the fix for bug #4: Authenticator nil result can panic.
+func TestNilAuthResultHandling(t *testing.T) {
+	auth := &nilResultAuthenticator{}
+	ctx := context.Background()
+
+	result, err := auth.Authenticate(ctx, &AuthContext{ClientID: "test"})
+	assert.NoError(t, err)
+	assert.Nil(t, result)
+}
+
 func TestMockEnhancedAuthenticator(t *testing.T) {
 	auth := &mockEnhancedAuthenticator{
 		methods: map[string]bool{

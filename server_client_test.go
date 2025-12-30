@@ -375,3 +375,85 @@ func TestServerClientConcurrency(_ *testing.T) {
 
 	wg.Wait()
 }
+
+// TestServerClientConcurrentWrites tests that concurrent writes are properly serialized.
+// This tests the fix for bug #1: concurrent writes to a single server connection.
+func TestServerClientConcurrentWrites(t *testing.T) {
+	t.Run("concurrent sends are serialized", func(t *testing.T) {
+		conn := &mockConn{}
+		connect := &ConnectPacket{ClientID: "test-client"}
+
+		client := NewServerClient(conn, connect, 256*1024)
+		session := NewMemorySession("test-client")
+		client.SetSession(session)
+
+		var wg sync.WaitGroup
+
+		// Launch many concurrent sends
+		for range 100 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: 0}
+				_ = client.Send(msg)
+			}()
+		}
+
+		wg.Wait()
+
+		// If we get here without race detector errors, the write lock is working
+		assert.True(t, true)
+	})
+
+	t.Run("concurrent send packets are serialized", func(t *testing.T) {
+		conn := &mockConn{}
+		connect := &ConnectPacket{ClientID: "test-client"}
+
+		client := NewServerClient(conn, connect, 256*1024)
+
+		var wg sync.WaitGroup
+
+		// Launch many concurrent packet sends
+		for range 100 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				pkt := &PingrespPacket{}
+				_ = client.SendPacket(pkt)
+			}()
+		}
+
+		wg.Wait()
+		assert.True(t, true)
+	})
+
+	t.Run("concurrent disconnect and send", func(t *testing.T) {
+		conn := &mockConn{}
+		connect := &ConnectPacket{ClientID: "test-client"}
+
+		client := NewServerClient(conn, connect, 256*1024)
+
+		var wg sync.WaitGroup
+
+		// One goroutine disconnects
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			time.Sleep(time.Millisecond)
+			_ = client.Disconnect(ReasonSuccess)
+		}()
+
+		// Others try to send
+		for range 10 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: 0}
+				_ = client.Send(msg)
+			}()
+		}
+
+		wg.Wait()
+		assert.True(t, true)
+	})
+}

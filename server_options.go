@@ -8,8 +8,10 @@ type ServerOption func(*serverConfig)
 type serverConfig struct {
 	listeners         []net.Listener
 	sessionStore      SessionStore
+	sessionFactory    SessionFactory
 	retainedStore     RetainedStore
 	auth              Authenticator
+	enhancedAuth      EnhancedAuthenticator
 	authz             Authorizer
 	logger            Logger
 	metrics           MetricsCollector
@@ -29,6 +31,7 @@ func defaultServerConfig() *serverConfig {
 	return &serverConfig{
 		listeners:      make([]net.Listener, 0),
 		sessionStore:   NewMemorySessionStore(),
+		sessionFactory: DefaultSessionFactory(),
 		retainedStore:  NewMemoryRetainedStore(),
 		logger:         NewNoOpLogger(),
 		metrics:        &NoOpMetrics{},
@@ -52,6 +55,17 @@ func WithSessionStore(store SessionStore) ServerOption {
 	}
 }
 
+// WithSessionFactory sets the session factory.
+// The factory is used to create new sessions for connecting clients.
+// This allows custom Session implementations to be used.
+func WithSessionFactory(factory SessionFactory) ServerOption {
+	return func(c *serverConfig) {
+		if factory != nil {
+			c.sessionFactory = factory
+		}
+	}
+}
+
 // WithRetainedStore sets the retained message store.
 func WithRetainedStore(store RetainedStore) ServerOption {
 	return func(c *serverConfig) {
@@ -63,6 +77,14 @@ func WithRetainedStore(store RetainedStore) ServerOption {
 func WithServerAuth(auth Authenticator) ServerOption {
 	return func(c *serverConfig) {
 		c.auth = auth
+	}
+}
+
+// WithEnhancedAuth sets the enhanced authenticator for SASL-style authentication.
+// Enhanced authentication allows multi-step authentication exchanges using AUTH packets.
+func WithEnhancedAuth(auth EnhancedAuthenticator) ServerOption {
+	return func(c *serverConfig) {
+		c.enhancedAuth = auth
 	}
 }
 

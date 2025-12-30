@@ -112,6 +112,9 @@ type EnhancedAuthResult struct {
 
 	// State holds authenticator-specific state for the next exchange.
 	State any
+
+	// AssignedClientID is set if the server assigns a client ID during enhanced auth.
+	AssignedClientID string
 }
 
 // EnhancedAuthenticator defines the interface for enhanced authentication.
