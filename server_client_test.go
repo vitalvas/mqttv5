@@ -377,7 +377,6 @@ func TestServerClientConcurrency(_ *testing.T) {
 }
 
 // TestServerClientConcurrentWrites tests that concurrent writes are properly serialized.
-// This tests the fix for bug #1: concurrent writes to a single server connection.
 func TestServerClientConcurrentWrites(t *testing.T) {
 	t.Run("concurrent sends are serialized", func(t *testing.T) {
 		conn := &mockConn{}

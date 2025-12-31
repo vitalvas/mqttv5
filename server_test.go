@@ -1808,3 +1808,56 @@ func TestServerMaxConnectionsSendsCONNACK(t *testing.T) {
 		// It's acceptable if the connection is closed before we read
 	})
 }
+
+func TestRemoveClient(t *testing.T) {
+	t.Run("old connection does not remove new client state", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		oldClient := &ServerClient{clientID: "test-client"}
+		newClient := &ServerClient{clientID: "test-client"}
+
+		srv.mu.Lock()
+		srv.clients["test-client"] = newClient
+		srv.mu.Unlock()
+
+		srv.removeClient("test-client", oldClient)
+
+		srv.mu.RLock()
+		_, exists := srv.clients["test-client"]
+		srv.mu.RUnlock()
+
+		assert.True(t, exists, "new client should still be in clients map")
+	})
+
+	t.Run("correct client is removed", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		client := &ServerClient{clientID: "test-client"}
+
+		srv.mu.Lock()
+		srv.clients["test-client"] = client
+		srv.mu.Unlock()
+
+		srv.removeClient("test-client", client)
+
+		srv.mu.RLock()
+		_, exists := srv.clients["test-client"]
+		srv.mu.RUnlock()
+
+		assert.False(t, exists, "client should be removed")
+	})
+}
+
+func TestExtractTLSInfo(t *testing.T) {
+	t.Run("non-TLS connection has no TLS info", func(t *testing.T) {
+		conn := &mockConn{}
+		actx := &AuthContext{}
+
+		extractTLSInfo(conn, actx)
+
+		assert.Empty(t, actx.TLSCommonName)
+		assert.False(t, actx.TLSVerified)
+	})
+}

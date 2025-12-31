@@ -287,6 +287,27 @@ func TestWSHandlerOriginValidation(t *testing.T) {
 	})
 }
 
+func TestWSDialError(t *testing.T) {
+	t.Run("error without response", func(t *testing.T) {
+		err := &WSDialError{Err: assert.AnError}
+		assert.Equal(t, assert.AnError.Error(), err.Error())
+		assert.ErrorIs(t, err, assert.AnError)
+	})
+
+	t.Run("error with response", func(t *testing.T) {
+		resp := &http.Response{StatusCode: 401}
+		err := &WSDialError{Err: assert.AnError, Response: resp}
+		assert.Contains(t, err.Error(), "401")
+		assert.Contains(t, err.Error(), assert.AnError.Error())
+		assert.ErrorIs(t, err, assert.AnError)
+	})
+
+	t.Run("unwrap returns underlying error", func(t *testing.T) {
+		err := &WSDialError{Err: assert.AnError}
+		assert.Equal(t, assert.AnError, err.Unwrap())
+	})
+}
+
 func TestExtractHost(t *testing.T) {
 	tests := []struct {
 		url      string

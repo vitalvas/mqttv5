@@ -193,8 +193,31 @@ func TestWithMaxSubscriptions(t *testing.T) {
 	})
 }
 
+func TestWithBackoffStrategy(t *testing.T) {
+	t.Run("default backoff strategy is nil", func(t *testing.T) {
+		opts := defaultOptions()
+		assert.Nil(t, opts.backoffStrategy)
+	})
+
+	t.Run("custom backoff strategy", func(t *testing.T) {
+		customStrategy := func(attempt int, currentBackoff time.Duration, _ error) time.Duration {
+			return time.Duration(attempt) * currentBackoff
+		}
+		opts := applyOptions(WithBackoffStrategy(customStrategy))
+		assert.NotNil(t, opts.backoffStrategy)
+
+		// Verify the strategy works as expected
+		result := opts.backoffStrategy(2, time.Second, nil)
+		assert.Equal(t, 2*time.Second, result)
+	})
+
+	t.Run("nil backoff strategy keeps default", func(t *testing.T) {
+		opts := applyOptions(WithBackoffStrategy(nil))
+		assert.Nil(t, opts.backoffStrategy)
+	})
+}
+
 // TestWithClientSessionFactory tests the client session factory option.
-// This tests the fix for bug #7: client session type hardcoded to MemorySession.
 func TestWithClientSessionFactory(t *testing.T) {
 	t.Run("default session factory", func(t *testing.T) {
 		opts := defaultOptions()

@@ -5,6 +5,13 @@ import (
 	"time"
 )
 
+// BackoffStrategy is a function that computes the next backoff duration.
+// It receives the current attempt number (1-based), the previous backoff duration,
+// and the error from the last connection attempt.
+// Return the duration to wait before the next attempt.
+// This allows implementing jitter, server hints, or custom strategies.
+type BackoffStrategy func(attempt int, currentBackoff time.Duration, err error) time.Duration
+
 // clientOptions holds configuration for a Client.
 type clientOptions struct {
 	// Connection settings
@@ -34,6 +41,7 @@ type clientOptions struct {
 	maxReconnects    int
 	reconnectBackoff time.Duration
 	maxBackoff       time.Duration
+	backoffStrategy  BackoffStrategy
 
 	// Event handler
 	onEvent EventHandler
@@ -156,6 +164,14 @@ func WithReconnectBackoff(d time.Duration) Option {
 func WithMaxBackoff(d time.Duration) Option {
 	return func(o *clientOptions) {
 		o.maxBackoff = d
+	}
+}
+
+// WithBackoffStrategy sets a custom backoff strategy for reconnection attempts.
+// If not set, uses exponential backoff (doubling) up to maxBackoff.
+func WithBackoffStrategy(strategy BackoffStrategy) Option {
+	return func(o *clientOptions) {
+		o.backoffStrategy = strategy
 	}
 }
 

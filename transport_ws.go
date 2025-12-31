@@ -2,6 +2,7 @@ package mqttv5
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"time"
@@ -18,6 +19,12 @@ const (
 type WSConn struct {
 	conn   *websocket.Conn
 	reader *wsReader
+}
+
+// UnderlyingConn returns the underlying net.Conn.
+// This can be used to access TLS connection state for mTLS authentication.
+func (c *WSConn) UnderlyingConn() net.Conn {
+	return c.conn.UnderlyingConn()
 }
 
 // wsReader handles reading from WebSocket with message framing.
@@ -56,6 +63,16 @@ func (r *wsReader) Read(p []byte) (int, error) {
 
 // newWSConn creates a new WebSocket connection wrapper.
 func newWSConn(conn *websocket.Conn) *WSConn {
+	return &WSConn{
+		conn:   conn,
+		reader: &wsReader{conn: conn},
+	}
+}
+
+// newWSConnWithLimit creates a new WebSocket connection wrapper with a read limit.
+// The limit prevents large WebSocket frames from causing memory pressure.
+func newWSConnWithLimit(conn *websocket.Conn, maxPacketSize int64) *WSConn {
+	conn.SetReadLimit(maxPacketSize)
 	return &WSConn{
 		conn:   conn,
 		reader: &wsReader{conn: conn},
@@ -109,6 +126,23 @@ func (c *WSConn) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
 
+// WSDialError wraps a WebSocket dial error with the HTTP response for inspection.
+type WSDialError struct {
+	Err      error
+	Response *http.Response
+}
+
+func (e *WSDialError) Error() string {
+	if e.Response != nil {
+		return fmt.Sprintf("%v (HTTP %d)", e.Err, e.Response.StatusCode)
+	}
+	return e.Err.Error()
+}
+
+func (e *WSDialError) Unwrap() error {
+	return e.Err
+}
+
 // WSDialer connects to MQTT brokers over WebSocket.
 type WSDialer struct {
 	// Dialer is the underlying WebSocket dialer.
@@ -119,6 +153,8 @@ type WSDialer struct {
 }
 
 // Dial connects to the WebSocket address.
+// On error, returns *WSDialError with the HTTP response if available,
+// allowing callers to inspect status codes (401, 403, 429, etc.).
 func (d *WSDialer) Dial(ctx context.Context, address string) (Conn, error) {
 	dialer := d.Dialer
 	if dialer == nil {
@@ -130,9 +166,10 @@ func (d *WSDialer) Dial(ctx context.Context, address string) (Conn, error) {
 		header = http.Header{}
 	}
 
-	conn, _, err := dialer.DialContext(ctx, address, header)
+	conn, resp, err := dialer.DialContext(ctx, address, header)
 	if err != nil {
-		return nil, err
+		// Wrap error with HTTP response for callers to inspect status codes
+		return nil, &WSDialError{Err: err, Response: resp}
 	}
 
 	return newWSConn(conn), nil
@@ -162,6 +199,10 @@ type WSHandler struct {
 	// If nil or empty, origin checking is strict (Origin must match Host header).
 	// Use "*" to allow all origins (not recommended for production).
 	AllowedOrigins []string
+
+	// MaxPacketSize limits WebSocket frame size to prevent memory exhaustion.
+	// If 0, uses default of 256KB.
+	MaxPacketSize int64
 }
 
 // NewWSHandler creates a new WebSocket handler for MQTT.
@@ -255,7 +296,24 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wsConn := newWSConn(conn)
+	// Verify MQTT subprotocol was negotiated per MQTT-over-WebSocket spec
+	// If client didn't request "mqtt" subprotocol, reject the connection
+	if conn.Subprotocol() != WebSocketSubprotocol {
+		conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseProtocolError, "mqtt subprotocol required"),
+			time.Now().Add(time.Second),
+		)
+		conn.Close()
+		return
+	}
+
+	// Apply read limit to prevent large frame memory exhaustion
+	maxSize := h.MaxPacketSize
+	if maxSize <= 0 {
+		maxSize = 256 * 1024 // Default 256KB
+	}
+	wsConn := newWSConnWithLimit(conn, maxSize)
 
 	if h.OnConnect != nil {
 		h.OnConnect(wsConn)

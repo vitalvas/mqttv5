@@ -17,6 +17,8 @@ func NewWSServer(opts ...ServerOption) *WSServer {
 	srv := NewServer(opts...)
 	ws := &WSServer{Server: srv}
 	ws.handler = NewWSHandler(ws.handleWSConnection)
+	// Set WebSocket read limit to match MQTT max packet size
+	ws.handler.MaxPacketSize = int64(srv.config.maxPacketSize)
 	return ws
 }
 
@@ -53,6 +55,12 @@ func (s *WSServer) handleWSConnection(conn Conn) {
 		s.mu.RUnlock()
 
 		if count >= s.config.maxConnections {
+			// Send best-effort CONNACK with ServerBusy before closing
+			// This matches TCP behavior and gives clients a proper reason code
+			connack := &ConnackPacket{
+				ReasonCode: ReasonServerBusy,
+			}
+			WritePacket(conn, connack, s.config.maxPacketSize)
 			conn.Close()
 			return
 		}
@@ -115,35 +123,16 @@ func (s *WSServer) handleWSConn(conn Conn) {
 
 	logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 
-	// Authenticate
-	var authResult *AuthResult
-	if s.config.auth != nil {
-		actx := buildAuthContext(conn, connect, clientID)
-		result, err := s.config.auth.Authenticate(authCtx, actx)
-		if err != nil || !result.Success {
-			reasonCode := ReasonNotAuthorized
-			if result != nil {
-				reasonCode = result.ReasonCode
-			}
-			logger.Warn("authentication failed", LogFields{
-				LogFieldReasonCode: reasonCode.String(),
-			})
-			connack := &ConnackPacket{
-				ReasonCode: reasonCode,
-			}
-			WritePacket(conn, connack, s.config.maxPacketSize)
-			return
-		}
-		authResult = result
-		logger.Debug("authentication successful", nil)
-
-		// Apply AuthResult fields
-		if result.AssignedClientID != "" {
-			clientID = result.AssignedClientID
-			assignedClientID = clientID
-			connect.ClientID = clientID
-			logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
-		}
+	// Perform authentication (standard or enhanced) - same as TCP path
+	authResult, newClientID, ok := s.authenticateClient(conn, connect, clientID, logger)
+	if !ok {
+		return // Auth failed, connection closed
+	}
+	if newClientID != "" && newClientID != clientID {
+		clientID = newClientID
+		assignedClientID = clientID
+		connect.ClientID = clientID
+		logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 	}
 
 	// Determine max packet size for outbound messages (minimum of server and client limits)
@@ -186,10 +175,14 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	// Register keep-alive
 	effectiveKeepAlive := s.keepAlive.Register(clientID, connect.KeepAlive)
 
-	// Register will message
+	// Register will message or cancel any pending will from prior connection
 	if connect.WillFlag {
 		will := WillMessageFromConnect(connect)
 		s.wills.Register(clientID, will)
+	} else {
+		// Client reconnected without a Will flag - cancel any pending will
+		// from a prior connection to prevent stale wills from being published
+		s.wills.CancelPending(clientID)
 	}
 
 	// Build CONNACK
@@ -226,8 +219,14 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	if s.config.receiveMaximum < 65535 {
 		connack.Props.Set(PropReceiveMaximum, s.config.receiveMaximum)
 	}
+	// Advertise server's Maximum Packet Size so clients know the limit
+	// Per MQTT v5 spec, server SHOULD advertise this to prevent oversized packets
+	if s.config.maxPacketSize > 0 && s.config.maxPacketSize < 268435455 {
+		connack.Props.Set(PropMaximumPacketSize, s.config.maxPacketSize)
+	}
 
-	if _, err := WritePacket(conn, connack, s.config.maxPacketSize); err != nil {
+	// Use clientMaxPacketSize for CONNACK to respect client's advertised limit
+	if _, err := WritePacket(conn, connack, clientMaxPacketSize); err != nil {
 		s.removeClient(clientID, client)
 		return
 	}
@@ -257,6 +256,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		session := client.Session()
 		if session != nil {
 			s.restoreInflightMessages(client, session, logger)
+			s.deliverPendingMessages(client, session)
 		}
 	}
 

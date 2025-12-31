@@ -105,6 +105,12 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 	return nil, "", true
 }
 
+// underlyingConnGetter is an interface for connections that wrap another connection.
+// This allows extracting TLS state from WebSocket connections.
+type underlyingConnGetter interface {
+	UnderlyingConn() net.Conn
+}
+
 // buildAuthContext creates an AuthContext from connection and CONNECT packet info.
 func buildAuthContext(conn net.Conn, connect *ConnectPacket, clientID string) *AuthContext {
 	actx := &AuthContext{
@@ -120,15 +126,37 @@ func buildAuthContext(conn net.Conn, connect *ConnectPacket, clientID string) *A
 	}
 
 	// Extract TLS certificate information if available
+	// Check the connection directly first, then check underlying connection
+	// (for WebSocket connections that wrap TLS)
+	extractTLSInfo(conn, actx)
+
+	return actx
+}
+
+// extractTLSInfo extracts TLS certificate information from a connection.
+// It handles both direct TLS connections and wrapped connections (e.g., WebSocket over TLS).
+func extractTLSInfo(conn net.Conn, actx *AuthContext) {
+	// First, try direct TLS connection
 	if tlsConn, ok := conn.(*tls.Conn); ok {
 		state := tlsConn.ConnectionState()
 		if len(state.PeerCertificates) > 0 {
 			actx.TLSCommonName = state.PeerCertificates[0].Subject.CommonName
 			actx.TLSVerified = len(state.VerifiedChains) > 0
 		}
+		return
 	}
 
-	return actx
+	// Check if connection wraps another connection (e.g., WSConn wrapping tls.Conn)
+	if wrapper, ok := conn.(underlyingConnGetter); ok {
+		underlying := wrapper.UnderlyingConn()
+		if tlsConn, ok := underlying.(*tls.Conn); ok {
+			state := tlsConn.ConnectionState()
+			if len(state.PeerCertificates) > 0 {
+				actx.TLSCommonName = state.PeerCertificates[0].Subject.CommonName
+				actx.TLSVerified = len(state.VerifiedChains) > 0
+			}
+		}
+	}
 }
 
 var (
@@ -522,10 +550,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 	// Register keep-alive
 	effectiveKeepAlive := s.keepAlive.Register(clientID, connect.KeepAlive)
 
-	// Register will message
+	// Register will message or cancel any pending will from prior connection
 	if connect.WillFlag {
 		will := WillMessageFromConnect(connect)
 		s.wills.Register(clientID, will)
+	} else {
+		// Client reconnected without a Will flag - cancel any pending will
+		// from a prior connection to prevent stale wills from being published
+		s.wills.CancelPending(clientID)
 	}
 
 	// Build CONNACK
@@ -563,8 +595,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 	if s.config.receiveMaximum < 65535 {
 		connack.Props.Set(PropReceiveMaximum, s.config.receiveMaximum)
 	}
+	// Advertise server's Maximum Packet Size so clients know the limit
+	// Per MQTT v5 spec, server SHOULD advertise this to prevent oversized packets
+	if s.config.maxPacketSize > 0 && s.config.maxPacketSize < 268435455 {
+		connack.Props.Set(PropMaximumPacketSize, s.config.maxPacketSize)
+	}
 
-	if _, err := WritePacket(conn, connack, s.config.maxPacketSize); err != nil {
+	// Use clientMaxPacketSize for CONNACK to respect client's advertised limit
+	if _, err := WritePacket(conn, connack, clientMaxPacketSize); err != nil {
 		s.removeClient(clientID, client)
 		return
 	}
@@ -1012,6 +1050,8 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 		remainingExpiry := msg.RemainingExpiry()
 
 		// Create delivery message
+		// IMPORTANT: When setting a new MessageExpiry, reset PublishedAt to now
+		// to prevent double-decrementing when RemainingExpiry() is called again
 		deliveryMsg := &Message{
 			Topic:           msg.Topic,
 			Payload:         msg.Payload,
@@ -1019,7 +1059,7 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 			Retain:          GetDeliveryRetain(entry.Subscription, msg.Retain),
 			PayloadFormat:   msg.PayloadFormat,
 			MessageExpiry:   remainingExpiry, // Use remaining expiry, not original
-			PublishedAt:     msg.PublishedAt,
+			PublishedAt:     time.Now(),      // Reset to now to match new MessageExpiry
 			ContentType:     msg.ContentType,
 			ResponseTopic:   msg.ResponseTopic,
 			CorrelationData: msg.CorrelationData,
@@ -1057,6 +1097,11 @@ func (s *Server) queueOfflineMessage(clientID string, msg *Message) {
 
 	// Use a monotonically increasing packet ID for pending messages
 	packetID := session.NextPacketID()
+	if packetID == 0 {
+		// Packet ID exhaustion - all 65535 IDs are in use
+		// Drop the message as per MQTT v5 spec when resources are exhausted
+		return
+	}
 	session.AddPendingMessage(packetID, msg)
 }
 
@@ -1143,19 +1188,27 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 				// Calculate remaining expiry for delivery
 				remainingExpiry := retMsg.RemainingExpiry()
 
-				client.Send(&Message{
+				// IMPORTANT: When setting a new MessageExpiry, reset PublishedAt to now
+				// to prevent double-decrementing when RemainingExpiry() is called again
+				deliveryMsg := &Message{
 					Topic:           retMsg.Topic,
 					Payload:         retMsg.Payload,
 					QoS:             deliveryQoS,
 					Retain:          retainFlag,
 					PayloadFormat:   retMsg.PayloadFormat,
 					MessageExpiry:   remainingExpiry,
-					PublishedAt:     retMsg.PublishedAt,
+					PublishedAt:     time.Now(), // Reset to now to match new MessageExpiry
 					ContentType:     retMsg.ContentType,
 					ResponseTopic:   retMsg.ResponseTopic,
 					CorrelationData: retMsg.CorrelationData,
 					UserProperties:  retMsg.UserProperties,
-				})
+				}
+
+				// Handle send failures for QoS > 0 retained messages
+				if err := client.Send(deliveryMsg); err != nil && deliveryQoS > 0 {
+					// Queue for later delivery if quota exceeded or connection issue
+					s.queueOfflineMessage(clientID, deliveryMsg)
+				}
 			}
 		}
 	}
@@ -1227,18 +1280,26 @@ func (s *Server) handleUnsubscribe(client *ServerClient, unsub *UnsubscribePacke
 // with the same ID could be removed by the old client's deferred cleanup.
 func (s *Server) removeClient(clientID string, client *ServerClient) {
 	s.mu.Lock()
+	removed := false
 	if client != nil {
 		// Only remove if the map entry still points to this client
 		if existing, ok := s.clients[clientID]; ok && existing == client {
 			delete(s.clients, clientID)
+			removed = true
 		}
 	} else {
 		delete(s.clients, clientID)
+		removed = true
 	}
 	s.mu.Unlock()
 
-	s.keepAlive.Unregister(clientID)
-	s.subs.UnsubscribeAll(clientID)
+	// Only unregister keep-alive and subscriptions if this client was actually removed.
+	// This prevents an old connection from unregistering a new client's state
+	// after session takeover.
+	if removed {
+		s.keepAlive.Unregister(clientID)
+		s.subs.UnsubscribeAll(clientID)
+	}
 }
 
 // deliverPendingMessages delivers queued messages to a reconnected client.
@@ -1248,6 +1309,11 @@ func (s *Server) deliverPendingMessages(client *ServerClient, session Session) {
 	for packetID, msg := range pendingMsgs {
 		// Remove from pending before attempting delivery
 		session.RemovePendingMessage(packetID)
+
+		// Check if message has expired - discard if so per MQTT v5 spec
+		if msg.IsExpired() {
+			continue
+		}
 
 		// Send the message - if it fails due to quota, it will be re-queued
 		if err := client.Send(msg); err != nil {

@@ -187,7 +187,6 @@ func (m *mockEnhancedAuthenticator) AuthContinue(_ context.Context, authCtx *Enh
 }
 
 // TestEnhancedAuthResultAssignedClientID tests that EnhancedAuthResult has AssignedClientID field.
-// This tests part of the fix for bug #5: enhanced auth wiring.
 func TestEnhancedAuthResultAssignedClientID(t *testing.T) {
 	result := &EnhancedAuthResult{
 		Success:          true,
@@ -207,7 +206,6 @@ func (a *nilResultAuthenticator) Authenticate(_ context.Context, _ *AuthContext)
 }
 
 // TestNilAuthResultHandling tests that the server properly handles nil auth results.
-// This tests the fix for bug #4: Authenticator nil result can panic.
 func TestNilAuthResultHandling(t *testing.T) {
 	auth := &nilResultAuthenticator{}
 	ctx := context.Background()

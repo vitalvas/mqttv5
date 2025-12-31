@@ -36,6 +36,11 @@ type Client struct {
 	pendingUnsubscribes map[uint16][]string // packet ID -> topic filters
 	pendingOpsMu        sync.Mutex
 
+	// Packet size limits
+	// outboundMaxPacketSize limits packets we send to the server (from CONNACK PropMaximumPacketSize)
+	// options.maxPacketSize limits packets we receive from the server (our configured limit)
+	outboundMaxPacketSize uint32
+
 	// Connection state
 	connected    atomic.Bool
 	reconnecting atomic.Bool
@@ -87,7 +92,7 @@ func DialContext(ctx context.Context, addr string, opts ...Option) (*Client, err
 	connectCtx, connectCancel := context.WithTimeout(ctx, options.connectTimeout)
 	defer connectCancel()
 
-	if err := c.connect(connectCtx); err != nil {
+	if _, err := c.connect(connectCtx); err != nil {
 		return nil, err
 	}
 
@@ -95,7 +100,9 @@ func DialContext(ctx context.Context, addr string, opts ...Option) (*Client, err
 }
 
 // connect establishes the TCP/TLS connection and performs MQTT handshake.
-func (c *Client) connect(ctx context.Context) error {
+// Returns (sessionPresent, error) where sessionPresent indicates if the server
+// resumed an existing session.
+func (c *Client) connect(ctx context.Context) (bool, error) {
 	// Cancel any existing goroutines from previous connection
 	if c.cancel != nil {
 		c.cancel()
@@ -118,7 +125,7 @@ func (c *Client) connect(ctx context.Context) error {
 	conn, err := c.dial(ctx)
 	if err != nil {
 		c.cancel()
-		return err
+		return false, err
 	}
 	c.conn = conn
 
@@ -167,7 +174,7 @@ func (c *Client) connect(ctx context.Context) error {
 	if err := c.writePacket(connectPkt); err != nil {
 		c.cancel()
 		c.conn.Close()
-		return fmt.Errorf("failed to send CONNECT: %w", err)
+		return false, fmt.Errorf("failed to send CONNECT: %w", err)
 	}
 
 	// Read CONNACK with timeout
@@ -178,22 +185,25 @@ func (c *Client) connect(ctx context.Context) error {
 	if err != nil {
 		c.cancel()
 		c.conn.Close()
-		return fmt.Errorf("failed to read CONNACK: %w", err)
+		return false, fmt.Errorf("failed to read CONNACK: %w", err)
 	}
 
 	connack, ok := pkt.(*ConnackPacket)
 	if !ok {
 		c.cancel()
 		c.conn.Close()
-		return fmt.Errorf("expected CONNACK, got %T", pkt)
+		return false, fmt.Errorf("expected CONNACK, got %T", pkt)
 	}
 
 	// Check reason code
 	if connack.ReasonCode != ReasonSuccess {
 		c.cancel()
 		c.conn.Close()
-		return NewConnectError(connack.ReasonCode, connack.Properties())
+		return false, NewConnectError(connack.ReasonCode, connack.Properties())
 	}
+
+	// Initialize outbound packet size limit to our configured max
+	c.outboundMaxPacketSize = c.options.maxPacketSize
 
 	// Apply CONNACK properties
 	props := connack.Properties()
@@ -207,9 +217,11 @@ func (c *Client) connect(ctx context.Context) error {
 		if serverKA := props.GetUint16(PropServerKeepAlive); serverKA > 0 {
 			c.options.keepAlive = serverKA
 		}
-		// Maximum Packet Size - limit our outbound packets
+		// Maximum Packet Size - limit our OUTBOUND packets only
+		// This limits what we can SEND to the server, NOT what we can receive
+		// options.maxPacketSize remains unchanged for inbound packet limiting
 		if maxPacketSize := props.GetUint32(PropMaximumPacketSize); maxPacketSize > 0 {
-			c.options.maxPacketSize = maxPacketSize
+			c.outboundMaxPacketSize = maxPacketSize
 		}
 		// Receive Maximum - limit outbound QoS 1/2 messages in flight
 		// Per MQTT v5 spec, client must not exceed server's advertised receive maximum
@@ -231,7 +243,7 @@ func (c *Client) connect(ctx context.Context) error {
 	// Emit connected event
 	c.emit(NewConnectedEvent(connack.SessionPresent, connack.Properties()))
 
-	return nil
+	return connack.SessionPresent, nil
 }
 
 // dial creates the network connection.
@@ -557,7 +569,14 @@ func (c *Client) writePacket(pkt Packet) error {
 		defer c.conn.SetWriteDeadline(time.Time{})
 	}
 
-	_, err := WritePacket(c.conn, pkt, c.options.maxPacketSize)
+	// Use outbound packet size limit for sending (from server's CONNACK PropMaximumPacketSize)
+	// If not yet set (before CONNACK), use our configured max
+	maxSize := c.outboundMaxPacketSize
+	if maxSize == 0 {
+		maxSize = c.options.maxPacketSize
+	}
+
+	_, err := WritePacket(c.conn, pkt, maxSize)
 	if err != nil {
 		return err
 	}
@@ -1004,6 +1023,29 @@ func (c *Client) restoreSubscriptions() {
 	}
 }
 
+// resetInflightState clears all inflight state when session is not present on reconnect.
+// This prevents stale entries from blocking publishes, leaking packet IDs, or causing
+// incorrect retransmissions when the server has no record of our previous session.
+func (c *Client) resetInflightState() {
+	// Reset QoS 1 tracker
+	c.qos1Tracker = NewQoS1Tracker(30*time.Second, 3)
+
+	// Reset QoS 2 tracker
+	c.qos2Tracker = NewQoS2Tracker(30*time.Second, 3)
+
+	// Reset packet ID manager
+	c.packetIDMgr = NewPacketIDManager()
+
+	// Reset server flow control to default (will be updated from next CONNACK)
+	c.serverFlowControl = NewFlowController(65535)
+
+	// Clear pending operations
+	c.pendingOpsMu.Lock()
+	c.pendingSubscribes = make(map[uint16][]string)
+	c.pendingUnsubscribes = make(map[uint16][]string)
+	c.pendingOpsMu.Unlock()
+}
+
 func (c *Client) reconnectLoop() {
 	if !c.options.autoReconnect || c.closed.Load() {
 		return
@@ -1038,19 +1080,30 @@ func (c *Client) reconnectLoop() {
 
 		// Try to reconnect
 		connectCtx, connectCancel := context.WithTimeout(context.Background(), c.options.connectTimeout)
-		err := c.connect(connectCtx)
+		sessionPresent, err := c.connect(connectCtx)
 		connectCancel()
 
 		if err == nil {
-			// Restore subscriptions after successful reconnect
-			c.restoreSubscriptions()
-			// Resend inflight QoS 1/2 messages per MQTT v5 spec
-			c.resendInflightMessages()
+			// Only restore subscriptions and resend inflight messages if session was NOT
+			// present. If session is present, the server has already stored our subscriptions
+			// and inflight messages, so resending would cause duplicates.
+			if !sessionPresent {
+				// Reset inflight state since server has no session for us
+				c.resetInflightState()
+				c.restoreSubscriptions()
+				c.resendInflightMessages()
+			}
 			return // Successfully reconnected
 		}
 
-		// Increase backoff
-		backoff *= 2
+		// Calculate next backoff duration
+		if c.options.backoffStrategy != nil {
+			// Use custom backoff strategy if provided
+			backoff = c.options.backoffStrategy(attempt, backoff, err)
+		} else {
+			// Default: exponential backoff (double)
+			backoff *= 2
+		}
 		if backoff > c.options.maxBackoff {
 			backoff = c.options.maxBackoff
 		}

@@ -85,7 +85,6 @@ func (a *nilResultAuthorizer) Authorize(_ context.Context, _ *AuthzContext) (*Au
 }
 
 // TestNilAuthzResultHandling tests that the server properly handles nil authz results.
-// This tests the fix for bug #4: Authorizer nil result can panic.
 func TestNilAuthzResultHandling(t *testing.T) {
 	authz := &nilResultAuthorizer{}
 	ctx := context.Background()

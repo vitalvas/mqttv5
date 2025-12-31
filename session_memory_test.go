@@ -523,7 +523,6 @@ func BenchmarkMemorySessionStoreGet(b *testing.B) {
 }
 
 // TestSessionFactory tests the SessionFactory type and DefaultSessionFactory.
-// This tests the fix for bug #6 and #7: hardcoded MemorySession.
 func TestSessionFactory(t *testing.T) {
 	t.Run("default session factory creates MemorySession", func(t *testing.T) {
 		factory := DefaultSessionFactory()
