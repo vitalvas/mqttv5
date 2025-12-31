@@ -60,9 +60,21 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 			return nil, "", false
 		}
 
-		// Return assigned client ID if set
-		if enhancedResult != nil && enhancedResult.AssignedClientID != "" {
-			return nil, enhancedResult.AssignedClientID, true
+		// Convert enhanced auth result to standard auth result for CONNACK properties
+		if enhancedResult != nil {
+			authResult := &AuthResult{
+				Success:          enhancedResult.Success,
+				ReasonCode:       enhancedResult.ReasonCode,
+				AssignedClientID: enhancedResult.AssignedClientID,
+			}
+			// Merge enhanced auth properties (Auth Data, User Properties, Reason String, etc.)
+			authResult.Properties.Merge(&enhancedResult.Properties)
+			// Add authentication method and data to response properties
+			authResult.Properties.Set(PropAuthenticationMethod, authMethod)
+			if len(enhancedResult.AuthData) > 0 {
+				authResult.Properties.Set(PropAuthenticationData, enhancedResult.AuthData)
+			}
+			return authResult, enhancedResult.AssignedClientID, true
 		}
 		return nil, "", true
 	}
@@ -231,6 +243,13 @@ func (s *Server) acceptLoop(listener net.Listener) {
 				s.config.logger.Warn("max connections reached", LogFields{
 					LogFieldRemoteAddr: conn.RemoteAddr().String(),
 				})
+				// Send CONNACK with ServerBusy before closing (best effort)
+				// Per MQTT spec, we should wait for CONNECT first, but this is
+				// a graceful rejection that gives the client a reason code
+				connack := &ConnackPacket{
+					ReasonCode: ReasonServerBusy,
+				}
+				WritePacket(conn, connack, s.config.maxPacketSize)
 				conn.Close()
 				continue
 			}
@@ -254,12 +273,17 @@ func (s *Server) Close() error {
 		listener.Close()
 	}
 
-	// Disconnect all clients
-	s.mu.Lock()
+	// Disconnect all clients - copy first to avoid holding lock during I/O
+	s.mu.RLock()
+	clients := make([]*ServerClient, 0, len(s.clients))
 	for _, client := range s.clients {
+		clients = append(clients, client)
+	}
+	s.mu.RUnlock()
+
+	for _, client := range clients {
 		client.Disconnect(ReasonServerShuttingDown)
 	}
-	s.mu.Unlock()
 
 	// Wait for all goroutines
 	s.wg.Wait()
@@ -315,10 +339,6 @@ func (s *Server) Publish(msg *Message) error {
 		client, ok := s.clients[entry.ClientID]
 		s.mu.RUnlock()
 
-		if !ok {
-			continue
-		}
-
 		// Determine delivery QoS (minimum of message QoS and subscription QoS)
 		deliveryQoS := msg.QoS
 		if entry.Subscription.QoS < deliveryQoS {
@@ -352,7 +372,19 @@ func (s *Server) Publish(msg *Message) error {
 			)
 		}
 
-		client.Send(deliveryMsg)
+		if !ok {
+			// Client is offline - queue QoS > 0 messages to session for later delivery
+			if deliveryQoS > 0 {
+				s.queueOfflineMessage(entry.ClientID, deliveryMsg)
+			}
+			continue
+		}
+
+		// Try to send, queue on failure for QoS > 0
+		if err := client.Send(deliveryMsg); err != nil && deliveryQoS > 0 {
+			// Queue for later delivery if quota exceeded or connection lost
+			s.queueOfflineMessage(entry.ClientID, deliveryMsg)
+		}
 	}
 
 	return nil
@@ -562,6 +594,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		session := client.Session()
 		if session != nil {
 			s.restoreInflightMessages(client, session, logger)
+			s.deliverPendingMessages(client, session)
 		}
 	}
 
@@ -969,10 +1002,6 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 		client, ok := s.clients[entry.ClientID]
 		s.mu.RUnlock()
 
-		if !ok {
-			continue
-		}
-
 		// Determine delivery QoS
 		deliveryQoS := msg.QoS
 		if entry.Subscription.QoS < deliveryQoS {
@@ -1002,8 +1031,33 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 			deliveryMsg.SubscriptionIdentifiers = entry.SubscriptionIDs
 		}
 
-		client.Send(deliveryMsg)
+		if !ok {
+			// Client is offline - queue QoS > 0 messages to session for later delivery
+			if deliveryQoS > 0 {
+				s.queueOfflineMessage(entry.ClientID, deliveryMsg)
+			}
+			continue
+		}
+
+		// Try to send, queue on failure for QoS > 0
+		if err := client.Send(deliveryMsg); err != nil && deliveryQoS > 0 {
+			// Queue for later delivery if quota exceeded or connection lost
+			s.queueOfflineMessage(entry.ClientID, deliveryMsg)
+		}
 	}
+}
+
+// queueOfflineMessage queues a message for later delivery to an offline client.
+// Only QoS > 0 messages should be queued (QoS 0 has no delivery guarantee).
+func (s *Server) queueOfflineMessage(clientID string, msg *Message) {
+	session, err := s.config.sessionStore.Get(clientID)
+	if err != nil {
+		return // No session exists for this client
+	}
+
+	// Use a monotonically increasing packet ID for pending messages
+	packetID := session.NextPacketID()
+	session.AddPendingMessage(packetID, msg)
 }
 
 func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, logger Logger) {
@@ -1106,9 +1160,17 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 		}
 	}
 
-	// Callback
+	// Callback - only include successful subscriptions
 	if s.config.onSubscribe != nil {
-		s.config.onSubscribe(client, sub.Subscriptions)
+		var grantedSubs []Subscription
+		for i, code := range reasonCodes {
+			if !code.IsError() && i < len(sub.Subscriptions) {
+				grantedSubs = append(grantedSubs, sub.Subscriptions[i])
+			}
+		}
+		if len(grantedSubs) > 0 {
+			s.config.onSubscribe(client, grantedSubs)
+		}
 	}
 
 	// Send SUBACK
@@ -1179,6 +1241,22 @@ func (s *Server) removeClient(clientID string, client *ServerClient) {
 	s.subs.UnsubscribeAll(clientID)
 }
 
+// deliverPendingMessages delivers queued messages to a reconnected client.
+// These are QoS > 0 messages that were queued while the client was offline.
+func (s *Server) deliverPendingMessages(client *ServerClient, session Session) {
+	pendingMsgs := session.PendingMessages()
+	for packetID, msg := range pendingMsgs {
+		// Remove from pending before attempting delivery
+		session.RemovePendingMessage(packetID)
+
+		// Send the message - if it fails due to quota, it will be re-queued
+		if err := client.Send(msg); err != nil {
+			// Re-queue if send failed
+			s.queueOfflineMessage(client.ClientID(), msg)
+		}
+	}
+}
+
 // restoreInflightMessages restores and resends inflight QoS messages from session.
 // Per MQTT v5 spec, messages are resent with DUP flag set on session resume.
 func (s *Server) restoreInflightMessages(client *ServerClient, session Session, logger Logger) {
@@ -1195,15 +1273,12 @@ func (s *Server) restoreInflightMessages(client *ServerClient, session Session, 
 			continue
 		}
 
-		// Resend with DUP flag
-		pub := &PublishPacket{
-			PacketID: packetID,
-			Topic:    msg.Message.Topic,
-			Payload:  msg.Message.Payload,
-			QoS:      1,
-			Retain:   msg.Message.Retain,
-			DUP:      true,
-		}
+		// Resend with DUP flag, preserving all message properties
+		pub := &PublishPacket{}
+		pub.FromMessage(msg.Message)
+		pub.PacketID = packetID
+		pub.QoS = 1 // Ensure QoS 1 for restored QoS 1 messages
+		pub.DUP = true
 		if n, err := WritePacket(conn, pub, s.config.maxPacketSize); err == nil {
 			s.config.metrics.BytesSent(n)
 			s.config.metrics.PacketSent(PacketPUBLISH)
@@ -1225,14 +1300,12 @@ func (s *Server) restoreInflightMessages(client *ServerClient, session Session, 
 					continue
 				}
 
-				pub := &PublishPacket{
-					PacketID: packetID,
-					Topic:    msg.Message.Topic,
-					Payload:  msg.Message.Payload,
-					QoS:      2,
-					Retain:   msg.Message.Retain,
-					DUP:      true,
-				}
+				// Resend with DUP flag, preserving all message properties
+				pub := &PublishPacket{}
+				pub.FromMessage(msg.Message)
+				pub.PacketID = packetID
+				pub.QoS = 2 // Ensure QoS 2 for restored QoS 2 messages
+				pub.DUP = true
 				if n, err := WritePacket(conn, pub, s.config.maxPacketSize); err == nil {
 					s.config.metrics.BytesSent(n)
 					s.config.metrics.PacketSent(PacketPUBLISH)
@@ -1261,13 +1334,20 @@ func (s *Server) restoreInflightMessages(client *ServerClient, session Session, 
 			// received PUBREL yet, we need to be ready to respond to PUBREL
 			switch msg.State {
 			case QoS2ReceivedPublish, QoS2AwaitingPubrel:
+				// Acquire inbound flow control quota for the restored message
+				// If quota is exceeded (e.g., lower receive maximum on reconnect),
+				// we must still restore the message but log the inconsistency
+				if !client.InboundFlowControl().TryAcquire() {
+					logger.Warn("inbound quota exceeded during QoS 2 session restore", LogFields{
+						"packetID": packetID,
+					})
+					// Continue anyway - we must handle the in-flight message
+				}
 				// Restore to tracker - client will resend PUBREL which we'll respond to
 				client.QoS2Tracker().TrackReceive(packetID, msg.Message)
 				if msg.State == QoS2AwaitingPubrel {
 					client.QoS2Tracker().SendPubrec(packetID)
 				}
-				// Acquire inbound flow control quota for the restored message
-				client.InboundFlowControl().TryAcquire()
 			}
 		}
 	}
@@ -1354,14 +1434,12 @@ func (s *Server) retryClientMessages(client *ServerClient) {
 
 	// Retry QoS 1 messages
 	for _, msg := range client.QoS1Tracker().GetPendingRetries() {
-		pub := &PublishPacket{
-			PacketID: msg.PacketID,
-			Topic:    msg.Message.Topic,
-			Payload:  msg.Message.Payload,
-			QoS:      1,
-			Retain:   msg.Message.Retain,
-			DUP:      true, // Set DUP flag for retransmission
-		}
+		// Retransmit with DUP flag, preserving all message properties
+		pub := &PublishPacket{}
+		pub.FromMessage(msg.Message)
+		pub.PacketID = msg.PacketID
+		pub.QoS = 1 // Ensure QoS 1 for QoS1Tracker messages
+		pub.DUP = true
 		WritePacket(conn, pub, s.config.maxPacketSize)
 	}
 
@@ -1369,15 +1447,12 @@ func (s *Server) retryClientMessages(client *ServerClient) {
 	for _, msg := range client.QoS2Tracker().GetPendingRetries() {
 		switch msg.State {
 		case QoS2AwaitingPubrec:
-			// Retransmit PUBLISH with DUP flag
-			pub := &PublishPacket{
-				PacketID: msg.PacketID,
-				Topic:    msg.Message.Topic,
-				Payload:  msg.Message.Payload,
-				QoS:      2,
-				Retain:   msg.Message.Retain,
-				DUP:      true,
-			}
+			// Retransmit PUBLISH with DUP flag, preserving all message properties
+			pub := &PublishPacket{}
+			pub.FromMessage(msg.Message)
+			pub.PacketID = msg.PacketID
+			pub.QoS = 2 // Ensure QoS 2 for QoS2Tracker messages
+			pub.DUP = true
 			WritePacket(conn, pub, s.config.maxPacketSize)
 		case QoS2AwaitingPubcomp:
 			// Retransmit PUBREL

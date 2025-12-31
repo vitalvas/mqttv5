@@ -58,17 +58,28 @@ func (s *MemoryRetainedStore) Delete(topic string) bool {
 }
 
 // Match returns all retained messages matching a topic filter.
-// Expired messages are excluded from the result.
+// Expired messages are excluded from the result and purged from storage.
 func (s *MemoryRetainedStore) Match(filter string) []*RetainedMessage {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	var matched []*RetainedMessage
+	var expired []string
 	for topic, msg := range s.messages {
-		if TopicMatch(filter, topic) && !msg.IsExpired() {
+		if msg.IsExpired() {
+			expired = append(expired, topic)
+			continue
+		}
+		if TopicMatch(filter, topic) {
 			matched = append(matched, msg)
 		}
 	}
+
+	// Purge expired messages
+	for _, topic := range expired {
+		delete(s.messages, topic)
+	}
+
 	return matched
 }
 
@@ -87,13 +98,45 @@ func (s *MemoryRetainedStore) Count() int {
 }
 
 // Topics returns all topics with retained messages.
+// Expired messages are excluded and purged.
 func (s *MemoryRetainedStore) Topics() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	topics := make([]string, 0, len(s.messages))
-	for topic := range s.messages {
+	var expired []string
+	for topic, msg := range s.messages {
+		if msg.IsExpired() {
+			expired = append(expired, topic)
+			continue
+		}
 		topics = append(topics, topic)
 	}
+
+	// Purge expired messages
+	for _, topic := range expired {
+		delete(s.messages, topic)
+	}
+
 	return topics
+}
+
+// Cleanup removes all expired retained messages.
+// Returns the number of messages removed.
+func (s *MemoryRetainedStore) Cleanup() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var expired []string
+	for topic, msg := range s.messages {
+		if msg.IsExpired() {
+			expired = append(expired, topic)
+		}
+	}
+
+	for _, topic := range expired {
+		delete(s.messages, topic)
+	}
+
+	return len(expired)
 }

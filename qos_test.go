@@ -408,3 +408,22 @@ func TestQoS2TrackerPubrelRetransmission(t *testing.T) {
 		assert.Nil(t, result2)
 	})
 }
+
+func TestQoS2TrackerCleanupCompleted(t *testing.T) {
+	t.Run("CleanupCompleted removes old entries", func(t *testing.T) {
+		tracker := NewQoS2Tracker(10*time.Millisecond, 3)
+
+		// Track and complete a message
+		msg := &Message{Topic: "test", Payload: []byte("data")}
+		tracker.TrackReceive(1, msg)
+		tracker.SendPubrec(1)
+		tracker.HandlePubrel(1) // This marks it as completed
+
+		// Wait for cleanup threshold
+		time.Sleep(25 * time.Millisecond)
+
+		// Cleanup should remove the completed entry
+		removed := tracker.CleanupCompleted()
+		assert.Equal(t, 1, removed, "should remove completed entry")
+	})
+}

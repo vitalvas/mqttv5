@@ -202,6 +202,11 @@ func (c *ServerClient) Send(msg *Message) error {
 	if msg.QoS > 0 {
 		if c.session != nil {
 			pub.PacketID = c.session.NextPacketID()
+			if pub.PacketID == 0 {
+				// All packet IDs exhausted - release flow control and return error
+				c.flowControl.Release()
+				return ErrPacketIDExhausted
+			}
 		}
 		// Track for acknowledgment
 		switch msg.QoS {

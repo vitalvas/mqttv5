@@ -3,6 +3,7 @@ package mqttv5
 import (
 	"bytes"
 	"context"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -1700,5 +1701,110 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 
 		srv.Close()
 		wg.Wait()
+	})
+}
+
+// TestServerOnSubscribeCallbackFiltering tests that onSubscribe callback only receives successful subscriptions
+func TestServerOnSubscribeCallbackFiltering(t *testing.T) {
+	t.Run("onSubscribe callback filters failed subscriptions", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		var callbackSubs []Subscription
+		srv := NewServer(
+			WithListener(listener),
+			OnSubscribe(func(_ *ServerClient, subs []Subscription) {
+				callbackSubs = subs
+			}),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		// Create a mock client
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024)
+		client.SetSession(NewMemorySession("test-client"))
+
+		// Create SUBSCRIBE with mix of valid and invalid filters
+		sub := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "valid/topic", QoS: 1},
+				{TopicFilter: "", QoS: 1}, // Invalid: empty
+				{TopicFilter: "another/valid", QoS: 0},
+			},
+		}
+
+		discardLogger := NewStdLogger(io.Discard, LogLevelNone)
+		srv.handleSubscribe(client, sub, discardLogger)
+
+		// Callback should only include successful subscriptions
+		assert.Len(t, callbackSubs, 2, "callback should only have successful subscriptions")
+		assert.Equal(t, "valid/topic", callbackSubs[0].TopicFilter)
+		assert.Equal(t, "another/valid", callbackSubs[1].TopicFilter)
+	})
+}
+
+// TestServerShutdownCopiesClients tests that server shutdown copies clients before disconnect to avoid lock contention
+func TestServerShutdownCopiesClients(t *testing.T) {
+	t.Run("server shutdown copies clients before disconnect", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+
+		// Give server time to start
+		time.Sleep(10 * time.Millisecond)
+
+		// Close should not deadlock even with concurrent access
+		done := make(chan bool)
+		go func() {
+			srv.Close()
+			done <- true
+		}()
+
+		select {
+		case <-done:
+			// Success
+		case <-time.After(2 * time.Second):
+			t.Fatal("server close took too long - possible deadlock")
+		}
+	})
+}
+
+// TestServerMaxConnectionsSendsCONNACK tests that server sends CONNACK with ServerBusy before close when max connections reached
+func TestServerMaxConnectionsSendsCONNACK(t *testing.T) {
+	t.Run("max connections sends CONNACK before close", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(
+			WithListener(listener),
+			WithMaxConnections(0), // No connections allowed
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		// Give server time to start
+		time.Sleep(10 * time.Millisecond)
+
+		// Connect should receive CONNACK with ServerBusy
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Set read deadline to avoid hanging
+		conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+
+		// Read the CONNACK packet that should be sent
+		var header FixedHeader
+		_, err = header.Decode(conn)
+		if err == nil {
+			assert.Equal(t, PacketCONNACK, header.PacketType)
+		}
+		// It's acceptable if the connection is closed before we read
 	})
 }

@@ -81,6 +81,19 @@ func TestMemorySession(t *testing.T) {
 		assert.Equal(t, uint16(2), id3)
 	})
 
+	t.Run("packet ID exhaustion returns zero", func(t *testing.T) {
+		session := NewMemorySession("test")
+
+		// Fill all packet IDs (exhaust them)
+		for i := uint16(1); i != 0; i++ {
+			session.AddInflightQoS1(i, &QoS1Message{PacketID: i})
+		}
+
+		// NextPacketID should return 0 when exhausted
+		id := session.NextPacketID()
+		assert.Equal(t, uint16(0), id, "exhausted packet IDs should return 0")
+	})
+
 	t.Run("pending messages", func(t *testing.T) {
 		session := NewMemorySession("client-1")
 

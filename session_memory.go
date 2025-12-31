@@ -106,9 +106,9 @@ func (s *MemorySession) NextPacketID() uint16 {
 		return s.packetIDCounter
 	}
 
-	// All packet IDs exhausted (extremely unlikely with flow control)
-	// Return the counter anyway - caller should handle this edge case
-	return s.packetIDCounter
+	// All packet IDs exhausted - return 0 to signal exhaustion
+	// Callers must check for 0 and handle appropriately
+	return 0
 }
 
 func (s *MemorySession) AddPendingMessage(packetID uint16, msg *Message) {

@@ -224,3 +224,20 @@ func BenchmarkBidirectionalFlowController(b *testing.B) {
 		bfc.ReleaseSend()
 	}
 }
+
+func TestFlowControllerServerReceiveMaximum(t *testing.T) {
+	t.Run("client flow control respects server receive maximum", func(t *testing.T) {
+		fc := NewFlowController(2) // Server advertises receive maximum of 2
+
+		// Should be able to acquire 2
+		assert.True(t, fc.TryAcquire())
+		assert.True(t, fc.TryAcquire())
+
+		// Third should fail
+		assert.False(t, fc.TryAcquire(), "should not exceed receive maximum")
+
+		// After release, should be able to acquire again
+		fc.Release()
+		assert.True(t, fc.TryAcquire())
+	})
+}

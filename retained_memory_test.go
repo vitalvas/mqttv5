@@ -263,6 +263,66 @@ func TestMemoryRetainedStore(t *testing.T) {
 		assert.Len(t, matched, 1)
 		assert.Equal(t, "active/topic", matched[0].Topic)
 	})
+
+	t.Run("match purges expired messages from storage", func(t *testing.T) {
+		store := NewMemoryRetainedStore()
+
+		// Add a message that expires immediately
+		msg := &RetainedMessage{
+			Topic:         "test/expired",
+			Payload:       []byte("data"),
+			QoS:           1,
+			MessageExpiry: 1,
+			PublishedAt:   time.Now().Add(-2 * time.Second),
+		}
+		store.Set(msg)
+
+		// Initial count should be 1
+		assert.Equal(t, 1, store.Count())
+
+		// Match should exclude and purge expired messages
+		matched := store.Match("test/#")
+		assert.Empty(t, matched, "expired messages should not be matched")
+		assert.Equal(t, 0, store.Count(), "expired messages should be purged")
+	})
+
+	t.Run("topics purges expired messages", func(t *testing.T) {
+		store := NewMemoryRetainedStore()
+
+		// Add an expired message
+		store.Set(&RetainedMessage{
+			Topic:         "test/expired",
+			Payload:       []byte("data"),
+			QoS:           1,
+			MessageExpiry: 1,
+			PublishedAt:   time.Now().Add(-2 * time.Second),
+		})
+
+		// Topics should exclude and purge expired messages
+		topics := store.Topics()
+		assert.Empty(t, topics, "expired messages should not be in topics")
+		assert.Equal(t, 0, store.Count(), "expired messages should be purged")
+	})
+
+	t.Run("cleanup removes expired messages", func(t *testing.T) {
+		store := NewMemoryRetainedStore()
+
+		// Add expired and non-expired messages
+		store.Set(&RetainedMessage{
+			Topic:         "test/expired",
+			Payload:       []byte("data"),
+			MessageExpiry: 1,
+			PublishedAt:   time.Now().Add(-2 * time.Second),
+		})
+		store.Set(&RetainedMessage{
+			Topic:   "test/active",
+			Payload: []byte("data"),
+		})
+
+		removed := store.Cleanup()
+		assert.Equal(t, 1, removed, "should remove 1 expired message")
+		assert.Equal(t, 1, store.Count(), "should have 1 active message")
+	})
 }
 
 func TestRetainedMessageExpiry(t *testing.T) {

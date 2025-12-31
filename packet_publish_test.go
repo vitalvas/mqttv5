@@ -577,3 +577,44 @@ func FuzzPublishPacketDecode(f *testing.F) {
 		_, _ = p.Decode(bytes.NewReader(remaining), header)
 	})
 }
+
+func TestPublishPacketRetransmissionPreservesProperties(t *testing.T) {
+	t.Run("retransmitted PUBLISH preserves properties", func(t *testing.T) {
+		// Create a message with properties
+		msg := &Message{
+			Topic:           "test/topic",
+			Payload:         []byte("data"),
+			QoS:             1,
+			ContentType:     "application/json",
+			ResponseTopic:   "response/topic",
+			CorrelationData: []byte("correlation"),
+			UserProperties: []StringPair{
+				{Key: "key", Value: "value"},
+			},
+			MessageExpiry: 3600,
+		}
+
+		// Create a PUBLISH packet using FromMessage
+		pub := &PublishPacket{}
+		pub.FromMessage(msg)
+		pub.PacketID = 1
+		pub.QoS = 1 // Ensure QoS is set correctly for retransmission
+		pub.DUP = true
+
+		// Verify properties are preserved
+		assert.Equal(t, "test/topic", pub.Topic)
+		assert.Equal(t, []byte("data"), pub.Payload)
+		assert.Equal(t, byte(1), pub.QoS)
+		assert.True(t, pub.DUP)
+
+		// Check properties are set
+		contentType := pub.Props.GetString(PropContentType)
+		assert.Equal(t, "application/json", contentType)
+
+		responseTopic := pub.Props.GetString(PropResponseTopic)
+		assert.Equal(t, "response/topic", responseTopic)
+
+		correlationData := pub.Props.GetBinary(PropCorrelationData)
+		assert.Equal(t, []byte("correlation"), correlationData)
+	})
+}

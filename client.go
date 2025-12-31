@@ -21,10 +21,11 @@ type Client struct {
 	addr    string
 
 	// Session state
-	session     Session
-	packetIDMgr *PacketIDManager
-	qos1Tracker *QoS1Tracker
-	qos2Tracker *QoS2Tracker
+	session           Session
+	packetIDMgr       *PacketIDManager
+	qos1Tracker       *QoS1Tracker
+	qos2Tracker       *QoS2Tracker
+	serverFlowControl *FlowController // limits outbound QoS 1/2 per server's Receive Maximum
 
 	// Subscriptions with handlers
 	subscriptions   map[string]MessageHandler
@@ -72,6 +73,7 @@ func DialContext(ctx context.Context, addr string, opts ...Option) (*Client, err
 		packetIDMgr:         NewPacketIDManager(),
 		qos1Tracker:         NewQoS1Tracker(30*time.Second, 3),
 		qos2Tracker:         NewQoS2Tracker(30*time.Second, 3),
+		serverFlowControl:   NewFlowController(65535), // Default, updated from CONNACK
 		done:                make(chan struct{}),
 	}
 
@@ -208,6 +210,11 @@ func (c *Client) connect(ctx context.Context) error {
 		// Maximum Packet Size - limit our outbound packets
 		if maxPacketSize := props.GetUint32(PropMaximumPacketSize); maxPacketSize > 0 {
 			c.options.maxPacketSize = maxPacketSize
+		}
+		// Receive Maximum - limit outbound QoS 1/2 messages in flight
+		// Per MQTT v5 spec, client must not exceed server's advertised receive maximum
+		if serverRM := props.GetUint16(PropReceiveMaximum); serverRM > 0 {
+			c.serverFlowControl.SetReceiveMaximum(serverRM)
 		}
 		// Topic Alias Maximum - limit topic aliases we can use
 		// (stored for future use when sending publishes)
@@ -349,8 +356,14 @@ func (c *Client) Publish(msg *Message) error {
 
 	// Assign packet ID for QoS > 0
 	if msg.QoS > 0 {
+		// Check flow control before sending (per MQTT v5 spec)
+		if !c.serverFlowControl.TryAcquire() {
+			return ErrQuotaExceeded
+		}
+
 		packetID, err := c.packetIDMgr.Allocate()
 		if err != nil {
+			c.serverFlowControl.Release()
 			return err
 		}
 		pkt.PacketID = packetID
@@ -366,6 +379,7 @@ func (c *Client) Publish(msg *Message) error {
 
 	if err := c.writePacket(pkt); err != nil {
 		if msg.QoS > 0 {
+			c.serverFlowControl.Release()
 			_ = c.packetIDMgr.Release(pkt.PacketID)
 			// Use Remove to unconditionally remove tracker entry regardless of state
 			switch msg.QoS {
@@ -621,10 +635,11 @@ func (c *Client) handlePacket(pkt Packet) {
 	case *DisconnectPacket:
 		c.handleDisconnect(p)
 	case *AuthPacket:
-		// Enhanced authentication (SASL mechanisms like SCRAM) is not implemented.
-		// The AUTH packet is received but not processed. Standard username/password
-		// authentication via CONNECT packet is fully supported.
-		// See MQTT v5.0 spec Section 4.12 for enhanced authentication details.
+		// Enhanced authentication is not implemented on the client side.
+		// Per MQTT v5.0 spec, if we receive an AUTH packet but don't support
+		// enhanced auth, we should disconnect with protocol error.
+		c.emit(NewDisconnectError(ReasonProtocolError, nil, true))
+		c.CloseWithCode(ReasonProtocolError)
 	}
 }
 
@@ -678,7 +693,9 @@ func (c *Client) deliverMessage(msg *Message, topic string) {
 
 // handlePuback processes a PUBACK packet.
 func (c *Client) handlePuback(pkt *PubackPacket) {
-	c.qos1Tracker.Acknowledge(pkt.PacketID)
+	if _, ok := c.qos1Tracker.Acknowledge(pkt.PacketID); ok {
+		c.serverFlowControl.Release()
+	}
 	c.packetIDMgr.Release(pkt.PacketID)
 }
 
@@ -712,7 +729,9 @@ func (c *Client) handlePubrel(pkt *PubrelPacket) {
 
 // handlePubcomp processes a PUBCOMP packet.
 func (c *Client) handlePubcomp(pkt *PubcompPacket) {
-	c.qos2Tracker.HandlePubcomp(pkt.PacketID)
+	if _, ok := c.qos2Tracker.HandlePubcomp(pkt.PacketID); ok {
+		c.serverFlowControl.Release()
+	}
 	c.packetIDMgr.Release(pkt.PacketID)
 }
 
@@ -842,31 +861,25 @@ func (c *Client) qosRetryLoop() {
 				continue
 			}
 
-			// Retry QoS 1 messages with DUP flag
+			// Retry QoS 1 messages with DUP flag, preserving all message properties
 			for _, msg := range c.qos1Tracker.GetPendingRetries() {
-				pub := &PublishPacket{
-					PacketID: msg.PacketID,
-					Topic:    msg.Message.Topic,
-					Payload:  msg.Message.Payload,
-					QoS:      1,
-					Retain:   msg.Message.Retain,
-					DUP:      true, // Set DUP flag for retransmission
-				}
+				pub := &PublishPacket{}
+				pub.FromMessage(msg.Message)
+				pub.PacketID = msg.PacketID
+				pub.QoS = 1 // Ensure QoS 1 for QoS1Tracker messages
+				pub.DUP = true
 				c.writePacket(pub)
 			}
 
-			// Retry QoS 2 messages with DUP flag
+			// Retry QoS 2 messages with DUP flag, preserving all message properties
 			for _, msg := range c.qos2Tracker.GetPendingRetries() {
 				switch msg.State {
 				case QoS2AwaitingPubrec:
-					pub := &PublishPacket{
-						PacketID: msg.PacketID,
-						Topic:    msg.Message.Topic,
-						Payload:  msg.Message.Payload,
-						QoS:      2,
-						Retain:   msg.Message.Retain,
-						DUP:      true,
-					}
+					pub := &PublishPacket{}
+					pub.FromMessage(msg.Message)
+					pub.PacketID = msg.PacketID
+					pub.QoS = 2 // Ensure QoS 2 for QoS2Tracker messages
+					pub.DUP = true
 					c.writePacket(pub)
 				case QoS2AwaitingPubcomp:
 					pubrel := &PubrelPacket{PacketID: msg.PacketID}
@@ -874,9 +887,10 @@ func (c *Client) qosRetryLoop() {
 				}
 			}
 
-			// Cleanup expired messages
+			// Cleanup expired messages and completed QoS 2 entries
 			c.qos1Tracker.CleanupExpired()
 			c.qos2Tracker.CleanupExpired()
+			c.qos2Tracker.CleanupCompleted()
 		}
 	}
 }
@@ -888,6 +902,52 @@ func generateClientID() string {
 
 // reconnectLoop handles automatic reconnection.
 // This is a placeholder that will be expanded in client_events.go.
+// resendInflightMessages resends all inflight QoS 1/2 messages after reconnect.
+// Per MQTT v5 spec, messages are resent with DUP flag set on session resume.
+func (c *Client) resendInflightMessages() {
+	// Resend QoS 1 messages
+	c.qos1Tracker.mu.RLock()
+	qos1Messages := make([]*QoS1Message, 0, len(c.qos1Tracker.messages))
+	for _, msg := range c.qos1Tracker.messages {
+		qos1Messages = append(qos1Messages, msg)
+	}
+	c.qos1Tracker.mu.RUnlock()
+
+	for _, msg := range qos1Messages {
+		pub := &PublishPacket{}
+		pub.FromMessage(msg.Message)
+		pub.PacketID = msg.PacketID
+		pub.QoS = 1 // Ensure QoS 1 for QoS1Tracker messages
+		pub.DUP = true
+		c.writePacket(pub)
+	}
+
+	// Resend QoS 2 messages based on state
+	c.qos2Tracker.mu.RLock()
+	qos2Messages := make([]*QoS2Message, 0, len(c.qos2Tracker.messages))
+	for _, msg := range c.qos2Tracker.messages {
+		qos2Messages = append(qos2Messages, msg)
+	}
+	c.qos2Tracker.mu.RUnlock()
+
+	for _, msg := range qos2Messages {
+		switch msg.State {
+		case QoS2AwaitingPubrec:
+			// Resend PUBLISH with DUP flag
+			pub := &PublishPacket{}
+			pub.FromMessage(msg.Message)
+			pub.PacketID = msg.PacketID
+			pub.QoS = 2 // Ensure QoS 2 for QoS2Tracker messages
+			pub.DUP = true
+			c.writePacket(pub)
+		case QoS2AwaitingPubcomp:
+			// Resend PUBREL
+			pubrel := &PubrelPacket{PacketID: msg.PacketID}
+			c.writePacket(pubrel)
+		}
+	}
+}
+
 // restoreSubscriptions re-subscribes to all stored subscriptions after reconnect.
 func (c *Client) restoreSubscriptions() {
 	c.subscriptionsMu.RLock()
@@ -984,6 +1044,8 @@ func (c *Client) reconnectLoop() {
 		if err == nil {
 			// Restore subscriptions after successful reconnect
 			c.restoreSubscriptions()
+			// Resend inflight QoS 1/2 messages per MQTT v5 spec
+			c.resendInflightMessages()
 			return // Successfully reconnected
 		}
 
