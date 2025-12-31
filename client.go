@@ -264,6 +264,8 @@ func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 			host = net.JoinHostPort(u.Hostname(), "80")
 		case "wss":
 			host = net.JoinHostPort(u.Hostname(), "443")
+		case "quic":
+			host = net.JoinHostPort(u.Hostname(), "8883")
 		}
 	}
 
@@ -289,6 +291,25 @@ func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 		wsConn, err = wsDialer.Dial(ctx, c.addr)
 		if wsConn != nil {
 			conn = wsConn.(net.Conn)
+		}
+	case "unix":
+		// Unix socket: unix:///path/to/socket or unix://localhost/path/to/socket
+		socketPath := u.Path
+		if socketPath == "" {
+			socketPath = u.Host + u.Path
+		}
+		unixDialer := NewUnixDialer()
+		var unixConn Conn
+		unixConn, err = unixDialer.Dial(ctx, socketPath)
+		if unixConn != nil {
+			conn = unixConn.(net.Conn)
+		}
+	case "quic":
+		quicDialer := NewQUICDialer(c.options.tlsConfig)
+		var quicConn Conn
+		quicConn, err = quicDialer.Dial(ctx, host)
+		if quicConn != nil {
+			conn = quicConn.(net.Conn)
 		}
 	default:
 		return nil, fmt.Errorf("unsupported scheme: %s", u.Scheme)
