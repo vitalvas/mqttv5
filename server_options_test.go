@@ -56,6 +56,13 @@ func TestServerOptions(t *testing.T) {
 		assert.Equal(t, uint32(1024*1024), cfg.maxPacketSize)
 	})
 
+	t.Run("with max packet size exceeding protocol limit", func(t *testing.T) {
+		cfg := defaultServerConfig()
+		WithServerMaxPacketSize(MaxPacketSizeProtocol + 1000)(cfg)
+
+		assert.Equal(t, uint32(MaxPacketSizeProtocol), cfg.maxPacketSize)
+	})
+
 	t.Run("with max connections", func(t *testing.T) {
 		cfg := defaultServerConfig()
 		WithMaxConnections(100)(cfg)

@@ -12,9 +12,6 @@ const (
 	// The remaining length field uses variable byte encoding with max 4 bytes.
 	MaxPacketSizeProtocol = 268435455 // 256MB - 1
 
-	// MaxPacketSizeAWSIoT is the maximum packet size for AWS IoT Core (128KB).
-	MaxPacketSizeAWSIoT = 128 * 1024 // 128KB
-
 	// MaxPacketSizeMinimal is a minimal packet size for constrained devices (16KB).
 	MaxPacketSizeMinimal = 16 * 1024 // 16KB
 )
@@ -59,7 +56,7 @@ func defaultServerConfig() *serverConfig {
 		logger:             NewNoOpLogger(),
 		metrics:            &NoOpMetrics{},
 		maxPacketSize:      MaxPacketSizeDefault,
-		maxConnections:     0,          // unlimited
+		maxConnections:     0, // unlimited
 		receiveMaximum:     65535,
 	}
 }
@@ -135,12 +132,16 @@ func WithNamespaceValidator(validator NamespaceValidator) ServerOption {
 // The MQTT protocol supports up to 256MB (MaxPacketSizeProtocol), but practical
 // limits are much lower. Common values:
 //   - MaxPacketSizeDefault (4MB): typical broker default
-//   - MaxPacketSizeAWSIoT (128KB): AWS IoT Core limit
 //   - MaxPacketSizeMinimal (16KB): constrained IoT devices
+//
+// Values exceeding MaxPacketSizeProtocol are clamped to the protocol maximum.
 //
 // Default: MaxPacketSizeDefault (4MB)
 func WithServerMaxPacketSize(size uint32) ServerOption {
 	return func(c *serverConfig) {
+		if size > MaxPacketSizeProtocol {
+			size = MaxPacketSizeProtocol
+		}
 		c.maxPacketSize = size
 	}
 }

@@ -197,12 +197,16 @@ func WithWillProps(props *Properties) Option {
 //
 // Common values:
 //   - MaxPacketSizeDefault (4MB): typical broker default
-//   - MaxPacketSizeAWSIoT (128KB): AWS IoT Core limit
 //   - MaxPacketSizeMinimal (16KB): constrained IoT devices
+//
+// Values exceeding MaxPacketSizeProtocol are clamped to the protocol maximum.
 //
 // Default: MaxPacketSizeDefault (4MB)
 func WithMaxPacketSize(size uint32) Option {
 	return func(o *clientOptions) {
+		if size > MaxPacketSizeProtocol {
+			size = MaxPacketSizeProtocol
+		}
 		o.maxPacketSize = size
 	}
 }

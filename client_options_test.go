@@ -115,8 +115,15 @@ func TestWithWillProps(t *testing.T) {
 }
 
 func TestWithMaxPacketSize(t *testing.T) {
-	opts := applyOptions(WithMaxPacketSize(1024 * 1024))
-	assert.Equal(t, uint32(1024*1024), opts.maxPacketSize)
+	t.Run("set value", func(t *testing.T) {
+		opts := applyOptions(WithMaxPacketSize(1024 * 1024))
+		assert.Equal(t, uint32(1024*1024), opts.maxPacketSize)
+	})
+
+	t.Run("exceeding protocol limit is clamped", func(t *testing.T) {
+		opts := applyOptions(WithMaxPacketSize(MaxPacketSizeProtocol + 1000))
+		assert.Equal(t, uint32(MaxPacketSizeProtocol), opts.maxPacketSize)
+	})
 }
 
 func TestWithSessionExpiryInterval(t *testing.T) {
