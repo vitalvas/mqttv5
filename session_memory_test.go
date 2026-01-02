@@ -401,6 +401,131 @@ func TestMemorySessionStore(t *testing.T) {
 	})
 }
 
+func TestMemorySessionStoreNamespaceIsolation(t *testing.T) {
+	t.Run("same clientID different namespaces are separate sessions", func(t *testing.T) {
+		store := NewMemorySessionStore()
+
+		// Create sessions with same clientID but different namespaces
+		sessionA := NewMemorySession("client-1", "tenant-a")
+		sessionA.AddSubscription(Subscription{TopicFilter: "topic-a", QoS: 0})
+
+		sessionB := NewMemorySession("client-1", "tenant-b")
+		sessionB.AddSubscription(Subscription{TopicFilter: "topic-b", QoS: 1})
+
+		err := store.Create("tenant-a", sessionA)
+		require.NoError(t, err)
+
+		err = store.Create("tenant-b", sessionB)
+		require.NoError(t, err)
+
+		// Both sessions should exist independently
+		gotA, err := store.Get("tenant-a", "client-1")
+		require.NoError(t, err)
+		assert.True(t, gotA.HasSubscription("topic-a"))
+		assert.False(t, gotA.HasSubscription("topic-b"))
+
+		gotB, err := store.Get("tenant-b", "client-1")
+		require.NoError(t, err)
+		assert.True(t, gotB.HasSubscription("topic-b"))
+		assert.False(t, gotB.HasSubscription("topic-a"))
+	})
+
+	t.Run("delete only affects own namespace", func(t *testing.T) {
+		store := NewMemorySessionStore()
+
+		err := store.Create("tenant-a", NewMemorySession("client-1", "tenant-a"))
+		require.NoError(t, err)
+		err = store.Create("tenant-b", NewMemorySession("client-1", "tenant-b"))
+		require.NoError(t, err)
+
+		// Delete from tenant-a
+		err = store.Delete("tenant-a", "client-1")
+		require.NoError(t, err)
+
+		// tenant-a session should be gone
+		_, err = store.Get("tenant-a", "client-1")
+		assert.ErrorIs(t, err, ErrSessionNotFound)
+
+		// tenant-b session should still exist
+		_, err = store.Get("tenant-b", "client-1")
+		require.NoError(t, err)
+	})
+
+	t.Run("update only affects own namespace", func(t *testing.T) {
+		store := NewMemorySessionStore()
+
+		sessionA := NewMemorySession("client-1", "tenant-a")
+		sessionB := NewMemorySession("client-1", "tenant-b")
+
+		err := store.Create("tenant-a", sessionA)
+		require.NoError(t, err)
+		err = store.Create("tenant-b", sessionB)
+		require.NoError(t, err)
+
+		// Update tenant-a session
+		sessionA.AddSubscription(Subscription{TopicFilter: "updated", QoS: 2})
+		err = store.Update("tenant-a", sessionA)
+		require.NoError(t, err)
+
+		// tenant-a should have the update
+		gotA, _ := store.Get("tenant-a", "client-1")
+		assert.True(t, gotA.HasSubscription("updated"))
+
+		// tenant-b should not have the subscription
+		gotB, _ := store.Get("tenant-b", "client-1")
+		assert.False(t, gotB.HasSubscription("updated"))
+	})
+
+	t.Run("list returns sessions from all namespaces", func(t *testing.T) {
+		store := NewMemorySessionStore()
+
+		err := store.Create("tenant-a", NewMemorySession("client-1", "tenant-a"))
+		require.NoError(t, err)
+		err = store.Create("tenant-a", NewMemorySession("client-2", "tenant-a"))
+		require.NoError(t, err)
+		err = store.Create("tenant-b", NewMemorySession("client-1", "tenant-b"))
+		require.NoError(t, err)
+
+		sessions := store.List()
+		assert.Len(t, sessions, 3)
+
+		// Verify we have sessions from both namespaces
+		namespaces := make(map[string]int)
+		for _, s := range sessions {
+			namespaces[s.Namespace()]++
+		}
+		assert.Equal(t, 2, namespaces["tenant-a"])
+		assert.Equal(t, 1, namespaces["tenant-b"])
+	})
+
+	t.Run("cleanup respects namespace boundaries", func(t *testing.T) {
+		store := NewMemorySessionStore()
+
+		// Expired session in tenant-a
+		expiredA := NewMemorySession("client-1", "tenant-a")
+		expiredA.SetExpiryTime(time.Now().Add(-time.Hour))
+		err := store.Create("tenant-a", expiredA)
+		require.NoError(t, err)
+
+		// Valid session with same clientID in tenant-b
+		validB := NewMemorySession("client-1", "tenant-b")
+		validB.SetExpiryTime(time.Now().Add(time.Hour))
+		err = store.Create("tenant-b", validB)
+		require.NoError(t, err)
+
+		count := store.Cleanup()
+		assert.Equal(t, 1, count)
+
+		// tenant-a session should be cleaned up
+		_, err = store.Get("tenant-a", "client-1")
+		assert.ErrorIs(t, err, ErrSessionNotFound)
+
+		// tenant-b session should still exist
+		_, err = store.Get("tenant-b", "client-1")
+		require.NoError(t, err)
+	})
+}
+
 func TestMemorySessionConcurrency(_ *testing.T) {
 	session := NewMemorySession("client-1", testNS)
 	var wg sync.WaitGroup

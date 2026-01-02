@@ -2,6 +2,7 @@ package mqttv5
 
 import (
 	"expvar"
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -85,8 +86,8 @@ func NewMetrics() *Metrics {
 
 	// Pre-initialize QoS counters
 	for qos := byte(0); qos <= 2; qos++ {
-		m.messagesReceived[qos] = expvar.NewInt(MetricMessagesReceived + "_qos" + string(rune('0'+qos)))
-		m.messagesSent[qos] = expvar.NewInt(MetricMessagesSent + "_qos" + string(rune('0'+qos)))
+		m.messagesReceived[qos] = expvar.NewInt(fmt.Sprintf("%s_qos%d", MetricMessagesReceived, qos))
+		m.messagesSent[qos] = expvar.NewInt(fmt.Sprintf("%s_qos%d", MetricMessagesSent, qos))
 	}
 
 	return m
@@ -184,7 +185,7 @@ func (m *Metrics) PacketReceived(packetType PacketType) {
 	if !ok {
 		m.mu.Lock()
 		if counter, ok = m.packetsReceived[packetType]; !ok {
-			counter = expvar.NewInt(MetricPacketsReceived + "_" + packetType.String())
+			counter = expvar.NewInt(fmt.Sprintf("%s_%s", MetricPacketsReceived, packetType.String()))
 			m.packetsReceived[packetType] = counter
 		}
 		m.mu.Unlock()
@@ -202,7 +203,7 @@ func (m *Metrics) PacketSent(packetType PacketType) {
 	if !ok {
 		m.mu.Lock()
 		if counter, ok = m.packetsSent[packetType]; !ok {
-			counter = expvar.NewInt(MetricPacketsSent + "_" + packetType.String())
+			counter = expvar.NewInt(fmt.Sprintf("%s_%s", MetricPacketsSent, packetType.String()))
 			m.packetsSent[packetType] = counter
 		}
 		m.mu.Unlock()

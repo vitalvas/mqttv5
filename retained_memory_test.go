@@ -404,6 +404,88 @@ func TestRetainedMessageExpiry(t *testing.T) {
 	})
 }
 
+func TestRetainedStoreNamespaceIsolation(t *testing.T) {
+	t.Run("same topic different namespaces are separate messages", func(t *testing.T) {
+		store := NewMemoryRetainedStore()
+
+		// Set same topic in different namespaces
+		err := store.Set("tenant-a", &RetainedMessage{Topic: "sensor/temp", Payload: []byte("25C")})
+		require.NoError(t, err)
+		err = store.Set("tenant-b", &RetainedMessage{Topic: "sensor/temp", Payload: []byte("30C")})
+		require.NoError(t, err)
+
+		// Each namespace should get its own message
+		msgA, ok := store.Get("tenant-a", "sensor/temp")
+		require.True(t, ok)
+		assert.Equal(t, []byte("25C"), msgA.Payload)
+
+		msgB, ok := store.Get("tenant-b", "sensor/temp")
+		require.True(t, ok)
+		assert.Equal(t, []byte("30C"), msgB.Payload)
+	})
+
+	t.Run("match only returns messages from own namespace", func(t *testing.T) {
+		store := NewMemoryRetainedStore()
+
+		store.Set("tenant-a", &RetainedMessage{Topic: "sensor/temp", Payload: []byte("a")})
+		store.Set("tenant-a", &RetainedMessage{Topic: "sensor/humidity", Payload: []byte("a")})
+		store.Set("tenant-b", &RetainedMessage{Topic: "sensor/temp", Payload: []byte("b")})
+		store.Set("tenant-b", &RetainedMessage{Topic: "sensor/pressure", Payload: []byte("b")})
+
+		// Match in tenant-a
+		matchesA := store.Match("tenant-a", "sensor/#")
+		assert.Len(t, matchesA, 2)
+		for _, m := range matchesA {
+			assert.Equal(t, []byte("a"), m.Payload)
+		}
+
+		// Match in tenant-b
+		matchesB := store.Match("tenant-b", "sensor/#")
+		assert.Len(t, matchesB, 2)
+		for _, m := range matchesB {
+			assert.Equal(t, []byte("b"), m.Payload)
+		}
+	})
+
+	t.Run("delete only affects own namespace", func(t *testing.T) {
+		store := NewMemoryRetainedStore()
+
+		store.Set("tenant-a", &RetainedMessage{Topic: "topic", Payload: []byte("a")})
+		store.Set("tenant-b", &RetainedMessage{Topic: "topic", Payload: []byte("b")})
+
+		// Delete from tenant-a
+		deleted := store.Delete("tenant-a", "topic")
+		assert.True(t, deleted)
+
+		// tenant-a message should be gone
+		_, ok := store.Get("tenant-a", "topic")
+		assert.False(t, ok)
+
+		// tenant-b message should still exist
+		msg, ok := store.Get("tenant-b", "topic")
+		assert.True(t, ok)
+		assert.Equal(t, []byte("b"), msg.Payload)
+	})
+
+	t.Run("update overwrites only in own namespace", func(t *testing.T) {
+		store := NewMemoryRetainedStore()
+
+		store.Set("tenant-a", &RetainedMessage{Topic: "topic", Payload: []byte("old-a")})
+		store.Set("tenant-b", &RetainedMessage{Topic: "topic", Payload: []byte("old-b")})
+
+		// Update tenant-a
+		store.Set("tenant-a", &RetainedMessage{Topic: "topic", Payload: []byte("new-a")})
+
+		// tenant-a should have updated value
+		msgA, _ := store.Get("tenant-a", "topic")
+		assert.Equal(t, []byte("new-a"), msgA.Payload)
+
+		// tenant-b should still have old value
+		msgB, _ := store.Get("tenant-b", "topic")
+		assert.Equal(t, []byte("old-b"), msgB.Payload)
+	})
+}
+
 func TestMemoryRetainedStoreConcurrency(_ *testing.T) {
 	store := NewMemoryRetainedStore()
 	var wg sync.WaitGroup

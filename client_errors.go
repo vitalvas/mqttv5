@@ -2,6 +2,7 @@ package mqttv5
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -102,9 +103,9 @@ type DisconnectError struct {
 
 func (e *DisconnectError) Error() string {
 	if e.Remote {
-		return "server disconnect: " + e.ReasonCode.String()
+		return fmt.Sprintf("server disconnect: %s", e.ReasonCode.String())
 	}
-	return "disconnected: " + e.ReasonCode.String()
+	return fmt.Sprintf("disconnected: %s", e.ReasonCode.String())
 }
 
 func (e *DisconnectError) Unwrap() error { return e.err }
@@ -164,7 +165,7 @@ type PublishError struct {
 }
 
 func (e *PublishError) Error() string {
-	return "publish failed: " + e.ReasonCode.String()
+	return fmt.Sprintf("publish failed: %s", e.ReasonCode.String())
 }
 
 func (e *PublishError) Unwrap() error { return e.err }
@@ -188,7 +189,7 @@ type SubscribeError struct {
 }
 
 func (e *SubscribeError) Error() string {
-	return "subscribe failed: " + e.ReasonCode.String()
+	return fmt.Sprintf("subscribe failed: %s", e.ReasonCode.String())
 }
 
 func (e *SubscribeError) Unwrap() error { return e.err }
@@ -211,7 +212,7 @@ type ConnectionLostError struct {
 
 func (e *ConnectionLostError) Error() string {
 	if e.Cause != nil {
-		return "connection lost: " + e.Cause.Error()
+		return fmt.Sprintf("connection lost: %s", e.Cause.Error())
 	}
 	return "connection lost"
 }
@@ -235,7 +236,7 @@ type ConnectError struct {
 }
 
 func (e *ConnectError) Error() string {
-	return "connect failed: " + e.ReasonCode.String()
+	return fmt.Sprintf("connect failed: %s", e.ReasonCode.String())
 }
 
 func (e *ConnectError) Unwrap() error { return e.err }

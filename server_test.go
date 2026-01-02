@@ -3,6 +3,7 @@ package mqttv5
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -923,6 +924,372 @@ func TestServerEnhancedAuthEmptyNamespace(t *testing.T) {
 	conn.Close()
 	srv.Close()
 	wg.Wait()
+}
+
+// testSCRAMSHA256Authenticator implements SCRAM-SHA-256 enhanced auth for server testing.
+type testSCRAMSHA256Authenticator struct {
+	users      map[string]string
+	namespaces map[string]string
+}
+
+type testSCRAMState struct {
+	username    string
+	serverNonce string
+}
+
+func (a *testSCRAMSHA256Authenticator) SupportsMethod(method string) bool {
+	return method == "SCRAM-SHA-256"
+}
+
+func (a *testSCRAMSHA256Authenticator) AuthStart(_ context.Context, authCtx *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	// Parse client-first-message: n,,n=<username>,r=<client-nonce>
+	clientFirst := string(authCtx.AuthData)
+	var username, clientNonce string
+	for _, part := range splitByComma(clientFirst) {
+		if len(part) > 2 && part[:2] == "n=" {
+			username = part[2:]
+		}
+		if len(part) > 2 && part[:2] == "r=" {
+			clientNonce = part[2:]
+		}
+	}
+
+	if username == "" || clientNonce == "" {
+		return &EnhancedAuthResult{Success: false, ReasonCode: ReasonNotAuthorized}, nil
+	}
+
+	if _, ok := a.users[username]; !ok {
+		return &EnhancedAuthResult{Success: false, ReasonCode: ReasonNotAuthorized}, nil
+	}
+
+	serverNonce := fmt.Sprintf("%ssrv123", clientNonce)
+	serverFirst := fmt.Sprintf("r=%s,s=c2FsdA==,i=4096", serverNonce)
+
+	return &EnhancedAuthResult{
+		Continue:   true,
+		ReasonCode: ReasonContinueAuth,
+		AuthData:   []byte(serverFirst),
+		State:      &testSCRAMState{username: username, serverNonce: serverNonce},
+	}, nil
+}
+
+func (a *testSCRAMSHA256Authenticator) AuthContinue(_ context.Context, authCtx *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	state, ok := authCtx.State.(*testSCRAMState)
+	if !ok || state == nil {
+		return &EnhancedAuthResult{Success: false, ReasonCode: ReasonNotAuthorized}, nil
+	}
+
+	// Parse client-final: c=...,r=<nonce>,p=<proof>
+	clientFinal := string(authCtx.AuthData)
+	var nonce, proof string
+	for _, part := range splitByComma(clientFinal) {
+		if len(part) > 2 && part[:2] == "r=" {
+			nonce = part[2:]
+		}
+		if len(part) > 2 && part[:2] == "p=" {
+			proof = part[2:]
+		}
+	}
+
+	if nonce != state.serverNonce {
+		return &EnhancedAuthResult{Success: false, ReasonCode: ReasonNotAuthorized}, nil
+	}
+
+	expectedProof := fmt.Sprintf("proof-%s", a.users[state.username])
+	if proof != expectedProof {
+		return &EnhancedAuthResult{Success: false, ReasonCode: ReasonNotAuthorized}, nil
+	}
+
+	namespace := DefaultNamespace
+	if ns, ok := a.namespaces[state.username]; ok {
+		namespace = ns
+	}
+
+	return &EnhancedAuthResult{
+		Success:    true,
+		ReasonCode: ReasonSuccess,
+		AuthData:   []byte("v=signature"),
+		Namespace:  namespace,
+	}, nil
+}
+
+func splitByComma(s string) []string {
+	var parts []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == ',' {
+			if i > start {
+				parts = append(parts, s[start:i])
+			}
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		parts = append(parts, s[start:])
+	}
+	return parts
+}
+
+// TestServerSCRAMSHA256EnhancedAuth tests the full SCRAM-SHA-256 challenge-response flow through the server.
+func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
+	t.Run("successful authentication", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		auth := &testSCRAMSHA256Authenticator{
+			users:      map[string]string{"testuser": "testpass"},
+			namespaces: map[string]string{},
+		}
+		srv := NewServer(WithListener(listener), WithEnhancedAuth(auth))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Send CONNECT with SCRAM-SHA-256 auth method
+		connect := &ConnectPacket{ClientID: "scram-client"}
+		connect.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
+		connect.Props.Set(PropAuthenticationData, []byte("n,,n=testuser,r=clientnonce"))
+
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		// Expect AUTH packet with challenge
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		authPkt, ok := pkt.(*AuthPacket)
+		require.True(t, ok, "expected AUTH packet, got %T", pkt)
+		assert.Equal(t, ReasonContinueAuth, authPkt.ReasonCode)
+
+		serverFirst := string(authPkt.Props.GetBinary(PropAuthenticationData))
+		assert.Contains(t, serverFirst, "r=clientnoncesrv123")
+
+		// Send client-final with proof
+		clientFinal := &AuthPacket{ReasonCode: ReasonContinueAuth}
+		clientFinal.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
+		clientFinal.Props.Set(PropAuthenticationData, []byte("c=biws,r=clientnoncesrv123,p=proof-testpass"))
+
+		_, err = WritePacket(conn, clientFinal, 256*1024)
+		require.NoError(t, err)
+
+		// Expect CONNACK with success
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok, "expected CONNACK packet, got %T", pkt)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		srv.Close()
+		wg.Wait()
+	})
+
+	t.Run("authentication failure - wrong password", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		auth := &testSCRAMSHA256Authenticator{
+			users:      map[string]string{"testuser": "testpass"},
+			namespaces: map[string]string{},
+		}
+		srv := NewServer(WithListener(listener), WithEnhancedAuth(auth))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Send CONNECT
+		connect := &ConnectPacket{ClientID: "scram-client-fail"}
+		connect.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
+		connect.Props.Set(PropAuthenticationData, []byte("n,,n=testuser,r=nonce1"))
+
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		// Get AUTH challenge
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		_, ok := pkt.(*AuthPacket)
+		require.True(t, ok)
+
+		// Send wrong proof
+		clientFinal := &AuthPacket{ReasonCode: ReasonContinueAuth}
+		clientFinal.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
+		clientFinal.Props.Set(PropAuthenticationData, []byte("c=biws,r=nonce1srv123,p=proof-wrongpass"))
+
+		_, err = WritePacket(conn, clientFinal, 256*1024)
+		require.NoError(t, err)
+
+		// Expect CONNACK with failure
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonNotAuthorized, connack.ReasonCode)
+
+		srv.Close()
+		wg.Wait()
+	})
+
+	t.Run("immediate auth failures", func(t *testing.T) {
+		testCases := []struct {
+			name           string
+			clientID       string
+			authMethod     string
+			authData       []byte
+			expectedReason ReasonCode
+		}{
+			{
+				name:           "unknown user",
+				clientID:       "scram-unknown",
+				authMethod:     "SCRAM-SHA-256",
+				authData:       []byte("n,,n=unknownuser,r=nonce2"),
+				expectedReason: ReasonNotAuthorized,
+			},
+			{
+				name:           "unsupported auth method",
+				clientID:       "unsupported-auth",
+				authMethod:     "UNKNOWN-METHOD",
+				authData:       []byte("data"),
+				expectedReason: ReasonBadAuthMethod,
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				listener, err := net.Listen("tcp", ":0")
+				require.NoError(t, err)
+
+				auth := &testSCRAMSHA256Authenticator{
+					users:      map[string]string{"testuser": "testpass"},
+					namespaces: map[string]string{},
+				}
+				srv := NewServer(WithListener(listener), WithEnhancedAuth(auth))
+
+				var wg sync.WaitGroup
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					srv.ListenAndServe()
+				}()
+
+				time.Sleep(50 * time.Millisecond)
+
+				conn, err := net.Dial("tcp", listener.Addr().String())
+				require.NoError(t, err)
+				defer conn.Close()
+
+				connect := &ConnectPacket{ClientID: tc.clientID}
+				connect.Props.Set(PropAuthenticationMethod, tc.authMethod)
+				connect.Props.Set(PropAuthenticationData, tc.authData)
+
+				_, err = WritePacket(conn, connect, 256*1024)
+				require.NoError(t, err)
+
+				conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+				pkt, _, err := ReadPacket(conn, 256*1024)
+				require.NoError(t, err)
+
+				connack, ok := pkt.(*ConnackPacket)
+				require.True(t, ok)
+				assert.Equal(t, tc.expectedReason, connack.ReasonCode)
+
+				srv.Close()
+				wg.Wait()
+			})
+		}
+	})
+
+	t.Run("authentication with namespace", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		auth := &testSCRAMSHA256Authenticator{
+			users:      map[string]string{"tenant1": "secret"},
+			namespaces: map[string]string{"tenant1": "tenant1-ns"},
+		}
+		srv := NewServer(WithListener(listener), WithEnhancedAuth(auth))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			srv.ListenAndServe()
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Send CONNECT
+		connect := &ConnectPacket{ClientID: "tenant-client"}
+		connect.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
+		connect.Props.Set(PropAuthenticationData, []byte("n,,n=tenant1,r=tnonce"))
+
+		_, err = WritePacket(conn, connect, 256*1024)
+		require.NoError(t, err)
+
+		// Get AUTH challenge
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		_, ok := pkt.(*AuthPacket)
+		require.True(t, ok)
+
+		// Send correct proof
+		clientFinal := &AuthPacket{ReasonCode: ReasonContinueAuth}
+		clientFinal.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
+		clientFinal.Props.Set(PropAuthenticationData, []byte("c=biws,r=tnoncesrv123,p=proof-secret"))
+
+		_, err = WritePacket(conn, clientFinal, 256*1024)
+		require.NoError(t, err)
+
+		// Expect CONNACK with success
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		// Verify client is in the correct namespace
+		clients := srv.ClientsWithNamespace()
+		require.Len(t, clients, 1)
+		assert.Equal(t, "tenant1-ns", clients[0].Namespace)
+		assert.Equal(t, "tenant-client", clients[0].ClientID)
+
+		srv.Close()
+		wg.Wait()
+	})
 }
 
 // TestServerAuthorization tests the server authorization flow
@@ -2004,5 +2371,150 @@ func TestExtractTLSInfo(t *testing.T) {
 
 		assert.Empty(t, actx.TLSCommonName)
 		assert.False(t, actx.TLSVerified)
+	})
+}
+
+// TestMultiTenantNamespaceIsolation tests runtime namespace isolation behaviors.
+func TestMultiTenantNamespaceIsolation(t *testing.T) {
+	t.Run("same clientID different namespaces coexist", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		// Create two clients with same clientID but different namespaces
+		clientA := &ServerClient{clientID: "shared-client", namespace: "tenant-a"}
+		clientB := &ServerClient{clientID: "shared-client", namespace: "tenant-b"}
+
+		keyA := NamespaceKey("tenant-a", "shared-client")
+		keyB := NamespaceKey("tenant-b", "shared-client")
+
+		srv.mu.Lock()
+		srv.clients[keyA] = clientA
+		srv.clients[keyB] = clientB
+		srv.mu.Unlock()
+
+		// Both should exist
+		srv.mu.RLock()
+		_, existsA := srv.clients[keyA]
+		_, existsB := srv.clients[keyB]
+		srv.mu.RUnlock()
+
+		assert.True(t, existsA, "client in tenant-a should exist")
+		assert.True(t, existsB, "client in tenant-b should exist")
+		assert.Equal(t, 2, len(srv.clients))
+	})
+
+	t.Run("Clients returns all clientIDs including duplicates across namespaces", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		clientA := &ServerClient{clientID: "shared-client", namespace: "tenant-a"}
+		clientB := &ServerClient{clientID: "shared-client", namespace: "tenant-b"}
+		clientC := &ServerClient{clientID: "unique-client", namespace: "tenant-a"}
+
+		srv.mu.Lock()
+		srv.clients[NamespaceKey("tenant-a", "shared-client")] = clientA
+		srv.clients[NamespaceKey("tenant-b", "shared-client")] = clientB
+		srv.clients[NamespaceKey("tenant-a", "unique-client")] = clientC
+		srv.mu.Unlock()
+
+		clientIDs := srv.Clients()
+		assert.Len(t, clientIDs, 3)
+
+		// Count occurrences of "shared-client"
+		sharedCount := 0
+		for _, id := range clientIDs {
+			if id == "shared-client" {
+				sharedCount++
+			}
+		}
+		assert.Equal(t, 2, sharedCount, "should have 2 clients with same ID from different namespaces")
+	})
+
+	t.Run("ClientsWithNamespace provides namespace info", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		clientA := &ServerClient{clientID: "client-1", namespace: "tenant-a"}
+		clientB := &ServerClient{clientID: "client-1", namespace: "tenant-b"}
+
+		srv.mu.Lock()
+		srv.clients[NamespaceKey("tenant-a", "client-1")] = clientA
+		srv.clients[NamespaceKey("tenant-b", "client-1")] = clientB
+		srv.mu.Unlock()
+
+		clients := srv.ClientsWithNamespace()
+		assert.Len(t, clients, 2)
+
+		// Verify we can distinguish them by namespace
+		namespaces := make(map[string]string)
+		for _, c := range clients {
+			namespaces[c.Namespace] = c.ClientID
+		}
+		assert.Equal(t, "client-1", namespaces["tenant-a"])
+		assert.Equal(t, "client-1", namespaces["tenant-b"])
+	})
+
+	t.Run("removeClient only removes from correct namespace", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		clientA := &ServerClient{clientID: "shared-client", namespace: "tenant-a"}
+		clientB := &ServerClient{clientID: "shared-client", namespace: "tenant-b"}
+
+		keyA := NamespaceKey("tenant-a", "shared-client")
+		keyB := NamespaceKey("tenant-b", "shared-client")
+
+		srv.mu.Lock()
+		srv.clients[keyA] = clientA
+		srv.clients[keyB] = clientB
+		srv.mu.Unlock()
+
+		// Remove only tenant-a client
+		srv.removeClient(keyA, clientA)
+
+		srv.mu.RLock()
+		_, existsA := srv.clients[keyA]
+		_, existsB := srv.clients[keyB]
+		srv.mu.RUnlock()
+
+		assert.False(t, existsA, "tenant-a client should be removed")
+		assert.True(t, existsB, "tenant-b client should still exist")
+	})
+
+	t.Run("subscription manager receives correct namespace", func(t *testing.T) {
+		subMgr := NewSubscriptionManager()
+
+		// Same client ID, different namespaces, same topic
+		subMgr.Subscribe("client-1", "tenant-a", Subscription{TopicFilter: "topic", QoS: 0})
+		subMgr.Subscribe("client-1", "tenant-b", Subscription{TopicFilter: "topic", QoS: 1})
+
+		// Publish in tenant-a namespace
+		matchesA := subMgr.MatchForDelivery("topic", "publisher", "tenant-a")
+		require.Len(t, matchesA, 1)
+		assert.Equal(t, "tenant-a", matchesA[0].Namespace)
+		assert.Equal(t, byte(0), matchesA[0].Subscription.QoS)
+
+		// Publish in tenant-b namespace
+		matchesB := subMgr.MatchForDelivery("topic", "publisher", "tenant-b")
+		require.Len(t, matchesB, 1)
+		assert.Equal(t, "tenant-b", matchesB[0].Namespace)
+		assert.Equal(t, byte(1), matchesB[0].Subscription.QoS)
+	})
+
+	t.Run("retained store isolates messages by namespace", func(t *testing.T) {
+		retainedStore := NewMemoryRetainedStore()
+
+		// Same topic, different namespaces
+		retainedStore.Set("tenant-a", &RetainedMessage{Topic: "sensor/data", Payload: []byte("tenant-a-data")})
+		retainedStore.Set("tenant-b", &RetainedMessage{Topic: "sensor/data", Payload: []byte("tenant-b-data")})
+
+		// Match in each namespace
+		matchesA := retainedStore.Match("tenant-a", "sensor/#")
+		require.Len(t, matchesA, 1)
+		assert.Equal(t, []byte("tenant-a-data"), matchesA[0].Payload)
+
+		matchesB := retainedStore.Match("tenant-b", "sensor/#")
+		require.Len(t, matchesB, 1)
+		assert.Equal(t, []byte("tenant-b-data"), matchesB[0].Payload)
 	})
 }
