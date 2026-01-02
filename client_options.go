@@ -58,6 +58,10 @@ type clientOptions struct {
 
 	// Session factory for creating custom sessions
 	sessionFactory SessionFactory
+
+	// Interceptors
+	producerInterceptors []ProducerInterceptor
+	consumerInterceptors []ConsumerInterceptor
 }
 
 // defaultOptions returns options with sensible defaults.
@@ -262,6 +266,24 @@ func WithClientSessionFactory(factory SessionFactory) Option {
 		if factory != nil {
 			o.sessionFactory = factory
 		}
+	}
+}
+
+// WithProducerInterceptors sets the producer interceptors for outgoing messages.
+// Interceptors are called in order before a message is published.
+// Each interceptor can modify the message before passing it to the next.
+func WithProducerInterceptors(interceptors ...ProducerInterceptor) Option {
+	return func(o *clientOptions) {
+		o.producerInterceptors = append(o.producerInterceptors, interceptors...)
+	}
+}
+
+// WithConsumerInterceptors sets the consumer interceptors for incoming messages.
+// Interceptors are called in order before a message is delivered to handlers.
+// Each interceptor can modify the message before passing it to the next.
+func WithConsumerInterceptors(interceptors ...ConsumerInterceptor) Option {
+	return func(o *clientOptions) {
+		o.consumerInterceptors = append(o.consumerInterceptors, interceptors...)
 	}
 }
 

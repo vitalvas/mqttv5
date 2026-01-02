@@ -44,6 +44,10 @@ type serverConfig struct {
 	onMessage          func(*ServerClient, *Message)
 	onSubscribe        func(*ServerClient, []Subscription)
 	onUnsubscribe      func(*ServerClient, []string)
+
+	// Interceptors
+	producerInterceptors []ProducerInterceptor
+	consumerInterceptors []ConsumerInterceptor
 }
 
 func defaultServerConfig() *serverConfig {
@@ -229,5 +233,23 @@ func WithMetrics(metrics MetricsCollector) ServerOption {
 		if metrics != nil {
 			c.metrics = metrics
 		}
+	}
+}
+
+// WithServerProducerInterceptors sets the producer interceptors for outgoing messages.
+// Interceptors are called in order before a message is sent to subscribers.
+// Each interceptor can modify the message before passing it to the next.
+func WithServerProducerInterceptors(interceptors ...ProducerInterceptor) ServerOption {
+	return func(c *serverConfig) {
+		c.producerInterceptors = append(c.producerInterceptors, interceptors...)
+	}
+}
+
+// WithServerConsumerInterceptors sets the consumer interceptors for incoming messages.
+// Interceptors are called in order after a message is received from a client.
+// Each interceptor can modify the message before passing it to the next.
+func WithServerConsumerInterceptors(interceptors ...ConsumerInterceptor) ServerOption {
+	return func(c *serverConfig) {
+		c.consumerInterceptors = append(c.consumerInterceptors, interceptors...)
 	}
 }

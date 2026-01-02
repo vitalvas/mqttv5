@@ -380,6 +380,12 @@ func (c *Client) Publish(msg *Message) error {
 		return ErrNotConnected
 	}
 
+	// Apply producer interceptors
+	msg = applyProducerInterceptors(c.options.producerInterceptors, msg)
+	if msg == nil {
+		return nil // Message was filtered out by interceptor
+	}
+
 	if err := ValidateTopicName(msg.Topic); err != nil {
 		return err
 	}
@@ -717,6 +723,12 @@ func (c *Client) handlePublish(pkt *PublishPacket) {
 // Handlers are copied to avoid holding the lock during callback invocation,
 // which would cause deadlock if handlers call Subscribe/Unsubscribe.
 func (c *Client) deliverMessage(msg *Message, topic string) {
+	// Apply consumer interceptors
+	msg = applyConsumerInterceptors(c.options.consumerInterceptors, msg)
+	if msg == nil {
+		return // Message was filtered out by interceptor
+	}
+
 	c.subscriptionsMu.RLock()
 	var handlers []MessageHandler
 	for filter, handler := range c.subscriptions {

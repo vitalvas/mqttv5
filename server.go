@@ -376,6 +376,12 @@ func (s *Server) Publish(msg *Message) error {
 		return ErrServerClosed
 	}
 
+	// Apply producer interceptors
+	msg = applyProducerInterceptors(s.config.producerInterceptors, msg)
+	if msg == nil {
+		return nil // Message was filtered out by interceptor
+	}
+
 	if err := ValidateTopicName(msg.Topic); err != nil {
 		return err
 	}
@@ -1005,33 +1011,14 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 		s.config.metrics.PublishLatency(time.Since(startTime))
 	}()
 
-	// Convert to Message (use effectiveQoS which may be downgraded by authorizer)
-	msg := &Message{
-		Topic:       topic,
-		Payload:     pub.Payload,
-		QoS:         effectiveQoS,
-		Retain:      pub.Retain,
-		Namespace:   namespace,
-		PublishedAt: time.Now(), // Track publish time for message expiry
-	}
+	// Convert to Message
+	msg := messageFromPublishPacket(pub, topic, effectiveQoS, namespace)
 
-	// Copy properties
-	if v := pub.Props.GetByte(PropPayloadFormatIndicator); v > 0 {
-		msg.PayloadFormat = v
+	// Apply consumer interceptors
+	msg = applyConsumerInterceptors(s.config.consumerInterceptors, msg)
+	if msg == nil {
+		return // Message was filtered out by interceptor
 	}
-	if v := pub.Props.GetUint32(PropMessageExpiryInterval); v > 0 {
-		msg.MessageExpiry = v
-	}
-	if v := pub.Props.GetString(PropContentType); v != "" {
-		msg.ContentType = v
-	}
-	if v := pub.Props.GetString(PropResponseTopic); v != "" {
-		msg.ResponseTopic = v
-	}
-	if v := pub.Props.GetBinary(PropCorrelationData); len(v) > 0 {
-		msg.CorrelationData = v
-	}
-	msg.UserProperties = pub.Props.GetAllStringPairs(PropUserProperty)
 
 	// Send PUBREC for QoS 2 and track the message
 	// Per MQTT 5.0 spec, message delivery happens after PUBREL is received
@@ -1081,6 +1068,12 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 }
 
 func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
+	// Apply producer interceptors
+	msg = applyProducerInterceptors(s.config.producerInterceptors, msg)
+	if msg == nil {
+		return // Message was filtered out by interceptor
+	}
+
 	namespace := msg.Namespace
 
 	// Check if message has expired before delivery
@@ -1740,4 +1733,36 @@ func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, clie
 	})
 
 	return result, true
+}
+
+// messageFromPublishPacket creates a Message from a PublishPacket.
+func messageFromPublishPacket(pub *PublishPacket, topic string, effectiveQoS byte, namespace string) *Message {
+	msg := &Message{
+		Topic:       topic,
+		Payload:     pub.Payload,
+		QoS:         effectiveQoS,
+		Retain:      pub.Retain,
+		Namespace:   namespace,
+		PublishedAt: time.Now(),
+	}
+
+	// Copy properties
+	if v := pub.Props.GetByte(PropPayloadFormatIndicator); v > 0 {
+		msg.PayloadFormat = v
+	}
+	if v := pub.Props.GetUint32(PropMessageExpiryInterval); v > 0 {
+		msg.MessageExpiry = v
+	}
+	if v := pub.Props.GetString(PropContentType); v != "" {
+		msg.ContentType = v
+	}
+	if v := pub.Props.GetString(PropResponseTopic); v != "" {
+		msg.ResponseTopic = v
+	}
+	if v := pub.Props.GetBinary(PropCorrelationData); len(v) > 0 {
+		msg.CorrelationData = v
+	}
+	msg.UserProperties = pub.Props.GetAllStringPairs(PropUserProperty)
+
+	return msg
 }
