@@ -60,6 +60,7 @@ type RetainedStore interface {
 	// Count returns the number of retained messages.
 	Count() int
 
-	// Topics returns all topics with retained messages.
+	// Topics returns all topics with retained messages as namespace||topic keys.
+	// Use ParseNamespaceKey to extract namespace and topic from each key.
 	Topics() []string
 }

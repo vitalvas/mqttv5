@@ -108,21 +108,22 @@ func (s *MemoryRetainedStore) Count() int {
 	return len(s.messages)
 }
 
-// Topics returns all topics with retained messages (includes namespace prefix in key format).
+// Topics returns all topics with retained messages as namespace||topic keys.
+// Use ParseNamespaceKey to extract namespace and topic from each key.
 // Expired messages are excluded and purged.
 func (s *MemoryRetainedStore) Topics() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	topics := make([]string, 0, len(s.messages))
+	keys := make([]string, 0, len(s.messages))
 	var expired []string
 	for key, msg := range s.messages {
 		if msg.IsExpired() {
 			expired = append(expired, key)
 			continue
 		}
-		// Return the actual topic, not the key
-		topics = append(topics, msg.Topic)
+		// Return the key (namespace||topic) for namespace awareness
+		keys = append(keys, key)
 	}
 
 	// Purge expired messages
@@ -130,7 +131,7 @@ func (s *MemoryRetainedStore) Topics() []string {
 		delete(s.messages, key)
 	}
 
-	return topics
+	return keys
 }
 
 // Cleanup removes all expired retained messages.

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAllowAllAuthenticator(t *testing.T) {
@@ -283,4 +284,44 @@ func TestMockEnhancedAuthenticator(t *testing.T) {
 		assert.False(t, result.Success)
 		assert.Equal(t, ReasonNotAuthorized, result.ReasonCode)
 	})
+}
+
+// emptyNamespaceEnhancedAuthenticator returns empty namespace to test defaulting.
+type emptyNamespaceEnhancedAuthenticator struct{}
+
+func (a *emptyNamespaceEnhancedAuthenticator) SupportsMethod(method string) bool {
+	return method == "PLAIN"
+}
+
+func (a *emptyNamespaceEnhancedAuthenticator) AuthStart(_ context.Context, _ *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	return &EnhancedAuthResult{
+		Success:    true,
+		ReasonCode: ReasonSuccess,
+		Namespace:  "", // Empty namespace should default to DefaultNamespace
+	}, nil
+}
+
+func (a *emptyNamespaceEnhancedAuthenticator) AuthContinue(_ context.Context, _ *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	return &EnhancedAuthResult{
+		Success:    true,
+		ReasonCode: ReasonSuccess,
+		Namespace:  "",
+	}, nil
+}
+
+func TestEnhancedAuthEmptyNamespaceDefaults(t *testing.T) {
+	auth := &emptyNamespaceEnhancedAuthenticator{}
+	ctx := context.Background()
+
+	// Test that AuthStart returns empty namespace
+	result, err := auth.AuthStart(ctx, &EnhancedAuthContext{
+		ClientID:   "test-client",
+		AuthMethod: "PLAIN",
+	})
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Empty(t, result.Namespace, "authenticator returns empty namespace")
+
+	// The server's authenticateClient function should default empty namespace to DefaultNamespace.
+	// This is tested in server_test.go TestServerEnhancedAuthEmptyNamespace.
 }

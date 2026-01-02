@@ -199,18 +199,26 @@ func TestMemoryRetainedStore(t *testing.T) {
 		assert.Equal(t, 1, store.Count())
 	})
 
-	t.Run("topics", func(t *testing.T) {
+	t.Run("topics returns namespace keys", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
 		store.Set(testNS, &RetainedMessage{Topic: "a/b", Payload: []byte("1")})
 		store.Set(testNS, &RetainedMessage{Topic: "c/d", Payload: []byte("2")})
-		store.Set(testNS, &RetainedMessage{Topic: "e/f", Payload: []byte("3")})
+		store.Set("other", &RetainedMessage{Topic: "a/b", Payload: []byte("3")}) // Same topic, different namespace
 
-		topics := store.Topics()
-		assert.Len(t, topics, 3)
-		assert.Contains(t, topics, "a/b")
-		assert.Contains(t, topics, "c/d")
-		assert.Contains(t, topics, "e/f")
+		keys := store.Topics()
+		assert.Len(t, keys, 3)
+		// Keys should be in namespace||topic format
+		assert.Contains(t, keys, NamespaceKey(testNS, "a/b"))
+		assert.Contains(t, keys, NamespaceKey(testNS, "c/d"))
+		assert.Contains(t, keys, NamespaceKey("other", "a/b"))
+
+		// Verify we can parse the keys back
+		for _, key := range keys {
+			ns, topic := ParseNamespaceKey(key)
+			assert.NotEmpty(t, ns)
+			assert.NotEmpty(t, topic)
+		}
 	})
 
 	t.Run("set and get with metadata", func(t *testing.T) {

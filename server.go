@@ -62,11 +62,16 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 
 		// Convert enhanced auth result to standard auth result for CONNACK properties
 		if enhancedResult != nil {
+			// Default empty namespace to DefaultNamespace
+			namespace := enhancedResult.Namespace
+			if namespace == "" {
+				namespace = DefaultNamespace
+			}
 			authResult := &AuthResult{
 				Success:          enhancedResult.Success,
 				ReasonCode:       enhancedResult.ReasonCode,
 				AssignedClientID: enhancedResult.AssignedClientID,
-				Namespace:        enhancedResult.Namespace,
+				Namespace:        namespace,
 			}
 			// Merge enhanced auth properties (Auth Data, User Properties, Reason String, etc.)
 			authResult.Properties.Merge(&enhancedResult.Properties)
@@ -75,9 +80,9 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 			if len(enhancedResult.AuthData) > 0 {
 				authResult.Properties.Set(PropAuthenticationData, enhancedResult.AuthData)
 			}
-			return authResult, enhancedResult.AssignedClientID, enhancedResult.Namespace, true
+			return authResult, enhancedResult.AssignedClientID, namespace, true
 		}
-		return nil, "", "", true
+		return nil, "", DefaultNamespace, true
 	}
 
 	// Standard authentication
@@ -99,7 +104,12 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 			return nil, "", "", false
 		}
 		logger.Debug("authentication successful", nil)
-		return result, result.AssignedClientID, result.Namespace, true
+		// Default empty namespace to DefaultNamespace
+		namespace := result.Namespace
+		if namespace == "" {
+			namespace = DefaultNamespace
+		}
+		return result, result.AssignedClientID, namespace, true
 	}
 
 	// No authentication configured - use default namespace
@@ -375,6 +385,11 @@ func (s *Server) Publish(msg *Message) error {
 		namespace = DefaultNamespace
 	}
 
+	// Validate namespace to prevent key collisions with delimiter
+	if err := s.config.namespaceValidator(namespace); err != nil {
+		return err
+	}
+
 	// Set publish time if not already set
 	if msg.PublishedAt.IsZero() {
 		msg.PublishedAt = time.Now()
@@ -467,15 +482,41 @@ func (s *Server) Publish(msg *Message) error {
 }
 
 // Clients returns a list of connected client IDs.
+// Note: In multi-tenant deployments, the same client ID may exist in different namespaces.
+// Use ClientsWithNamespace() for namespace-aware client listing.
 func (s *Server) Clients() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	ids := make([]string, 0, len(s.clients))
-	for id := range s.clients {
-		ids = append(ids, id)
+	for key := range s.clients {
+		_, clientID := ParseNamespaceKey(key)
+		ids = append(ids, clientID)
 	}
 	return ids
+}
+
+// ClientInfo represents a connected client with its namespace.
+type ClientInfo struct {
+	Namespace string
+	ClientID  string
+}
+
+// ClientsWithNamespace returns a list of connected clients with their namespaces.
+// This is useful for multi-tenant deployments where clients are isolated by namespace.
+func (s *Server) ClientsWithNamespace() []ClientInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	clients := make([]ClientInfo, 0, len(s.clients))
+	for key := range s.clients {
+		namespace, clientID := ParseNamespaceKey(key)
+		clients = append(clients, ClientInfo{
+			Namespace: namespace,
+			ClientID:  clientID,
+		})
+	}
+	return clients
 }
 
 // ClientCount returns the number of connected clients.

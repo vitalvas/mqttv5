@@ -173,6 +173,72 @@ func TestServerPublish(t *testing.T) {
 		retained := srv.config.retainedStore.Match(DefaultNamespace, "test/retained")
 		assert.Empty(t, retained)
 	})
+
+	t.Run("publish with invalid namespace rejected", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		// Namespace containing delimiter should be rejected
+		msg := &Message{
+			Topic:     "test/topic",
+			Payload:   []byte("data"),
+			Namespace: "tenant||evil",
+		}
+		err = srv.Publish(msg)
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrNamespaceInvalidChar)
+	})
+
+	t.Run("publish with uppercase namespace rejected", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		msg := &Message{
+			Topic:     "test/topic",
+			Payload:   []byte("data"),
+			Namespace: "INVALID",
+		}
+		err = srv.Publish(msg)
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, ErrNamespaceInvalidChar)
+	})
+
+	t.Run("publish with empty namespace defaults to DefaultNamespace", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		msg := &Message{
+			Topic:     "test/retained",
+			Payload:   []byte("data"),
+			Retain:    true,
+			Namespace: "", // Empty should default to DefaultNamespace
+		}
+		err = srv.Publish(msg)
+		require.NoError(t, err)
+
+		// Check it was stored under DefaultNamespace
+		retained := srv.config.retainedStore.Match(DefaultNamespace, "test/retained")
+		require.Len(t, retained, 1)
+		assert.Equal(t, []byte("data"), retained[0].Payload)
+	})
 }
 
 func TestServerClose(t *testing.T) {
@@ -692,6 +758,13 @@ func TestServerAuthentication(t *testing.T) {
 		},
 	}
 
+	// Authenticator that returns empty namespace (should default to DefaultNamespace)
+	emptyNamespaceAuth := &testAuthenticator{
+		authFunc: func(_ context.Context, _ *AuthContext) (*AuthResult, error) {
+			return &AuthResult{Success: true, ReasonCode: ReasonSuccess, Namespace: ""}, nil
+		},
+	}
+
 	tests := []struct {
 		name           string
 		auth           Authenticator
@@ -726,6 +799,13 @@ func TestServerAuthentication(t *testing.T) {
 			username:       "",
 			password:       "",
 			expectedReason: ReasonNotAuthorized,
+		},
+		{
+			name:           "empty namespace defaults to DefaultNamespace",
+			auth:           emptyNamespaceAuth,
+			username:       "test",
+			password:       "test",
+			expectedReason: ReasonSuccess,
 		},
 	}
 
@@ -774,6 +854,75 @@ func TestServerAuthentication(t *testing.T) {
 			wg.Wait()
 		})
 	}
+}
+
+// testEnhancedAuthEmptyNamespace is an enhanced authenticator that returns empty namespace.
+type testEnhancedAuthEmptyNamespace struct{}
+
+func (a *testEnhancedAuthEmptyNamespace) SupportsMethod(method string) bool {
+	return method == "PLAIN"
+}
+
+func (a *testEnhancedAuthEmptyNamespace) AuthStart(_ context.Context, _ *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	return &EnhancedAuthResult{
+		Success:    true,
+		ReasonCode: ReasonSuccess,
+		Namespace:  "", // Empty namespace should default to DefaultNamespace
+	}, nil
+}
+
+func (a *testEnhancedAuthEmptyNamespace) AuthContinue(_ context.Context, _ *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	return &EnhancedAuthResult{
+		Success:    true,
+		ReasonCode: ReasonSuccess,
+		Namespace:  "",
+	}, nil
+}
+
+// TestServerEnhancedAuthEmptyNamespace tests that enhanced auth with empty namespace defaults to DefaultNamespace.
+func TestServerEnhancedAuthEmptyNamespace(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+
+	enhancedAuth := &testEnhancedAuthEmptyNamespace{}
+	srv := NewServer(
+		WithListener(listener),
+		WithEnhancedAuth(enhancedAuth),
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.ListenAndServe()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+
+	// Connect with AuthMethod to trigger enhanced auth
+	connect := &ConnectPacket{
+		ClientID: "test-enhanced-auth",
+	}
+	connect.Props.Set(PropAuthenticationMethod, "PLAIN")
+
+	_, err = WritePacket(conn, connect, 256*1024)
+	require.NoError(t, err)
+
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err := ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+
+	connack, ok := pkt.(*ConnackPacket)
+	require.True(t, ok)
+	// Should succeed - empty namespace is defaulted to DefaultNamespace
+	assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+	conn.Close()
+	srv.Close()
+	wg.Wait()
 }
 
 // TestServerAuthorization tests the server authorization flow

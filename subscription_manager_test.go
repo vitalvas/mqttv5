@@ -316,4 +316,82 @@ func TestSharedSubscriptions(t *testing.T) {
 		// Should get one from shared group + one regular
 		assert.Len(t, matches, 2)
 	})
+
+	t.Run("namespace isolation - different namespaces don't see each other", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		// Subscribe clients in different namespaces to the same topic
+		m.Subscribe("client1", "tenant-a", Subscription{TopicFilter: "sensors/#", QoS: 1})
+		m.Subscribe("client2", "tenant-b", Subscription{TopicFilter: "sensors/#", QoS: 1})
+
+		// Publisher in tenant-a should only reach client1
+		matches := m.MatchForDelivery("sensors/temp", "publisher", "tenant-a")
+		require.Len(t, matches, 1)
+		assert.Equal(t, "client1", matches[0].ClientID)
+		assert.Equal(t, "tenant-a", matches[0].Namespace)
+
+		// Publisher in tenant-b should only reach client2
+		matches = m.MatchForDelivery("sensors/temp", "publisher", "tenant-b")
+		require.Len(t, matches, 1)
+		assert.Equal(t, "client2", matches[0].ClientID)
+		assert.Equal(t, "tenant-b", matches[0].Namespace)
+	})
+
+	t.Run("namespace isolation - same client ID different namespaces", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		// Same client ID in different namespaces are treated as separate clients
+		m.Subscribe("client1", "tenant-a", Subscription{TopicFilter: "topic", QoS: 0})
+		m.Subscribe("client1", "tenant-b", Subscription{TopicFilter: "topic", QoS: 1})
+
+		// Each namespace sees its own subscription
+		subsA := m.GetSubscriptions("client1", "tenant-a")
+		require.Len(t, subsA, 1)
+		assert.Equal(t, byte(0), subsA[0].QoS)
+
+		subsB := m.GetSubscriptions("client1", "tenant-b")
+		require.Len(t, subsB, 1)
+		assert.Equal(t, byte(1), subsB[0].QoS)
+
+		// Publishing in tenant-a only reaches tenant-a client
+		matches := m.MatchForDelivery("topic", "other", "tenant-a")
+		require.Len(t, matches, 1)
+		assert.Equal(t, "tenant-a", matches[0].Namespace)
+	})
+
+	t.Run("namespace isolation - unsubscribe only affects own namespace", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		m.Subscribe("client1", "tenant-a", Subscription{TopicFilter: "topic", QoS: 1})
+		m.Subscribe("client1", "tenant-b", Subscription{TopicFilter: "topic", QoS: 1})
+
+		// Unsubscribe from tenant-a
+		m.Unsubscribe("client1", "tenant-a", "topic")
+
+		// tenant-a subscription should be gone
+		subsA := m.GetSubscriptions("client1", "tenant-a")
+		assert.Len(t, subsA, 0)
+
+		// tenant-b subscription should remain
+		subsB := m.GetSubscriptions("client1", "tenant-b")
+		assert.Len(t, subsB, 1)
+	})
+
+	t.Run("namespace isolation - shared subscriptions are namespace-scoped", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		// Same share group name in different namespaces are separate
+		m.Subscribe("client1", "tenant-a", Subscription{TopicFilter: "$share/group/topic", QoS: 1})
+		m.Subscribe("client2", "tenant-b", Subscription{TopicFilter: "$share/group/topic", QoS: 1})
+
+		// Publisher in tenant-a should only see tenant-a subscriber
+		matches := m.MatchForDelivery("topic", "publisher", "tenant-a")
+		require.Len(t, matches, 1)
+		assert.Equal(t, "client1", matches[0].ClientID)
+
+		// Publisher in tenant-b should only see tenant-b subscriber
+		matches = m.MatchForDelivery("topic", "publisher", "tenant-b")
+		require.Len(t, matches, 1)
+		assert.Equal(t, "client2", matches[0].ClientID)
+	})
 }
