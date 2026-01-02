@@ -1,13 +1,14 @@
 package mqttv5
 
 import (
+	"strings"
 	"sync"
 )
 
 // MemoryRetainedStore is an in-memory implementation of RetainedStore.
 type MemoryRetainedStore struct {
 	mu       sync.RWMutex
-	messages map[string]*RetainedMessage
+	messages map[string]*RetainedMessage // key: namespace||topic
 }
 
 // NewMemoryRetainedStore creates a new in-memory retained store.
@@ -18,7 +19,7 @@ func NewMemoryRetainedStore() *MemoryRetainedStore {
 }
 
 // Set stores or updates a retained message.
-func (s *MemoryRetainedStore) Set(msg *RetainedMessage) error {
+func (s *MemoryRetainedStore) Set(namespace string, msg *RetainedMessage) error {
 	if err := ValidateTopicName(msg.Topic); err != nil {
 		return err
 	}
@@ -26,58 +27,68 @@ func (s *MemoryRetainedStore) Set(msg *RetainedMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	key := NamespaceKey(namespace, msg.Topic)
+
 	// Empty payload means delete
 	if len(msg.Payload) == 0 {
-		delete(s.messages, msg.Topic)
+		delete(s.messages, key)
 		return nil
 	}
 
-	s.messages[msg.Topic] = msg
+	s.messages[key] = msg
 	return nil
 }
 
 // Get retrieves a retained message by exact topic.
-func (s *MemoryRetainedStore) Get(topic string) (*RetainedMessage, bool) {
+func (s *MemoryRetainedStore) Get(namespace, topic string) (*RetainedMessage, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	msg, ok := s.messages[topic]
+	key := NamespaceKey(namespace, topic)
+	msg, ok := s.messages[key]
 	return msg, ok
 }
 
 // Delete removes a retained message by topic.
-func (s *MemoryRetainedStore) Delete(topic string) bool {
+func (s *MemoryRetainedStore) Delete(namespace, topic string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.messages[topic]; !ok {
+	key := NamespaceKey(namespace, topic)
+	if _, ok := s.messages[key]; !ok {
 		return false
 	}
-	delete(s.messages, topic)
+	delete(s.messages, key)
 	return true
 }
 
 // Match returns all retained messages matching a topic filter.
 // Expired messages are excluded from the result and purged from storage.
-func (s *MemoryRetainedStore) Match(filter string) []*RetainedMessage {
+func (s *MemoryRetainedStore) Match(namespace, filter string) []*RetainedMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	prefix := namespace + namespaceDelimiter
 	var matched []*RetainedMessage
 	var expired []string
-	for topic, msg := range s.messages {
-		if msg.IsExpired() {
-			expired = append(expired, topic)
+	for key, msg := range s.messages {
+		// Only match messages in the specified namespace
+		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
-		if TopicMatch(filter, topic) {
+
+		if msg.IsExpired() {
+			expired = append(expired, key)
+			continue
+		}
+		if TopicMatch(filter, msg.Topic) {
 			matched = append(matched, msg)
 		}
 	}
 
 	// Purge expired messages
-	for _, topic := range expired {
-		delete(s.messages, topic)
+	for _, key := range expired {
+		delete(s.messages, key)
 	}
 
 	return matched
@@ -97,7 +108,7 @@ func (s *MemoryRetainedStore) Count() int {
 	return len(s.messages)
 }
 
-// Topics returns all topics with retained messages.
+// Topics returns all topics with retained messages (includes namespace prefix in key format).
 // Expired messages are excluded and purged.
 func (s *MemoryRetainedStore) Topics() []string {
 	s.mu.Lock()
@@ -105,17 +116,18 @@ func (s *MemoryRetainedStore) Topics() []string {
 
 	topics := make([]string, 0, len(s.messages))
 	var expired []string
-	for topic, msg := range s.messages {
+	for key, msg := range s.messages {
 		if msg.IsExpired() {
-			expired = append(expired, topic)
+			expired = append(expired, key)
 			continue
 		}
-		topics = append(topics, topic)
+		// Return the actual topic, not the key
+		topics = append(topics, msg.Topic)
 	}
 
 	// Purge expired messages
-	for _, topic := range expired {
-		delete(s.messages, topic)
+	for _, key := range expired {
+		delete(s.messages, key)
 	}
 
 	return topics

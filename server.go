@@ -15,30 +15,30 @@ var authCtx = context.Background()
 
 // setupSession handles session creation/retrieval based on CleanStart flag.
 // Returns true if an existing session was found.
-func (s *Server) setupSession(client *ServerClient, clientID string, cleanStart bool) bool {
+func (s *Server) setupSession(client *ServerClient, clientID, namespace string, cleanStart bool) bool {
 	if cleanStart {
-		s.config.sessionStore.Delete(clientID)
-		session := s.config.sessionFactory(clientID)
-		s.config.sessionStore.Create(session)
+		s.config.sessionStore.Delete(namespace, clientID)
+		session := s.config.sessionFactory(clientID, namespace)
+		s.config.sessionStore.Create(namespace, session)
 		client.SetSession(session)
 		return false
 	}
 
-	existing, err := s.config.sessionStore.Get(clientID)
+	existing, err := s.config.sessionStore.Get(namespace, clientID)
 	if err == nil {
 		client.SetSession(existing)
 		return true
 	}
 
-	session := s.config.sessionFactory(clientID)
-	s.config.sessionStore.Create(session)
+	session := s.config.sessionFactory(clientID, namespace)
+	s.config.sessionStore.Create(namespace, session)
 	client.SetSession(session)
 	return false
 }
 
 // authenticateClient performs authentication (standard or enhanced) and returns
-// the auth result, any assigned client ID, and whether authentication succeeded.
-func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clientID string, logger Logger) (*AuthResult, string, bool) {
+// the auth result, any assigned client ID, namespace, and whether authentication succeeded.
+func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clientID string, logger Logger) (*AuthResult, string, string, bool) {
 	// Check for enhanced authentication (AuthMethod in CONNECT properties)
 	authMethod := connect.Props.GetString(PropAuthenticationMethod)
 	if authMethod != "" {
@@ -51,13 +51,13 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 				ReasonCode: ReasonBadAuthMethod,
 			}
 			WritePacket(conn, connack, s.config.maxPacketSize)
-			return nil, "", false
+			return nil, "", "", false
 		}
 
 		// Perform enhanced authentication
 		enhancedResult, ok := s.performEnhancedAuth(conn, connect, clientID, authMethod, logger)
 		if !ok {
-			return nil, "", false
+			return nil, "", "", false
 		}
 
 		// Convert enhanced auth result to standard auth result for CONNACK properties
@@ -66,6 +66,7 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 				Success:          enhancedResult.Success,
 				ReasonCode:       enhancedResult.ReasonCode,
 				AssignedClientID: enhancedResult.AssignedClientID,
+				Namespace:        enhancedResult.Namespace,
 			}
 			// Merge enhanced auth properties (Auth Data, User Properties, Reason String, etc.)
 			authResult.Properties.Merge(&enhancedResult.Properties)
@@ -74,9 +75,9 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 			if len(enhancedResult.AuthData) > 0 {
 				authResult.Properties.Set(PropAuthenticationData, enhancedResult.AuthData)
 			}
-			return authResult, enhancedResult.AssignedClientID, true
+			return authResult, enhancedResult.AssignedClientID, enhancedResult.Namespace, true
 		}
-		return nil, "", true
+		return nil, "", "", true
 	}
 
 	// Standard authentication
@@ -95,14 +96,14 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 				ReasonCode: reasonCode,
 			}
 			WritePacket(conn, connack, s.config.maxPacketSize)
-			return nil, "", false
+			return nil, "", "", false
 		}
 		logger.Debug("authentication successful", nil)
-		return result, result.AssignedClientID, true
+		return result, result.AssignedClientID, result.Namespace, true
 	}
 
-	// No authentication configured
-	return nil, "", true
+	// No authentication configured - use default namespace
+	return nil, "", DefaultNamespace, true
 }
 
 // underlyingConnGetter is an interface for connections that wrap another connection.
@@ -157,6 +158,45 @@ func extractTLSInfo(conn net.Conn, actx *AuthContext) {
 			}
 		}
 	}
+}
+
+// buildConnack creates a CONNACK packet with all required properties.
+func (s *Server) buildConnack(sessionPresent bool, authResult *AuthResult, assignedClientID string, effectiveKeepAlive uint16) *ConnackPacket {
+	connack := &ConnackPacket{
+		SessionPresent: sessionPresent,
+		ReasonCode:     ReasonSuccess,
+	}
+
+	// Apply AuthResult fields to CONNACK
+	if authResult != nil {
+		if authResult.SessionPresent {
+			connack.SessionPresent = true
+		}
+		if authResult.Properties.Len() > 0 {
+			connack.Props.Merge(&authResult.Properties)
+		}
+	}
+
+	// Set Assigned Client Identifier if we generated one
+	if assignedClientID != "" {
+		connack.Props.Set(PropAssignedClientIdentifier, assignedClientID)
+	}
+
+	// Set server properties
+	if s.config.keepAliveOverride > 0 {
+		connack.Props.Set(PropServerKeepAlive, effectiveKeepAlive)
+	}
+	if s.config.topicAliasMax > 0 {
+		connack.Props.Set(PropTopicAliasMaximum, s.config.topicAliasMax)
+	}
+	if s.config.receiveMaximum < 65535 {
+		connack.Props.Set(PropReceiveMaximum, s.config.receiveMaximum)
+	}
+	if s.config.maxPacketSize > 0 && s.config.maxPacketSize < 268435455 {
+		connack.Props.Set(PropMaximumPacketSize, s.config.maxPacketSize)
+	}
+
+	return connack
 }
 
 var (
@@ -320,6 +360,7 @@ func (s *Server) Close() error {
 }
 
 // Publish sends a message to all matching subscribers.
+// The message's Namespace field determines the target namespace.
 func (s *Server) Publish(msg *Message) error {
 	if !s.running.Load() {
 		return ErrServerClosed
@@ -327,6 +368,11 @@ func (s *Server) Publish(msg *Message) error {
 
 	if err := ValidateTopicName(msg.Topic); err != nil {
 		return err
+	}
+
+	namespace := msg.Namespace
+	if namespace == "" {
+		namespace = DefaultNamespace
 	}
 
 	// Set publish time if not already set
@@ -342,9 +388,9 @@ func (s *Server) Publish(msg *Message) error {
 	// Handle retained messages
 	if msg.Retain {
 		if len(msg.Payload) == 0 {
-			s.config.retainedStore.Delete(msg.Topic)
+			s.config.retainedStore.Delete(namespace, msg.Topic)
 		} else {
-			s.config.retainedStore.Set(&RetainedMessage{
+			s.config.retainedStore.Set(namespace, &RetainedMessage{
 				Topic:           msg.Topic,
 				Payload:         msg.Payload,
 				QoS:             msg.QoS,
@@ -359,12 +405,13 @@ func (s *Server) Publish(msg *Message) error {
 		}
 	}
 
-	// Find matching subscribers
-	matches := s.subs.MatchForDelivery(msg.Topic, "")
+	// Find matching subscribers in the same namespace
+	matches := s.subs.MatchForDelivery(msg.Topic, "", namespace)
 
 	for _, entry := range matches {
+		clientKey := NamespaceKey(entry.Namespace, entry.ClientID)
 		s.mu.RLock()
-		client, ok := s.clients[entry.ClientID]
+		client, ok := s.clients[clientKey]
 		s.mu.RUnlock()
 
 		// Determine delivery QoS (minimum of message QoS and subscription QoS)
@@ -390,6 +437,7 @@ func (s *Server) Publish(msg *Message) error {
 			CorrelationData:         msg.CorrelationData,
 			UserProperties:          msg.UserProperties,
 			SubscriptionIdentifiers: msg.SubscriptionIdentifiers,
+			Namespace:               entry.Namespace,
 		}
 
 		// Add all aggregated subscription identifiers from matching subscriptions
@@ -403,7 +451,7 @@ func (s *Server) Publish(msg *Message) error {
 		if !ok {
 			// Client is offline - queue QoS > 0 messages to session for later delivery
 			if deliveryQoS > 0 {
-				s.queueOfflineMessage(entry.ClientID, deliveryMsg)
+				s.queueOfflineMessage(entry.Namespace, entry.ClientID, deliveryMsg)
 			}
 			continue
 		}
@@ -411,7 +459,7 @@ func (s *Server) Publish(msg *Message) error {
 		// Try to send, queue on failure for QoS > 0
 		if err := client.Send(deliveryMsg); err != nil && deliveryQoS > 0 {
 			// Queue for later delivery if quota exceeded or connection lost
-			s.queueOfflineMessage(entry.ClientID, deliveryMsg)
+			s.queueOfflineMessage(entry.Namespace, entry.ClientID, deliveryMsg)
 		}
 	}
 
@@ -497,7 +545,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 
 	// Perform authentication (standard or enhanced)
-	authResult, newClientID, ok := s.authenticateClient(conn, connect, clientID, logger)
+	authResult, newClientID, namespace, ok := s.authenticateClient(conn, connect, clientID, logger)
 	if !ok {
 		return // Auth failed, connection closed
 	}
@@ -508,6 +556,19 @@ func (s *Server) handleConnection(conn net.Conn) {
 		logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 	}
 
+	// Validate namespace using configured validator
+	if err := s.config.namespaceValidator(namespace); err != nil {
+		logger.Warn("invalid namespace", LogFields{
+			"namespace":   namespace,
+			LogFieldError: err.Error(),
+		})
+		connack := &ConnackPacket{
+			ReasonCode: ReasonNotAuthorized,
+		}
+		WritePacket(conn, connack, s.config.maxPacketSize)
+		return
+	}
+
 	// Determine max packet size for outbound messages (minimum of server and client limits)
 	// Per MQTT 5.0 spec, server must not send packets larger than client's advertised limit
 	clientMaxPacketSize := s.config.maxPacketSize
@@ -515,8 +576,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 		clientMaxPacketSize = clientLimit
 	}
 
-	// Create client with the effective max packet size
-	client := NewServerClient(conn, connect, clientMaxPacketSize)
+	// Create client with the effective max packet size and namespace
+	client := NewServerClient(conn, connect, clientMaxPacketSize, namespace)
 
 	// Apply CONNECT properties from client
 	// Receive Maximum: how many QoS 1/2 messages server can send to this client concurrently
@@ -536,74 +597,41 @@ func (s *Server) handleConnection(conn net.Conn) {
 	client.SetSessionExpiryInterval(connect.Props.GetUint32(PropSessionExpiryInterval))
 
 	// Handle session
-	sessionPresent := s.setupSession(client, clientID, connect.CleanStart)
+	sessionPresent := s.setupSession(client, clientID, namespace, connect.CleanStart)
 
-	// Check for existing connection with same client ID
+	// Check for existing connection with same client ID in the same namespace
+	clientKey := NamespaceKey(namespace, clientID)
 	s.mu.Lock()
-	if existing, ok := s.clients[clientID]; ok {
+	if existing, ok := s.clients[clientKey]; ok {
 		existing.Disconnect(ReasonSessionTakenOver)
-		delete(s.clients, clientID)
+		delete(s.clients, clientKey)
 	}
-	s.clients[clientID] = client
+	s.clients[clientKey] = client
 	s.mu.Unlock()
 
-	// Register keep-alive
-	effectiveKeepAlive := s.keepAlive.Register(clientID, connect.KeepAlive)
+	// Register keep-alive (using composite key for namespace isolation)
+	effectiveKeepAlive := s.keepAlive.Register(clientKey, connect.KeepAlive)
 
 	// Register will message or cancel any pending will from prior connection
 	if connect.WillFlag {
 		will := WillMessageFromConnect(connect)
-		s.wills.Register(clientID, will)
+		will.Namespace = namespace // Set namespace on will message
+		s.wills.Register(clientKey, will)
 	} else {
 		// Client reconnected without a Will flag - cancel any pending will
 		// from a prior connection to prevent stale wills from being published
-		s.wills.CancelPending(clientID)
+		s.wills.CancelPending(clientKey)
 	}
 
-	// Build CONNACK
-	connack := &ConnackPacket{
-		SessionPresent: sessionPresent,
-		ReasonCode:     ReasonSuccess,
-	}
+	// Build CONNACK with all properties
+	connack := s.buildConnack(sessionPresent, authResult, assignedClientID, effectiveKeepAlive)
 
-	// Apply AuthResult fields to CONNACK
-	if authResult != nil {
-		// AuthResult.SessionPresent can override session presence
-		if authResult.SessionPresent {
-			connack.SessionPresent = true
-		}
-		// Merge AuthResult properties into CONNACK
-		if authResult.Properties.Len() > 0 {
-			connack.Props.Merge(&authResult.Properties)
-		}
-	}
-
-	// Set Assigned Client Identifier if we generated one
-	if assignedClientID != "" {
-		connack.Props.Set(PropAssignedClientIdentifier, assignedClientID)
-	}
-
-	// Set server properties
-	if s.config.keepAliveOverride > 0 {
-		connack.Props.Set(PropServerKeepAlive, effectiveKeepAlive)
-	}
-	if s.config.topicAliasMax > 0 {
-		connack.Props.Set(PropTopicAliasMaximum, s.config.topicAliasMax)
-	}
 	// Set topic alias limits: inbound from server config, outbound from client's CONNECT
 	client.SetTopicAliasMax(s.config.topicAliasMax, clientTopicAliasMax)
-	if s.config.receiveMaximum < 65535 {
-		connack.Props.Set(PropReceiveMaximum, s.config.receiveMaximum)
-	}
-	// Advertise server's Maximum Packet Size so clients know the limit
-	// Per MQTT v5 spec, server SHOULD advertise this to prevent oversized packets
-	if s.config.maxPacketSize > 0 && s.config.maxPacketSize < 268435455 {
-		connack.Props.Set(PropMaximumPacketSize, s.config.maxPacketSize)
-	}
 
 	// Use clientMaxPacketSize for CONNACK to respect client's advertised limit
 	if _, err := WritePacket(conn, connack, clientMaxPacketSize); err != nil {
-		s.removeClient(clientID, client)
+		s.removeClient(clientKey, client)
 		return
 	}
 
@@ -621,7 +649,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		session := client.Session()
 		if session != nil {
 			for _, sub := range session.Subscriptions() {
-				s.subs.Subscribe(clientID, sub)
+				s.subs.Subscribe(clientID, namespace, sub)
 				s.config.metrics.SubscriptionAdded()
 			}
 		}
@@ -642,6 +670,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 	clientID := client.ClientID()
+	namespace := client.Namespace()
+	clientKey := NamespaceKey(namespace, clientID)
 	conn := client.Conn()
 
 	defer func() {
@@ -657,11 +687,11 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 		// Trigger will if not clean disconnect
 		// Clean disconnect is when DISCONNECT packet was received from client
 		if client.IsCleanDisconnect() {
-			s.wills.Unregister(clientID)
+			s.wills.Unregister(clientKey)
 		} else {
 			// Pass session expiry interval to will manager for will-delay interaction
 			sessionExpiry := time.Duration(client.SessionExpiryInterval()) * time.Second
-			s.wills.TriggerWill(clientID, sessionExpiry)
+			s.wills.TriggerWill(clientKey, sessionExpiry)
 			logger.Debug("will message triggered", nil)
 		}
 
@@ -674,12 +704,12 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 			} else {
 				// Session expiry of 0 means session ends immediately on disconnect
 				// Delete session and subscriptions immediately per MQTT v5 spec
-				s.config.sessionStore.Delete(clientID)
+				s.config.sessionStore.Delete(namespace, clientID)
 			}
 		}
 
 		// Pass client pointer to prevent race condition with new connections
-		s.removeClient(clientID, client)
+		s.removeClient(clientKey, client)
 	}()
 
 	for {
@@ -690,7 +720,7 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 		}
 
 		// Set read deadline based on keep-alive
-		if deadline, ok := s.keepAlive.GetDeadline(clientID); ok {
+		if deadline, ok := s.keepAlive.GetDeadline(clientKey); ok {
 			conn.SetReadDeadline(deadline)
 		}
 
@@ -704,7 +734,7 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 		s.config.metrics.PacketReceived(pkt.Type())
 
 		// Update keep-alive
-		s.keepAlive.UpdateActivity(clientID)
+		s.keepAlive.UpdateActivity(clientKey)
 
 		switch p := pkt.(type) {
 		case *PublishPacket:
@@ -816,6 +846,7 @@ func (s *Server) handlePubcomp(client *ServerClient, p *PubcompPacket) {
 
 func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger Logger) {
 	clientID := client.ClientID()
+	namespace := client.Namespace()
 	startTime := time.Now()
 
 	// Resolve topic alias
@@ -867,6 +898,7 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 	if s.config.authz != nil {
 		azCtx := &AuthzContext{
 			ClientID:   clientID,
+			Namespace:  namespace,
 			Username:   client.Username(),
 			Topic:      topic,
 			Action:     AuthzActionPublish,
@@ -938,6 +970,7 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 		Payload:     pub.Payload,
 		QoS:         effectiveQoS,
 		Retain:      pub.Retain,
+		Namespace:   namespace,
 		PublishedAt: time.Now(), // Track publish time for message expiry
 	}
 
@@ -1007,6 +1040,8 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 }
 
 func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
+	namespace := msg.Namespace
+
 	// Check if message has expired before delivery
 	if msg.IsExpired() {
 		return // Discard expired message
@@ -1015,9 +1050,9 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 	// Handle retained messages
 	if msg.Retain {
 		if len(msg.Payload) == 0 {
-			s.config.retainedStore.Delete(msg.Topic)
+			s.config.retainedStore.Delete(namespace, msg.Topic)
 		} else {
-			s.config.retainedStore.Set(&RetainedMessage{
+			s.config.retainedStore.Set(namespace, &RetainedMessage{
 				Topic:           msg.Topic,
 				Payload:         msg.Payload,
 				QoS:             msg.QoS,
@@ -1032,12 +1067,13 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 		}
 	}
 
-	// Find matching subscribers
-	matches := s.subs.MatchForDelivery(msg.Topic, publisherID)
+	// Find matching subscribers in the same namespace
+	matches := s.subs.MatchForDelivery(msg.Topic, publisherID, namespace)
 
 	for _, entry := range matches {
+		clientKey := NamespaceKey(entry.Namespace, entry.ClientID)
 		s.mu.RLock()
-		client, ok := s.clients[entry.ClientID]
+		client, ok := s.clients[clientKey]
 		s.mu.RUnlock()
 
 		// Determine delivery QoS
@@ -1074,7 +1110,7 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 		if !ok {
 			// Client is offline - queue QoS > 0 messages to session for later delivery
 			if deliveryQoS > 0 {
-				s.queueOfflineMessage(entry.ClientID, deliveryMsg)
+				s.queueOfflineMessage(entry.Namespace, entry.ClientID, deliveryMsg)
 			}
 			continue
 		}
@@ -1082,15 +1118,15 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 		// Try to send, queue on failure for QoS > 0
 		if err := client.Send(deliveryMsg); err != nil && deliveryQoS > 0 {
 			// Queue for later delivery if quota exceeded or connection lost
-			s.queueOfflineMessage(entry.ClientID, deliveryMsg)
+			s.queueOfflineMessage(entry.Namespace, entry.ClientID, deliveryMsg)
 		}
 	}
 }
 
 // queueOfflineMessage queues a message for later delivery to an offline client.
 // Only QoS > 0 messages should be queued (QoS 0 has no delivery guarantee).
-func (s *Server) queueOfflineMessage(clientID string, msg *Message) {
-	session, err := s.config.sessionStore.Get(clientID)
+func (s *Server) queueOfflineMessage(namespace, clientID string, msg *Message) {
+	session, err := s.config.sessionStore.Get(namespace, clientID)
 	if err != nil {
 		return // No session exists for this client
 	}
@@ -1107,6 +1143,7 @@ func (s *Server) queueOfflineMessage(clientID string, msg *Message) {
 
 func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, logger Logger) {
 	clientID := client.ClientID()
+	namespace := client.Namespace()
 	session := client.Session()
 
 	reasonCodes := make([]ReasonCode, len(sub.Subscriptions))
@@ -1116,6 +1153,7 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 		if s.config.authz != nil {
 			azCtx := &AuthzContext{
 				ClientID:   clientID,
+				Namespace:  namespace,
 				Username:   client.Username(),
 				Topic:      subscription.TopicFilter,
 				Action:     AuthzActionSubscribe,
@@ -1145,10 +1183,10 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 
 		// Check if this is a new subscription (without removing the existing one)
 		// Subscribe() handles removal of existing subscription atomically after validation
-		isNew := !s.subs.HasSubscription(clientID, subscription.TopicFilter)
+		isNew := !s.subs.HasSubscription(clientID, namespace, subscription.TopicFilter)
 
 		// Add subscription (this validates first, then removes any existing, then adds)
-		if err := s.subs.Subscribe(clientID, subscription); err != nil {
+		if err := s.subs.Subscribe(clientID, namespace, subscription); err != nil {
 			logger.Warn("subscription failed", LogFields{
 				LogFieldTopic: subscription.TopicFilter,
 				LogFieldError: err.Error(),
@@ -1172,7 +1210,7 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 
 		// Send retained messages
 		if ShouldSendRetained(subscription.RetainHandling, isNew) {
-			retained := s.config.retainedStore.Match(subscription.TopicFilter)
+			retained := s.config.retainedStore.Match(namespace, subscription.TopicFilter)
 			for _, retMsg := range retained {
 				deliveryQoS := retMsg.QoS
 				if subscription.QoS < deliveryQoS {
@@ -1207,7 +1245,7 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 				// Handle send failures for QoS > 0 retained messages
 				if err := client.Send(deliveryMsg); err != nil && deliveryQoS > 0 {
 					// Queue for later delivery if quota exceeded or connection issue
-					s.queueOfflineMessage(clientID, deliveryMsg)
+					s.queueOfflineMessage(namespace, clientID, deliveryMsg)
 				}
 			}
 		}
@@ -1239,12 +1277,13 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 
 func (s *Server) handleUnsubscribe(client *ServerClient, unsub *UnsubscribePacket, logger Logger) {
 	clientID := client.ClientID()
+	namespace := client.Namespace()
 	session := client.Session()
 
 	reasonCodes := make([]ReasonCode, len(unsub.TopicFilters))
 
 	for i, filter := range unsub.TopicFilters {
-		if s.subs.Unsubscribe(clientID, filter) {
+		if s.subs.Unsubscribe(clientID, namespace, filter) {
 			reasonCodes[i] = ReasonSuccess
 			s.config.metrics.SubscriptionRemoved()
 			logger.Debug("subscription removed", LogFields{
@@ -1278,17 +1317,18 @@ func (s *Server) handleUnsubscribe(client *ServerClient, unsub *UnsubscribePacke
 // If client is non-nil, the client is only removed if it matches the current
 // entry in the clients map. This prevents a race condition where a new client
 // with the same ID could be removed by the old client's deferred cleanup.
-func (s *Server) removeClient(clientID string, client *ServerClient) {
+// clientKey is the composite key (namespace||clientID).
+func (s *Server) removeClient(clientKey string, client *ServerClient) {
 	s.mu.Lock()
 	removed := false
 	if client != nil {
 		// Only remove if the map entry still points to this client
-		if existing, ok := s.clients[clientID]; ok && existing == client {
-			delete(s.clients, clientID)
+		if existing, ok := s.clients[clientKey]; ok && existing == client {
+			delete(s.clients, clientKey)
 			removed = true
 		}
 	} else {
-		delete(s.clients, clientID)
+		delete(s.clients, clientKey)
 		removed = true
 	}
 	s.mu.Unlock()
@@ -1297,8 +1337,9 @@ func (s *Server) removeClient(clientID string, client *ServerClient) {
 	// This prevents an old connection from unregistering a new client's state
 	// after session takeover.
 	if removed {
-		s.keepAlive.Unregister(clientID)
-		s.subs.UnsubscribeAll(clientID)
+		namespace, clientID := ParseNamespaceKey(clientKey)
+		s.keepAlive.Unregister(clientKey)
+		s.subs.UnsubscribeAll(clientID, namespace)
 	}
 }
 
@@ -1318,7 +1359,7 @@ func (s *Server) deliverPendingMessages(client *ServerClient, session Session) {
 		// Send the message - if it fails due to quota, it will be re-queued
 		if err := client.Send(msg); err != nil {
 			// Re-queue if send failed
-			s.queueOfflineMessage(client.ClientID(), msg)
+			s.queueOfflineMessage(client.Namespace(), client.ClientID(), msg)
 		}
 	}
 }

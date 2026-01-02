@@ -13,6 +13,7 @@ type ServerClient struct {
 	conn                  Conn
 	clientID              string
 	username              string
+	namespace             string
 	session               Session
 	topicAliases          *TopicAliasManager
 	qos1Tracker           *QoS1Tracker
@@ -29,11 +30,12 @@ type ServerClient struct {
 }
 
 // NewServerClient creates a new server client.
-func NewServerClient(conn Conn, connect *ConnectPacket, maxPacketSize uint32) *ServerClient {
+func NewServerClient(conn Conn, connect *ConnectPacket, maxPacketSize uint32, namespace string) *ServerClient {
 	client := &ServerClient{
 		conn:               conn,
 		clientID:           connect.ClientID,
 		username:           connect.Username,
+		namespace:          namespace,
 		properties:         connect,
 		cleanStart:         connect.CleanStart,
 		keepAlive:          connect.KeepAlive,
@@ -61,6 +63,11 @@ func (c *ServerClient) ClientID() string {
 // Username returns the username if provided during connect.
 func (c *ServerClient) Username() string {
 	return c.username
+}
+
+// Namespace returns the namespace for multi-tenancy isolation.
+func (c *ServerClient) Namespace() string {
+	return c.namespace
 }
 
 // Session returns the client's session.

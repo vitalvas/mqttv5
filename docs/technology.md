@@ -38,6 +38,7 @@ type Message struct {
     Payload                 []byte
     QoS                     byte
     Retain                  bool
+    Namespace               string        // Tenant namespace for isolation
     PayloadFormat           *byte
     MessageExpiry           *uint32
     ContentType             string
@@ -112,6 +113,45 @@ Supports any HTTP server compatible with `http.Handler` interface.
 | Enhanced Auth | Support for AUTH packet exchange (SASL, challenge-response) |
 
 Users implement their own authentication logic (LDAP, database, OAuth, etc.) via Authenticator interface.
+
+## Multi-Tenancy / Namespaces
+
+The SDK supports full tenant isolation via namespaces. Each namespace is completely isolated:
+
+| Feature | Isolation |
+|---------|-----------|
+| Topics | Clients can only publish/subscribe within their namespace |
+| Retained Messages | Retained messages are scoped to namespace |
+| Sessions | Sessions are identified by namespace + clientID |
+| Subscriptions | Subscription matching respects namespace boundaries |
+
+### Configuration
+
+Namespace is returned by the `Authenticator` during authentication:
+
+```go
+func (a *Auth) Authenticate(ctx context.Context, authCtx *mqttv5.AuthContext) (*mqttv5.AuthResult, error) {
+    return &mqttv5.AuthResult{
+        Success:    true,
+        ReasonCode: mqttv5.ReasonSuccess,
+        Namespace:  "tenant-1", // Assign tenant namespace
+    }, nil
+}
+```
+
+### Namespace Validation
+
+Namespaces follow domain name rules:
+- Lowercase letters (a-z), digits (0-9), hyphens (-), and dots (.)
+- Labels separated by dots, each 1-63 characters
+- Labels cannot start or end with hyphen
+- Total length max 253 characters
+
+Custom validation can be configured via `WithNamespaceValidator` option.
+
+### Default Namespace
+
+If no namespace is specified, `DefaultNamespace` ("default") is used.
 
 ## Persistence
 

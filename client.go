@@ -86,7 +86,7 @@ func DialContext(ctx context.Context, addr string, opts ...Option) (*Client, err
 	if options.clientID == "" {
 		options.clientID = generateClientID()
 	}
-	c.session = options.sessionFactory(options.clientID)
+	c.session = options.sessionFactory(options.clientID, "") // Client-side sessions don't need namespace
 
 	// Connect with timeout
 	connectCtx, connectCancel := context.WithTimeout(ctx, options.connectTimeout)
@@ -211,7 +211,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		// Assigned Client Identifier - server assigned us a new client ID
 		if assignedID := props.GetString(PropAssignedClientIdentifier); assignedID != "" {
 			c.options.clientID = assignedID
-			c.session = c.options.sessionFactory(assignedID)
+			c.session = c.options.sessionFactory(assignedID, "") // Client-side sessions don't need namespace
 		}
 		// Server Keep Alive - server overrides our keep-alive
 		if serverKA := props.GetUint16(PropServerKeepAlive); serverKA > 0 {

@@ -27,6 +27,9 @@ type AuthResult struct {
 
 	// AuthData contains authentication data to send back to the client.
 	AuthData []byte
+
+	// Namespace is the tenant namespace for multi-tenancy isolation.
+	Namespace string
 }
 
 // AuthContext contains information about the authentication request.
@@ -115,6 +118,9 @@ type EnhancedAuthResult struct {
 
 	// AssignedClientID is set if the server assigns a client ID during enhanced auth.
 	AssignedClientID string
+
+	// Namespace is the tenant namespace for multi-tenancy isolation.
+	Namespace string
 }
 
 // EnhancedAuthenticator defines the interface for enhanced authentication.
@@ -136,9 +142,9 @@ type EnhancedAuthenticator interface {
 // AllowAllAuthenticator allows all connections without checking credentials.
 type AllowAllAuthenticator struct{}
 
-// Authenticate always returns success.
+// Authenticate always returns success with the default namespace.
 func (a *AllowAllAuthenticator) Authenticate(_ context.Context, _ *AuthContext) (*AuthResult, error) {
-	return &AuthResult{Success: true, ReasonCode: ReasonSuccess}, nil
+	return &AuthResult{Success: true, ReasonCode: ReasonSuccess, Namespace: DefaultNamespace}, nil
 }
 
 // DenyAllAuthenticator denies all connections.

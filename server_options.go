@@ -5,39 +5,45 @@ import "net"
 // ServerOption configures a Server.
 type ServerOption func(*serverConfig)
 
+// NamespaceValidator validates a namespace during client connection.
+// Return an error to reject the connection with that namespace.
+type NamespaceValidator func(namespace string) error
+
 type serverConfig struct {
-	listeners         []net.Listener
-	sessionStore      SessionStore
-	sessionFactory    SessionFactory
-	retainedStore     RetainedStore
-	auth              Authenticator
-	enhancedAuth      EnhancedAuthenticator
-	authz             Authorizer
-	logger            Logger
-	metrics           MetricsCollector
-	maxPacketSize     uint32
-	maxConnections    int
-	keepAliveOverride uint16
-	topicAliasMax     uint16
-	receiveMaximum    uint16
-	onConnect         func(*ServerClient)
-	onDisconnect      func(*ServerClient)
-	onMessage         func(*ServerClient, *Message)
-	onSubscribe       func(*ServerClient, []Subscription)
-	onUnsubscribe     func(*ServerClient, []string)
+	listeners          []net.Listener
+	sessionStore       SessionStore
+	sessionFactory     SessionFactory
+	retainedStore      RetainedStore
+	auth               Authenticator
+	enhancedAuth       EnhancedAuthenticator
+	authz              Authorizer
+	namespaceValidator NamespaceValidator
+	logger             Logger
+	metrics            MetricsCollector
+	maxPacketSize      uint32
+	maxConnections     int
+	keepAliveOverride  uint16
+	topicAliasMax      uint16
+	receiveMaximum     uint16
+	onConnect          func(*ServerClient)
+	onDisconnect       func(*ServerClient)
+	onMessage          func(*ServerClient, *Message)
+	onSubscribe        func(*ServerClient, []Subscription)
+	onUnsubscribe      func(*ServerClient, []string)
 }
 
 func defaultServerConfig() *serverConfig {
 	return &serverConfig{
-		listeners:      make([]net.Listener, 0),
-		sessionStore:   NewMemorySessionStore(),
-		sessionFactory: DefaultSessionFactory(),
-		retainedStore:  NewMemoryRetainedStore(),
-		logger:         NewNoOpLogger(),
-		metrics:        &NoOpMetrics{},
-		maxPacketSize:  256 * 1024, // 256KB
-		maxConnections: 0,          // unlimited
-		receiveMaximum: 65535,
+		listeners:          make([]net.Listener, 0),
+		sessionStore:       NewMemorySessionStore(),
+		sessionFactory:     DefaultSessionFactory(),
+		retainedStore:      NewMemoryRetainedStore(),
+		namespaceValidator: ValidateNamespace,
+		logger:             NewNoOpLogger(),
+		metrics:            &NoOpMetrics{},
+		maxPacketSize:      256 * 1024, // 256KB
+		maxConnections:     0,          // unlimited
+		receiveMaximum:     65535,
 	}
 }
 
@@ -92,6 +98,17 @@ func WithEnhancedAuth(auth EnhancedAuthenticator) ServerOption {
 func WithServerAuthz(authz Authorizer) ServerOption {
 	return func(c *serverConfig) {
 		c.authz = authz
+	}
+}
+
+// WithNamespaceValidator sets the namespace validator.
+// The validator is called during client connection to validate the namespace
+// returned by the authenticator. If validation fails, the connection is rejected.
+func WithNamespaceValidator(validator NamespaceValidator) ServerOption {
+	return func(c *serverConfig) {
+		if validator != nil {
+			c.namespaceValidator = validator
+		}
 	}
 }
 

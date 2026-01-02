@@ -52,6 +52,9 @@ type AuthzContext struct {
 
 	// LocalAddr is the local address of the server connection.
 	LocalAddr net.Addr
+
+	// Namespace is the tenant namespace for multi-tenancy isolation.
+	Namespace string
 }
 
 // AuthzResult represents the result of an authorization check.

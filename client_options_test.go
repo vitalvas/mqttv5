@@ -223,17 +223,17 @@ func TestWithClientSessionFactory(t *testing.T) {
 		opts := defaultOptions()
 		assert.NotNil(t, opts.sessionFactory)
 
-		session := opts.sessionFactory("test-client")
+		session := opts.sessionFactory("test-client", "")
 		assert.Equal(t, "test-client", session.ClientID())
 	})
 
 	t.Run("custom session factory", func(t *testing.T) {
-		customFactory := func(clientID string) Session {
-			return NewMemorySession("custom-" + clientID)
+		customFactory := func(clientID, namespace string) Session {
+			return NewMemorySession("custom-"+clientID, namespace)
 		}
 		opts := applyOptions(WithClientSessionFactory(customFactory))
 
-		session := opts.sessionFactory("test")
+		session := opts.sessionFactory("test", "")
 		assert.Equal(t, "custom-test", session.ClientID())
 	})
 
@@ -241,7 +241,7 @@ func TestWithClientSessionFactory(t *testing.T) {
 		opts := applyOptions(WithClientSessionFactory(nil))
 		assert.NotNil(t, opts.sessionFactory)
 
-		session := opts.sessionFactory("test-client")
+		session := opts.sessionFactory("test-client", "")
 		assert.Equal(t, "test-client", session.ClientID())
 	})
 }

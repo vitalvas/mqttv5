@@ -43,16 +43,16 @@ func (m *RetainedMessage) RemainingExpiry() uint32 {
 type RetainedStore interface {
 	// Set stores or updates a retained message.
 	// If the payload is empty, the retained message is deleted.
-	Set(msg *RetainedMessage) error
+	Set(namespace string, msg *RetainedMessage) error
 
 	// Get retrieves a retained message by exact topic.
-	Get(topic string) (*RetainedMessage, bool)
+	Get(namespace, topic string) (*RetainedMessage, bool)
 
 	// Delete removes a retained message by topic.
-	Delete(topic string) bool
+	Delete(namespace, topic string) bool
 
 	// Match returns all retained messages matching a topic filter.
-	Match(filter string) []*RetainedMessage
+	Match(namespace, filter string) []*RetainedMessage
 
 	// Clear removes all retained messages.
 	Clear()

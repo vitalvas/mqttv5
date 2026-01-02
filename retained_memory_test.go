@@ -9,6 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testNS is the default namespace used for tests
+const testNS = "test"
+
 func TestMemoryRetainedStore(t *testing.T) {
 	t.Run("set and get", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
@@ -19,10 +22,10 @@ func TestMemoryRetainedStore(t *testing.T) {
 			QoS:     1,
 		}
 
-		err := store.Set(msg)
+		err := store.Set(testNS, msg)
 		require.NoError(t, err)
 
-		got, ok := store.Get("test/topic")
+		got, ok := store.Get(testNS, "test/topic")
 		require.True(t, ok)
 		assert.Equal(t, msg.Topic, got.Topic)
 		assert.Equal(t, msg.Payload, got.Payload)
@@ -32,48 +35,48 @@ func TestMemoryRetainedStore(t *testing.T) {
 	t.Run("get not found", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		_, ok := store.Get("nonexistent")
+		_, ok := store.Get(testNS, "nonexistent")
 		assert.False(t, ok)
 	})
 
 	t.Run("set with empty payload deletes", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		store.Set(&RetainedMessage{
+		store.Set(testNS, &RetainedMessage{
 			Topic:   "test/topic",
 			Payload: []byte("data"),
 		})
 
-		store.Set(&RetainedMessage{
+		store.Set(testNS, &RetainedMessage{
 			Topic:   "test/topic",
 			Payload: []byte{},
 		})
 
-		_, ok := store.Get("test/topic")
+		_, ok := store.Get(testNS, "test/topic")
 		assert.False(t, ok)
 	})
 
 	t.Run("set with nil payload deletes", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		store.Set(&RetainedMessage{
+		store.Set(testNS, &RetainedMessage{
 			Topic:   "test/topic",
 			Payload: []byte("data"),
 		})
 
-		store.Set(&RetainedMessage{
+		store.Set(testNS, &RetainedMessage{
 			Topic:   "test/topic",
 			Payload: nil,
 		})
 
-		_, ok := store.Get("test/topic")
+		_, ok := store.Get(testNS, "test/topic")
 		assert.False(t, ok)
 	})
 
 	t.Run("set invalid topic", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		err := store.Set(&RetainedMessage{
+		err := store.Set(testNS, &RetainedMessage{
 			Topic:   "",
 			Payload: []byte("data"),
 		})
@@ -84,17 +87,17 @@ func TestMemoryRetainedStore(t *testing.T) {
 	t.Run("set updates existing", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		store.Set(&RetainedMessage{
+		store.Set(testNS, &RetainedMessage{
 			Topic:   "test/topic",
 			Payload: []byte("old"),
 		})
 
-		store.Set(&RetainedMessage{
+		store.Set(testNS, &RetainedMessage{
 			Topic:   "test/topic",
 			Payload: []byte("new"),
 		})
 
-		got, ok := store.Get("test/topic")
+		got, ok := store.Get(testNS, "test/topic")
 		require.True(t, ok)
 		assert.Equal(t, []byte("new"), got.Payload)
 	})
@@ -102,28 +105,28 @@ func TestMemoryRetainedStore(t *testing.T) {
 	t.Run("delete", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		store.Set(&RetainedMessage{
+		store.Set(testNS, &RetainedMessage{
 			Topic:   "test/topic",
 			Payload: []byte("data"),
 		})
 
-		ok := store.Delete("test/topic")
+		ok := store.Delete(testNS, "test/topic")
 		assert.True(t, ok)
 
-		ok = store.Delete("test/topic")
+		ok = store.Delete(testNS, "test/topic")
 		assert.False(t, ok)
 
-		_, found := store.Get("test/topic")
+		_, found := store.Get(testNS, "test/topic")
 		assert.False(t, found)
 	})
 
 	t.Run("match exact", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		store.Set(&RetainedMessage{Topic: "a/b/c", Payload: []byte("1")})
-		store.Set(&RetainedMessage{Topic: "a/b/d", Payload: []byte("2")})
+		store.Set(testNS, &RetainedMessage{Topic: "a/b/c", Payload: []byte("1")})
+		store.Set(testNS, &RetainedMessage{Topic: "a/b/d", Payload: []byte("2")})
 
-		matched := store.Match("a/b/c")
+		matched := store.Match(testNS, "a/b/c")
 		assert.Len(t, matched, 1)
 		assert.Equal(t, "a/b/c", matched[0].Topic)
 	})
@@ -131,38 +134,38 @@ func TestMemoryRetainedStore(t *testing.T) {
 	t.Run("match single level wildcard", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		store.Set(&RetainedMessage{Topic: "sensor/1/temp", Payload: []byte("1")})
-		store.Set(&RetainedMessage{Topic: "sensor/2/temp", Payload: []byte("2")})
-		store.Set(&RetainedMessage{Topic: "sensor/1/humidity", Payload: []byte("3")})
+		store.Set(testNS, &RetainedMessage{Topic: "sensor/1/temp", Payload: []byte("1")})
+		store.Set(testNS, &RetainedMessage{Topic: "sensor/2/temp", Payload: []byte("2")})
+		store.Set(testNS, &RetainedMessage{Topic: "sensor/1/humidity", Payload: []byte("3")})
 
-		matched := store.Match("sensor/+/temp")
+		matched := store.Match(testNS, "sensor/+/temp")
 		assert.Len(t, matched, 2)
 	})
 
 	t.Run("match multi level wildcard", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		store.Set(&RetainedMessage{Topic: "a/b/c", Payload: []byte("1")})
-		store.Set(&RetainedMessage{Topic: "a/b/d/e", Payload: []byte("2")})
-		store.Set(&RetainedMessage{Topic: "a/x", Payload: []byte("3")})
+		store.Set(testNS, &RetainedMessage{Topic: "a/b/c", Payload: []byte("1")})
+		store.Set(testNS, &RetainedMessage{Topic: "a/b/d/e", Payload: []byte("2")})
+		store.Set(testNS, &RetainedMessage{Topic: "a/x", Payload: []byte("3")})
 
-		matched := store.Match("a/b/#")
+		matched := store.Match(testNS, "a/b/#")
 		assert.Len(t, matched, 2)
 
-		matched = store.Match("#")
+		matched = store.Match(testNS, "#")
 		assert.Len(t, matched, 3)
 	})
 
 	t.Run("match system topics", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		store.Set(&RetainedMessage{Topic: "$SYS/broker/uptime", Payload: []byte("1")})
-		store.Set(&RetainedMessage{Topic: "normal/topic", Payload: []byte("2")})
+		store.Set(testNS, &RetainedMessage{Topic: "$SYS/broker/uptime", Payload: []byte("1")})
+		store.Set(testNS, &RetainedMessage{Topic: "normal/topic", Payload: []byte("2")})
 
-		matched := store.Match("#")
+		matched := store.Match(testNS, "#")
 		assert.Len(t, matched, 1)
 
-		matched = store.Match("$SYS/#")
+		matched = store.Match(testNS, "$SYS/#")
 		assert.Len(t, matched, 1)
 		assert.Equal(t, "$SYS/broker/uptime", matched[0].Topic)
 	})
@@ -170,9 +173,9 @@ func TestMemoryRetainedStore(t *testing.T) {
 	t.Run("clear", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		store.Set(&RetainedMessage{Topic: "a", Payload: []byte("1")})
-		store.Set(&RetainedMessage{Topic: "b", Payload: []byte("2")})
-		store.Set(&RetainedMessage{Topic: "c", Payload: []byte("3")})
+		store.Set(testNS, &RetainedMessage{Topic: "a", Payload: []byte("1")})
+		store.Set(testNS, &RetainedMessage{Topic: "b", Payload: []byte("2")})
+		store.Set(testNS, &RetainedMessage{Topic: "c", Payload: []byte("3")})
 
 		assert.Equal(t, 3, store.Count())
 
@@ -186,22 +189,22 @@ func TestMemoryRetainedStore(t *testing.T) {
 
 		assert.Equal(t, 0, store.Count())
 
-		store.Set(&RetainedMessage{Topic: "a", Payload: []byte("1")})
+		store.Set(testNS, &RetainedMessage{Topic: "a", Payload: []byte("1")})
 		assert.Equal(t, 1, store.Count())
 
-		store.Set(&RetainedMessage{Topic: "b", Payload: []byte("2")})
+		store.Set(testNS, &RetainedMessage{Topic: "b", Payload: []byte("2")})
 		assert.Equal(t, 2, store.Count())
 
-		store.Delete("a")
+		store.Delete(testNS, "a")
 		assert.Equal(t, 1, store.Count())
 	})
 
 	t.Run("topics", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		store.Set(&RetainedMessage{Topic: "a/b", Payload: []byte("1")})
-		store.Set(&RetainedMessage{Topic: "c/d", Payload: []byte("2")})
-		store.Set(&RetainedMessage{Topic: "e/f", Payload: []byte("3")})
+		store.Set(testNS, &RetainedMessage{Topic: "a/b", Payload: []byte("1")})
+		store.Set(testNS, &RetainedMessage{Topic: "c/d", Payload: []byte("2")})
+		store.Set(testNS, &RetainedMessage{Topic: "e/f", Payload: []byte("3")})
 
 		topics := store.Topics()
 		assert.Len(t, topics, 3)
@@ -226,10 +229,10 @@ func TestMemoryRetainedStore(t *testing.T) {
 			UserProperties:  []StringPair{{Key: "key1", Value: "value1"}},
 		}
 
-		err := store.Set(msg)
+		err := store.Set(testNS, msg)
 		require.NoError(t, err)
 
-		got, ok := store.Get("test/topic")
+		got, ok := store.Get(testNS, "test/topic")
 		require.True(t, ok)
 		assert.Equal(t, msg.Topic, got.Topic)
 		assert.Equal(t, msg.Payload, got.Payload)
@@ -246,20 +249,20 @@ func TestMemoryRetainedStore(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
 		// Active message (no expiry)
-		store.Set(&RetainedMessage{
+		store.Set(testNS, &RetainedMessage{
 			Topic:   "active/topic",
 			Payload: []byte("active"),
 		})
 
 		// Already expired message (published 2 seconds ago with 1 second expiry)
-		store.Set(&RetainedMessage{
+		store.Set(testNS, &RetainedMessage{
 			Topic:         "expired/topic",
 			Payload:       []byte("expired"),
 			MessageExpiry: 1,
 			PublishedAt:   time.Now().Add(-2 * time.Second),
 		})
 
-		matched := store.Match("#")
+		matched := store.Match(testNS, "#")
 		assert.Len(t, matched, 1)
 		assert.Equal(t, "active/topic", matched[0].Topic)
 	})
@@ -275,13 +278,13 @@ func TestMemoryRetainedStore(t *testing.T) {
 			MessageExpiry: 1,
 			PublishedAt:   time.Now().Add(-2 * time.Second),
 		}
-		store.Set(msg)
+		store.Set(testNS, msg)
 
 		// Initial count should be 1
 		assert.Equal(t, 1, store.Count())
 
 		// Match should exclude and purge expired messages
-		matched := store.Match("test/#")
+		matched := store.Match(testNS, "test/#")
 		assert.Empty(t, matched, "expired messages should not be matched")
 		assert.Equal(t, 0, store.Count(), "expired messages should be purged")
 	})
@@ -290,7 +293,7 @@ func TestMemoryRetainedStore(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
 		// Add an expired message
-		store.Set(&RetainedMessage{
+		store.Set(testNS, &RetainedMessage{
 			Topic:         "test/expired",
 			Payload:       []byte("data"),
 			QoS:           1,
@@ -308,13 +311,13 @@ func TestMemoryRetainedStore(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
 		// Add expired and non-expired messages
-		store.Set(&RetainedMessage{
+		store.Set(testNS, &RetainedMessage{
 			Topic:         "test/expired",
 			Payload:       []byte("data"),
 			MessageExpiry: 1,
 			PublishedAt:   time.Now().Add(-2 * time.Second),
 		})
-		store.Set(&RetainedMessage{
+		store.Set(testNS, &RetainedMessage{
 			Topic:   "test/active",
 			Payload: []byte("data"),
 		})
@@ -402,10 +405,10 @@ func TestMemoryRetainedStoreConcurrency(_ *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			topic := "test/" + string(rune(n))
-			store.Set(&RetainedMessage{Topic: topic, Payload: []byte("data")})
-			store.Get(topic)
-			store.Match("test/#")
-			store.Delete(topic)
+			store.Set(testNS, &RetainedMessage{Topic: topic, Payload: []byte("data")})
+			store.Get(testNS, topic)
+			store.Match(testNS, "test/#")
+			store.Delete(testNS, topic)
 		}(i)
 	}
 
@@ -423,19 +426,19 @@ func BenchmarkMemoryRetainedStoreSet(b *testing.B) {
 	b.ReportAllocs()
 
 	for b.Loop() {
-		store.Set(msg)
+		store.Set(testNS, msg)
 	}
 }
 
 func BenchmarkMemoryRetainedStoreGet(b *testing.B) {
 	store := NewMemoryRetainedStore()
-	store.Set(&RetainedMessage{Topic: "test/topic", Payload: []byte("data")})
+	store.Set(testNS, &RetainedMessage{Topic: "test/topic", Payload: []byte("data")})
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for b.Loop() {
-		store.Get("test/topic")
+		store.Get(testNS, "test/topic")
 	}
 }
 
@@ -443,13 +446,13 @@ func BenchmarkMemoryRetainedStoreMatch(b *testing.B) {
 	store := NewMemoryRetainedStore()
 	for i := range 100 {
 		topic := "sensor/" + string(rune(i)) + "/temperature"
-		store.Set(&RetainedMessage{Topic: topic, Payload: []byte("data")})
+		store.Set(testNS, &RetainedMessage{Topic: topic, Payload: []byte("data")})
 	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for b.Loop() {
-		store.Match("sensor/+/temperature")
+		store.Match(testNS, "sensor/+/temperature")
 	}
 }

@@ -27,7 +27,11 @@ type Auth struct {
 
 func (a *Auth) Authenticate(_ context.Context, ctx *mqttv5.AuthContext) (*mqttv5.AuthResult, error) {
 	if pass, ok := a.Users[ctx.Username]; ok && pass == string(ctx.Password) {
-		return &mqttv5.AuthResult{Success: true, ReasonCode: mqttv5.ReasonSuccess}, nil
+		return &mqttv5.AuthResult{
+			Success:    true,
+			ReasonCode: mqttv5.ReasonSuccess,
+			Namespace:  mqttv5.DefaultNamespace,
+		}, nil
 	}
 	return &mqttv5.AuthResult{Success: false, ReasonCode: mqttv5.ReasonBadUserNameOrPassword}, nil
 }

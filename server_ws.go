@@ -124,7 +124,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 
 	// Perform authentication (standard or enhanced) - same as TCP path
-	authResult, newClientID, ok := s.authenticateClient(conn, connect, clientID, logger)
+	authResult, newClientID, namespace, ok := s.authenticateClient(conn, connect, clientID, logger)
 	if !ok {
 		return // Auth failed, connection closed
 	}
@@ -135,6 +135,19 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 	}
 
+	// Validate namespace using configured validator
+	if err := s.config.namespaceValidator(namespace); err != nil {
+		logger.Warn("invalid namespace", LogFields{
+			"namespace":   namespace,
+			LogFieldError: err.Error(),
+		})
+		connack := &ConnackPacket{
+			ReasonCode: ReasonNotAuthorized,
+		}
+		WritePacket(conn, connack, s.config.maxPacketSize)
+		return
+	}
+
 	// Determine max packet size for outbound messages (minimum of server and client limits)
 	clientMaxPacketSize := s.config.maxPacketSize
 	if clientLimit := connect.Props.GetUint32(PropMaximumPacketSize); clientLimit > 0 && clientLimit < clientMaxPacketSize {
@@ -142,7 +155,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	}
 
 	// Create client using the constructor to ensure all fields are initialized
-	client := NewServerClient(conn, connect, clientMaxPacketSize)
+	client := NewServerClient(conn, connect, clientMaxPacketSize, namespace)
 
 	// Apply CONNECT properties from client
 	if rm := connect.Props.GetUint16(PropReceiveMaximum); rm > 0 {
@@ -161,73 +174,41 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	client.SetSessionExpiryInterval(connect.Props.GetUint32(PropSessionExpiryInterval))
 
 	// Handle session
-	sessionPresent := s.setupSession(client, clientID, connect.CleanStart)
+	sessionPresent := s.setupSession(client, clientID, namespace, connect.CleanStart)
 
-	// Check for existing connection with same client ID
+	// Check for existing connection with same client ID in the same namespace
+	clientKey := NamespaceKey(namespace, clientID)
 	s.mu.Lock()
-	if existing, ok := s.clients[clientID]; ok {
+	if existing, ok := s.clients[clientKey]; ok {
 		existing.Disconnect(ReasonSessionTakenOver)
-		delete(s.clients, clientID)
+		delete(s.clients, clientKey)
 	}
-	s.clients[clientID] = client
+	s.clients[clientKey] = client
 	s.mu.Unlock()
 
-	// Register keep-alive
-	effectiveKeepAlive := s.keepAlive.Register(clientID, connect.KeepAlive)
+	// Register keep-alive (using composite key for namespace isolation)
+	effectiveKeepAlive := s.keepAlive.Register(clientKey, connect.KeepAlive)
 
 	// Register will message or cancel any pending will from prior connection
 	if connect.WillFlag {
 		will := WillMessageFromConnect(connect)
-		s.wills.Register(clientID, will)
+		will.Namespace = namespace // Set namespace on will message
+		s.wills.Register(clientKey, will)
 	} else {
 		// Client reconnected without a Will flag - cancel any pending will
 		// from a prior connection to prevent stale wills from being published
-		s.wills.CancelPending(clientID)
+		s.wills.CancelPending(clientKey)
 	}
 
-	// Build CONNACK
-	connack := &ConnackPacket{
-		SessionPresent: sessionPresent,
-		ReasonCode:     ReasonSuccess,
-	}
+	// Build CONNACK with all properties
+	connack := s.buildConnack(sessionPresent, authResult, assignedClientID, effectiveKeepAlive)
 
-	// Apply AuthResult fields to CONNACK (matching TCP behavior)
-	if authResult != nil {
-		// AuthResult.SessionPresent can override session presence
-		if authResult.SessionPresent {
-			connack.SessionPresent = true
-		}
-		// Merge AuthResult properties into CONNACK
-		if authResult.Properties.Len() > 0 {
-			connack.Props.Merge(&authResult.Properties)
-		}
-	}
-
-	// Set Assigned Client Identifier if we generated one
-	if assignedClientID != "" {
-		connack.Props.Set(PropAssignedClientIdentifier, assignedClientID)
-	}
-
-	if s.config.keepAliveOverride > 0 {
-		connack.Props.Set(PropServerKeepAlive, effectiveKeepAlive)
-	}
-	if s.config.topicAliasMax > 0 {
-		connack.Props.Set(PropTopicAliasMaximum, s.config.topicAliasMax)
-	}
 	// Set topic alias limits: inbound from server config, outbound from client's CONNECT
 	client.SetTopicAliasMax(s.config.topicAliasMax, clientTopicAliasMax)
-	if s.config.receiveMaximum < 65535 {
-		connack.Props.Set(PropReceiveMaximum, s.config.receiveMaximum)
-	}
-	// Advertise server's Maximum Packet Size so clients know the limit
-	// Per MQTT v5 spec, server SHOULD advertise this to prevent oversized packets
-	if s.config.maxPacketSize > 0 && s.config.maxPacketSize < 268435455 {
-		connack.Props.Set(PropMaximumPacketSize, s.config.maxPacketSize)
-	}
 
 	// Use clientMaxPacketSize for CONNACK to respect client's advertised limit
 	if _, err := WritePacket(conn, connack, clientMaxPacketSize); err != nil {
-		s.removeClient(clientID, client)
+		s.removeClient(clientKey, client)
 		return
 	}
 
@@ -245,7 +226,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		session := client.Session()
 		if session != nil {
 			for _, sub := range session.Subscriptions() {
-				s.subs.Subscribe(clientID, sub)
+				s.subs.Subscribe(clientID, namespace, sub)
 				s.config.metrics.SubscriptionAdded()
 			}
 		}

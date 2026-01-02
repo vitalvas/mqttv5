@@ -10,6 +10,7 @@ import (
 type MemorySession struct {
 	mu              sync.RWMutex
 	clientID        string
+	namespace       string
 	subscriptions   map[string]Subscription
 	pendingMessages map[uint16]*Message
 	inflightQoS1    map[uint16]*QoS1Message
@@ -21,10 +22,11 @@ type MemorySession struct {
 }
 
 // NewMemorySession creates a new in-memory session.
-func NewMemorySession(clientID string) *MemorySession {
+func NewMemorySession(clientID, namespace string) *MemorySession {
 	now := time.Now()
 	return &MemorySession{
 		clientID:        clientID,
+		namespace:       namespace,
 		subscriptions:   make(map[string]Subscription),
 		pendingMessages: make(map[uint16]*Message),
 		inflightQoS1:    make(map[uint16]*QoS1Message),
@@ -36,6 +38,10 @@ func NewMemorySession(clientID string) *MemorySession {
 
 func (s *MemorySession) ClientID() string {
 	return s.clientID
+}
+
+func (s *MemorySession) Namespace() string {
+	return s.namespace
 }
 
 func (s *MemorySession) Subscriptions() []Subscription {
@@ -283,47 +289,51 @@ func (s *MemorySessionStore) SetExpiryHandler(handler SessionExpiryHandler) {
 	s.expiryHandler = handler
 }
 
-func (s *MemorySessionStore) Create(session Session) error {
+func (s *MemorySessionStore) Create(namespace string, session Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.sessions[session.ClientID()]; ok {
+	key := NamespaceKey(namespace, session.ClientID())
+	if _, ok := s.sessions[key]; ok {
 		return ErrSessionExists
 	}
-	s.sessions[session.ClientID()] = session
+	s.sessions[key] = session
 	return nil
 }
 
-func (s *MemorySessionStore) Get(clientID string) (Session, error) {
+func (s *MemorySessionStore) Get(namespace, clientID string) (Session, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	session, ok := s.sessions[clientID]
+	key := NamespaceKey(namespace, clientID)
+	session, ok := s.sessions[key]
 	if !ok {
 		return nil, ErrSessionNotFound
 	}
 	return session, nil
 }
 
-func (s *MemorySessionStore) Update(session Session) error {
+func (s *MemorySessionStore) Update(namespace string, session Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.sessions[session.ClientID()]; !ok {
+	key := NamespaceKey(namespace, session.ClientID())
+	if _, ok := s.sessions[key]; !ok {
 		return ErrSessionNotFound
 	}
-	s.sessions[session.ClientID()] = session
+	s.sessions[key] = session
 	return nil
 }
 
-func (s *MemorySessionStore) Delete(clientID string) error {
+func (s *MemorySessionStore) Delete(namespace, clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.sessions[clientID]; !ok {
+	key := NamespaceKey(namespace, clientID)
+	if _, ok := s.sessions[key]; !ok {
 		return ErrSessionNotFound
 	}
-	delete(s.sessions, clientID)
+	delete(s.sessions, key)
 	return nil
 }
 
@@ -350,7 +360,8 @@ func (s *MemorySessionStore) Cleanup() int {
 	}
 
 	for _, session := range expired {
-		delete(s.sessions, session.ClientID())
+		key := NamespaceKey(session.Namespace(), session.ClientID())
+		delete(s.sessions, key)
 		if s.expiryHandler != nil {
 			s.expiryHandler(session)
 		}

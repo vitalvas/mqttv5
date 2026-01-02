@@ -160,13 +160,13 @@ func TestServerOptions(t *testing.T) {
 	})
 
 	t.Run("with session factory", func(t *testing.T) {
-		customFactory := func(clientID string) Session {
-			return NewMemorySession("custom-" + clientID)
+		customFactory := func(clientID, namespace string) Session {
+			return NewMemorySession("custom-"+clientID, namespace)
 		}
 		cfg := defaultServerConfig()
 		WithSessionFactory(customFactory)(cfg)
 
-		session := cfg.sessionFactory("test")
+		session := cfg.sessionFactory("test", testNS)
 		assert.Equal(t, "custom-test", session.ClientID())
 	})
 
@@ -177,15 +177,15 @@ func TestServerOptions(t *testing.T) {
 
 		// Should not change when nil
 		assert.NotNil(t, cfg.sessionFactory)
-		session := cfg.sessionFactory("test")
-		assert.Equal(t, originalFactory("test").ClientID(), session.ClientID())
+		session := cfg.sessionFactory("test", testNS)
+		assert.Equal(t, originalFactory("test", testNS).ClientID(), session.ClientID())
 	})
 
 	t.Run("default session factory", func(t *testing.T) {
 		cfg := defaultServerConfig()
 		assert.NotNil(t, cfg.sessionFactory)
 
-		session := cfg.sessionFactory("test-client")
+		session := cfg.sessionFactory("test-client", testNS)
 		assert.Equal(t, "test-client", session.ClientID())
 	})
 }

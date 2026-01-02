@@ -8,19 +8,21 @@ import (
 // SubscriptionEntry holds a subscription with its owner.
 type SubscriptionEntry struct {
 	ClientID        string
+	Namespace       string
 	Subscription    Subscription
 	SubscriptionIDs []uint32 // Aggregated subscription IDs from all matching subscriptions
 	ShareGroup      string   // Non-empty for shared subscriptions ($share/{group}/{filter})
 }
 
 // MatchSubscriber implements SubscriberMatcher for SubscriptionEntry comparison.
-// Two entries match if they have the same ClientID and TopicFilter.
+// Two entries match if they have the same ClientID, Namespace, and TopicFilter.
 func (e SubscriptionEntry) MatchSubscriber(other any) bool {
 	otherEntry, ok := other.(SubscriptionEntry)
 	if !ok {
 		return false
 	}
 	return e.ClientID == otherEntry.ClientID &&
+		e.Namespace == otherEntry.Namespace &&
 		e.Subscription.TopicFilter == otherEntry.Subscription.TopicFilter
 }
 
@@ -44,7 +46,7 @@ func NewSubscriptionManager() *SubscriptionManager {
 }
 
 // Subscribe adds a subscription for a client.
-func (m *SubscriptionManager) Subscribe(clientID string, sub Subscription) error {
+func (m *SubscriptionManager) Subscribe(clientID, namespace string, sub Subscription) error {
 	if err := ValidateTopicFilter(sub.TopicFilter); err != nil {
 		return err
 	}
@@ -54,6 +56,7 @@ func (m *SubscriptionManager) Subscribe(clientID string, sub Subscription) error
 
 	entry := SubscriptionEntry{
 		ClientID:     clientID,
+		Namespace:    namespace,
 		Subscription: sub,
 	}
 
@@ -66,23 +69,24 @@ func (m *SubscriptionManager) Subscribe(clientID string, sub Subscription) error
 		// Shared subscription: use the underlying filter for matching
 		matchFilter = sharedSub.TopicFilter
 		entry.ShareGroup = sharedSub.ShareName
-		// Create a unique key for the share group + filter combination
-		shareGroupKey = sharedSub.ShareName + "/" + sharedSub.TopicFilter
+		// Create a unique key for the share group + filter combination (namespace-scoped)
+		shareGroupKey = NamespaceKey(namespace, sharedSub.ShareName+"/"+sharedSub.TopicFilter)
 	} else {
 		// Regular subscription
 		matchFilter = sub.TopicFilter
 	}
 
 	// Remove existing subscription with same filter
-	m.removeSubscriptionLocked(clientID, sub.TopicFilter)
+	m.removeSubscriptionLocked(clientID, namespace, sub.TopicFilter)
 
 	// Add to matcher using the effective filter (underlying filter for shared subscriptions)
 	if err := m.matcher.Subscribe(matchFilter, entry); err != nil {
 		return err
 	}
 
-	// Add to client's subscriptions
-	m.subscriptions[clientID] = append(m.subscriptions[clientID], entry)
+	// Add to client's subscriptions (namespace-scoped key)
+	key := NamespaceKey(namespace, clientID)
+	m.subscriptions[key] = append(m.subscriptions[key], entry)
 
 	// Add to shared group index if shared subscription
 	if shareGroupKey != "" {
@@ -96,15 +100,16 @@ func (m *SubscriptionManager) Subscribe(clientID string, sub Subscription) error
 }
 
 // Unsubscribe removes a subscription for a client.
-func (m *SubscriptionManager) Unsubscribe(clientID string, filter string) bool {
+func (m *SubscriptionManager) Unsubscribe(clientID, namespace, filter string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return m.removeSubscriptionLocked(clientID, filter)
+	return m.removeSubscriptionLocked(clientID, namespace, filter)
 }
 
-func (m *SubscriptionManager) removeSubscriptionLocked(clientID string, filter string) bool {
-	subs := m.subscriptions[clientID]
+func (m *SubscriptionManager) removeSubscriptionLocked(clientID, namespace, filter string) bool {
+	key := NamespaceKey(namespace, clientID)
+	subs := m.subscriptions[key]
 	for i, entry := range subs {
 		if entry.Subscription.TopicFilter == filter {
 			// Determine the match filter for removal from matcher
@@ -112,20 +117,20 @@ func (m *SubscriptionManager) removeSubscriptionLocked(clientID string, filter s
 			var shareGroupKey string
 			if sharedSub, _ := ParseSharedSubscription(filter); sharedSub != nil {
 				matchFilter = sharedSub.TopicFilter
-				shareGroupKey = sharedSub.ShareName + "/" + sharedSub.TopicFilter
+				shareGroupKey = NamespaceKey(namespace, sharedSub.ShareName+"/"+sharedSub.TopicFilter)
 			}
 
 			// Remove from matcher
 			m.matcher.Unsubscribe(matchFilter, entry)
 
 			// Remove from client's list
-			m.subscriptions[clientID] = append(subs[:i], subs[i+1:]...)
+			m.subscriptions[key] = append(subs[:i], subs[i+1:]...)
 
 			// Remove from shared group index if shared subscription
 			if shareGroupKey != "" {
 				groupSubs := m.sharedGroupIndex[shareGroupKey]
 				for j, groupEntry := range groupSubs {
-					if groupEntry.ClientID == clientID && groupEntry.Subscription.TopicFilter == filter {
+					if groupEntry.ClientID == clientID && groupEntry.Namespace == namespace && groupEntry.Subscription.TopicFilter == filter {
 						m.sharedGroupIndex[shareGroupKey] = append(groupSubs[:j], groupSubs[j+1:]...)
 						break
 					}
@@ -144,18 +149,19 @@ func (m *SubscriptionManager) removeSubscriptionLocked(clientID string, filter s
 }
 
 // UnsubscribeAll removes all subscriptions for a client.
-func (m *SubscriptionManager) UnsubscribeAll(clientID string) {
+func (m *SubscriptionManager) UnsubscribeAll(clientID, namespace string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	subs := m.subscriptions[clientID]
+	key := NamespaceKey(namespace, clientID)
+	subs := m.subscriptions[key]
 	for _, entry := range subs {
 		// Determine the match filter
 		matchFilter := entry.Subscription.TopicFilter
 		var shareGroupKey string
 		if sharedSub, _ := ParseSharedSubscription(entry.Subscription.TopicFilter); sharedSub != nil {
 			matchFilter = sharedSub.TopicFilter
-			shareGroupKey = sharedSub.ShareName + "/" + sharedSub.TopicFilter
+			shareGroupKey = NamespaceKey(namespace, sharedSub.ShareName+"/"+sharedSub.TopicFilter)
 		}
 
 		m.matcher.Unsubscribe(matchFilter, entry)
@@ -164,7 +170,7 @@ func (m *SubscriptionManager) UnsubscribeAll(clientID string) {
 		if shareGroupKey != "" {
 			groupSubs := m.sharedGroupIndex[shareGroupKey]
 			for j, groupEntry := range groupSubs {
-				if groupEntry.ClientID == clientID {
+				if groupEntry.ClientID == clientID && groupEntry.Namespace == namespace {
 					m.sharedGroupIndex[shareGroupKey] = append(groupSubs[:j], groupSubs[j+1:]...)
 					break
 				}
@@ -175,15 +181,16 @@ func (m *SubscriptionManager) UnsubscribeAll(clientID string) {
 			}
 		}
 	}
-	delete(m.subscriptions, clientID)
+	delete(m.subscriptions, key)
 }
 
 // HasSubscription checks if a client has a subscription to the given filter.
-func (m *SubscriptionManager) HasSubscription(clientID string, filter string) bool {
+func (m *SubscriptionManager) HasSubscription(clientID, namespace, filter string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	for _, entry := range m.subscriptions[clientID] {
+	key := NamespaceKey(namespace, clientID)
+	for _, entry := range m.subscriptions[key] {
 		if entry.Subscription.TopicFilter == filter {
 			return true
 		}
@@ -192,11 +199,12 @@ func (m *SubscriptionManager) HasSubscription(clientID string, filter string) bo
 }
 
 // GetSubscriptions returns all subscriptions for a client.
-func (m *SubscriptionManager) GetSubscriptions(clientID string) []Subscription {
+func (m *SubscriptionManager) GetSubscriptions(clientID, namespace string) []Subscription {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	entries := m.subscriptions[clientID]
+	key := NamespaceKey(namespace, clientID)
+	entries := m.subscriptions[key]
 	subs := make([]Subscription, len(entries))
 	for i, entry := range entries {
 		subs[i] = entry.Subscription
@@ -232,13 +240,13 @@ type sharedGroupState struct {
 }
 
 // MatchForDelivery returns subscriptions that should receive a message.
-// It applies NoLocal filtering, deduplication per client, and shared subscription load-balancing.
+// It applies namespace filtering, NoLocal filtering, deduplication per client, and shared subscription load-balancing.
 // Per MQTT v5 spec, when multiple subscriptions match:
 // - Deliver once at max QoS
 // - Include ALL matching subscription identifiers
 // - Apply RetainAsPublished if any matching subscription has it set
 // - For shared subscriptions, deliver to only one subscriber per share group (round-robin)
-func (m *SubscriptionManager) MatchForDelivery(topic string, publisherID string) []SubscriptionEntry {
+func (m *SubscriptionManager) MatchForDelivery(topic, publisherID, publisherNamespace string) []SubscriptionEntry {
 	matches := m.Match(topic)
 
 	// Separate shared and non-shared subscriptions
@@ -246,16 +254,21 @@ func (m *SubscriptionManager) MatchForDelivery(topic string, publisherID string)
 	sharedGroups := make(map[string]*sharedGroupState) // shareGroupKey -> state
 
 	for _, entry := range matches {
+		// Namespace isolation: skip entries from different namespaces
+		if entry.Namespace != publisherNamespace {
+			continue
+		}
+
 		// NoLocal: skip if publisher is subscriber and NoLocal is set
 		if entry.Subscription.NoLocal && entry.ClientID == publisherID {
 			continue
 		}
 
 		if entry.ShareGroup != "" {
-			// Shared subscription - group by share group + effective filter
+			// Shared subscription - group by share group + effective filter (namespace-scoped)
 			sharedSub, _ := ParseSharedSubscription(entry.Subscription.TopicFilter)
 			if sharedSub != nil {
-				shareGroupKey := sharedSub.ShareName + "/" + sharedSub.TopicFilter
+				shareGroupKey := NamespaceKey(entry.Namespace, sharedSub.ShareName+"/"+sharedSub.TopicFilter)
 				if sharedGroups[shareGroupKey] == nil {
 					sharedGroups[shareGroupKey] = &sharedGroupState{}
 				}

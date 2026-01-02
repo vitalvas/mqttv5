@@ -11,14 +11,14 @@ import (
 
 func TestMemorySession(t *testing.T) {
 	t.Run("create session", func(t *testing.T) {
-		session := NewMemorySession("client-1")
+		session := NewMemorySession("client-1", testNS)
 		assert.Equal(t, "client-1", session.ClientID())
 		assert.NotZero(t, session.CreatedAt())
 		assert.NotZero(t, session.LastActivity())
 	})
 
 	t.Run("subscriptions", func(t *testing.T) {
-		session := NewMemorySession("client-1")
+		session := NewMemorySession("client-1", testNS)
 
 		sub := Subscription{
 			TopicFilter: "test/topic",
@@ -46,7 +46,7 @@ func TestMemorySession(t *testing.T) {
 	})
 
 	t.Run("update subscription", func(t *testing.T) {
-		session := NewMemorySession("client-1")
+		session := NewMemorySession("client-1", testNS)
 
 		session.AddSubscription(Subscription{TopicFilter: "test/topic", QoS: 0})
 		session.AddSubscription(Subscription{TopicFilter: "test/topic", QoS: 2})
@@ -57,7 +57,7 @@ func TestMemorySession(t *testing.T) {
 	})
 
 	t.Run("packet ID", func(t *testing.T) {
-		session := NewMemorySession("client-1")
+		session := NewMemorySession("client-1", testNS)
 
 		id1 := session.NextPacketID()
 		id2 := session.NextPacketID()
@@ -69,7 +69,7 @@ func TestMemorySession(t *testing.T) {
 	})
 
 	t.Run("packet ID wraparound", func(t *testing.T) {
-		session := NewMemorySession("client-1")
+		session := NewMemorySession("client-1", testNS)
 		session.packetIDCounter = 65534
 
 		id1 := session.NextPacketID()
@@ -82,7 +82,7 @@ func TestMemorySession(t *testing.T) {
 	})
 
 	t.Run("packet ID exhaustion returns zero", func(t *testing.T) {
-		session := NewMemorySession("test")
+		session := NewMemorySession("test", testNS)
 
 		// Fill all packet IDs (exhaust them)
 		for i := uint16(1); i != 0; i++ {
@@ -95,7 +95,7 @@ func TestMemorySession(t *testing.T) {
 	})
 
 	t.Run("pending messages", func(t *testing.T) {
-		session := NewMemorySession("client-1")
+		session := NewMemorySession("client-1", testNS)
 
 		msg := &Message{Topic: "test/topic", Payload: []byte("data")}
 		session.AddPendingMessage(1, msg)
@@ -118,7 +118,7 @@ func TestMemorySession(t *testing.T) {
 	})
 
 	t.Run("expiry", func(t *testing.T) {
-		session := NewMemorySession("client-1")
+		session := NewMemorySession("client-1", testNS)
 
 		assert.False(t, session.IsExpired())
 		assert.True(t, session.ExpiryTime().IsZero())
@@ -131,7 +131,7 @@ func TestMemorySession(t *testing.T) {
 	})
 
 	t.Run("last activity", func(t *testing.T) {
-		session := NewMemorySession("client-1")
+		session := NewMemorySession("client-1", testNS)
 		initial := session.LastActivity()
 
 		time.Sleep(10 * time.Millisecond)
@@ -141,7 +141,7 @@ func TestMemorySession(t *testing.T) {
 	})
 
 	t.Run("match subscriptions", func(t *testing.T) {
-		session := NewMemorySession("client-1")
+		session := NewMemorySession("client-1", testNS)
 
 		session.AddSubscription(Subscription{TopicFilter: "sensor/+/temperature", QoS: 1})
 		session.AddSubscription(Subscription{TopicFilter: "sensor/#", QoS: 0})
@@ -158,7 +158,7 @@ func TestMemorySession(t *testing.T) {
 	})
 
 	t.Run("inflight QoS1", func(t *testing.T) {
-		session := NewMemorySession("client-1")
+		session := NewMemorySession("client-1", testNS)
 
 		msg := &QoS1Message{
 			PacketID: 1,
@@ -184,7 +184,7 @@ func TestMemorySession(t *testing.T) {
 	})
 
 	t.Run("inflight QoS2", func(t *testing.T) {
-		session := NewMemorySession("client-1")
+		session := NewMemorySession("client-1", testNS)
 
 		msg := &QoS2Message{
 			PacketID: 1,
@@ -210,7 +210,7 @@ func TestMemorySession(t *testing.T) {
 	})
 
 	t.Run("inflight QoS2 receiver-side state", func(t *testing.T) {
-		session := NewMemorySession("client-1")
+		session := NewMemorySession("client-1", testNS)
 
 		// Receiver-side QoS 2 message (IsSender = false)
 		msg := &QoS2Message{
@@ -236,7 +236,7 @@ func TestMemorySession(t *testing.T) {
 	})
 
 	t.Run("inflight QoS2 sender and receiver", func(t *testing.T) {
-		session := NewMemorySession("client-1")
+		session := NewMemorySession("client-1", testNS)
 
 		// Add sender-side message
 		senderMsg := &QoS2Message{
@@ -275,11 +275,11 @@ func TestMemorySessionStore(t *testing.T) {
 	t.Run("create and get", func(t *testing.T) {
 		store := NewMemorySessionStore()
 
-		session := NewMemorySession("client-1")
-		err := store.Create(session)
+		session := NewMemorySession("client-1", testNS)
+		err := store.Create(testNS, session)
 		require.NoError(t, err)
 
-		got, err := store.Get("client-1")
+		got, err := store.Get(testNS, "client-1")
 		require.NoError(t, err)
 		assert.Equal(t, "client-1", got.ClientID())
 	})
@@ -287,33 +287,33 @@ func TestMemorySessionStore(t *testing.T) {
 	t.Run("create duplicate", func(t *testing.T) {
 		store := NewMemorySessionStore()
 
-		session := NewMemorySession("client-1")
-		err := store.Create(session)
+		session := NewMemorySession("client-1", testNS)
+		err := store.Create(testNS, session)
 		require.NoError(t, err)
 
-		err = store.Create(session)
+		err = store.Create(testNS, session)
 		assert.ErrorIs(t, err, ErrSessionExists)
 	})
 
 	t.Run("get not found", func(t *testing.T) {
 		store := NewMemorySessionStore()
 
-		_, err := store.Get("nonexistent")
+		_, err := store.Get(testNS, "nonexistent")
 		assert.ErrorIs(t, err, ErrSessionNotFound)
 	})
 
 	t.Run("update", func(t *testing.T) {
 		store := NewMemorySessionStore()
 
-		session := NewMemorySession("client-1")
-		err := store.Create(session)
+		session := NewMemorySession("client-1", testNS)
+		err := store.Create(testNS, session)
 		require.NoError(t, err)
 
 		session.AddSubscription(Subscription{TopicFilter: "test/topic", QoS: 1})
-		err = store.Update(session)
+		err = store.Update(testNS, session)
 		require.NoError(t, err)
 
-		got, err := store.Get("client-1")
+		got, err := store.Get(testNS, "client-1")
 		require.NoError(t, err)
 		assert.True(t, got.HasSubscription("test/topic"))
 	})
@@ -321,38 +321,38 @@ func TestMemorySessionStore(t *testing.T) {
 	t.Run("update not found", func(t *testing.T) {
 		store := NewMemorySessionStore()
 
-		session := NewMemorySession("nonexistent")
-		err := store.Update(session)
+		session := NewMemorySession("nonexistent", testNS)
+		err := store.Update(testNS, session)
 		assert.ErrorIs(t, err, ErrSessionNotFound)
 	})
 
 	t.Run("delete", func(t *testing.T) {
 		store := NewMemorySessionStore()
 
-		session := NewMemorySession("client-1")
-		err := store.Create(session)
+		session := NewMemorySession("client-1", testNS)
+		err := store.Create(testNS, session)
 		require.NoError(t, err)
 
-		err = store.Delete("client-1")
+		err = store.Delete(testNS, "client-1")
 		require.NoError(t, err)
 
-		_, err = store.Get("client-1")
+		_, err = store.Get(testNS, "client-1")
 		assert.ErrorIs(t, err, ErrSessionNotFound)
 	})
 
 	t.Run("delete not found", func(t *testing.T) {
 		store := NewMemorySessionStore()
 
-		err := store.Delete("nonexistent")
+		err := store.Delete(testNS, "nonexistent")
 		assert.ErrorIs(t, err, ErrSessionNotFound)
 	})
 
 	t.Run("list", func(t *testing.T) {
 		store := NewMemorySessionStore()
 
-		_ = store.Create(NewMemorySession("client-1"))
-		_ = store.Create(NewMemorySession("client-2"))
-		_ = store.Create(NewMemorySession("client-3"))
+		_ = store.Create(testNS, NewMemorySession("client-1", testNS))
+		_ = store.Create(testNS, NewMemorySession("client-2", testNS))
+		_ = store.Create(testNS, NewMemorySession("client-3", testNS))
 
 		sessions := store.List()
 		assert.Len(t, sessions, 3)
@@ -361,17 +361,17 @@ func TestMemorySessionStore(t *testing.T) {
 	t.Run("cleanup expired", func(t *testing.T) {
 		store := NewMemorySessionStore()
 
-		s1 := NewMemorySession("client-1")
+		s1 := NewMemorySession("client-1", testNS)
 		s1.SetExpiryTime(time.Now().Add(-time.Hour))
 
-		s2 := NewMemorySession("client-2")
+		s2 := NewMemorySession("client-2", testNS)
 		s2.SetExpiryTime(time.Now().Add(time.Hour))
 
-		s3 := NewMemorySession("client-3")
+		s3 := NewMemorySession("client-3", testNS)
 
-		_ = store.Create(s1)
-		_ = store.Create(s2)
-		_ = store.Create(s3)
+		_ = store.Create(testNS, s1)
+		_ = store.Create(testNS, s2)
+		_ = store.Create(testNS, s3)
 
 		count := store.Cleanup()
 		assert.Equal(t, 1, count)
@@ -379,7 +379,7 @@ func TestMemorySessionStore(t *testing.T) {
 		sessions := store.List()
 		assert.Len(t, sessions, 2)
 
-		_, err := store.Get("client-1")
+		_, err := store.Get(testNS, "client-1")
 		assert.ErrorIs(t, err, ErrSessionNotFound)
 	})
 
@@ -391,10 +391,10 @@ func TestMemorySessionStore(t *testing.T) {
 			expiredIDs = append(expiredIDs, session.ClientID())
 		})
 
-		s1 := NewMemorySession("client-1")
+		s1 := NewMemorySession("client-1", testNS)
 		s1.SetExpiryTime(time.Now().Add(-time.Hour))
 
-		_ = store.Create(s1)
+		_ = store.Create(testNS, s1)
 		_ = store.Cleanup()
 
 		assert.Contains(t, expiredIDs, "client-1")
@@ -402,7 +402,7 @@ func TestMemorySessionStore(t *testing.T) {
 }
 
 func TestMemorySessionConcurrency(_ *testing.T) {
-	session := NewMemorySession("client-1")
+	session := NewMemorySession("client-1", testNS)
 	var wg sync.WaitGroup
 
 	// Concurrent subscription operations
@@ -450,12 +450,13 @@ func TestMemorySessionStoreConcurrency(_ *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			session := NewMemorySession("client-" + string(rune(n)))
-			_ = store.Create(session)
-			_, _ = store.Get(session.ClientID())
-			_ = store.Update(session)
+			clientID := "client-" + string(rune(n))
+			session := NewMemorySession(clientID, testNS)
+			_ = store.Create(testNS, session)
+			_, _ = store.Get(testNS, session.ClientID())
+			_ = store.Update(testNS, session)
 			_ = store.List()
-			_ = store.Delete(session.ClientID())
+			_ = store.Delete(testNS, session.ClientID())
 		}(i)
 	}
 
@@ -463,7 +464,7 @@ func TestMemorySessionStoreConcurrency(_ *testing.T) {
 }
 
 func BenchmarkMemorySessionNextPacketID(b *testing.B) {
-	session := NewMemorySession("client-1")
+	session := NewMemorySession("client-1", testNS)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -474,7 +475,7 @@ func BenchmarkMemorySessionNextPacketID(b *testing.B) {
 }
 
 func BenchmarkMemorySessionAddSubscription(b *testing.B) {
-	session := NewMemorySession("client-1")
+	session := NewMemorySession("client-1", testNS)
 	sub := Subscription{TopicFilter: "test/topic", QoS: 1}
 
 	b.ResetTimer()
@@ -486,7 +487,7 @@ func BenchmarkMemorySessionAddSubscription(b *testing.B) {
 }
 
 func BenchmarkMemorySessionMatchSubscriptions(b *testing.B) {
-	session := NewMemorySession("client-1")
+	session := NewMemorySession("client-1", testNS)
 	session.AddSubscription(Subscription{TopicFilter: "sensor/+/temperature", QoS: 1})
 	session.AddSubscription(Subscription{TopicFilter: "sensor/#", QoS: 0})
 	session.AddSubscription(Subscription{TopicFilter: "other/topic", QoS: 2})
@@ -505,20 +506,20 @@ func BenchmarkMemorySessionStoreCreate(b *testing.B) {
 
 	for b.Loop() {
 		store := NewMemorySessionStore()
-		session := NewMemorySession("client-1")
-		_ = store.Create(session)
+		session := NewMemorySession("client-1", testNS)
+		_ = store.Create(testNS, session)
 	}
 }
 
 func BenchmarkMemorySessionStoreGet(b *testing.B) {
 	store := NewMemorySessionStore()
-	_ = store.Create(NewMemorySession("client-1"))
+	_ = store.Create(testNS, NewMemorySession("client-1", testNS))
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for b.Loop() {
-		_, _ = store.Get("client-1")
+		_, _ = store.Get(testNS, "client-1")
 	}
 }
 
@@ -526,7 +527,7 @@ func BenchmarkMemorySessionStoreGet(b *testing.B) {
 func TestSessionFactory(t *testing.T) {
 	t.Run("default session factory creates MemorySession", func(t *testing.T) {
 		factory := DefaultSessionFactory()
-		session := factory("test-client")
+		session := factory("test-client", testNS)
 
 		assert.NotNil(t, session)
 		assert.Equal(t, "test-client", session.ClientID())
@@ -538,24 +539,24 @@ func TestSessionFactory(t *testing.T) {
 
 	t.Run("custom session factory", func(t *testing.T) {
 		// Custom factory that adds a prefix
-		customFactory := func(clientID string) Session {
-			return NewMemorySession("prefix-" + clientID)
+		customFactory := func(clientID, namespace string) Session {
+			return NewMemorySession("prefix-"+clientID, namespace)
 		}
 
-		session := customFactory("test-client")
+		session := customFactory("test-client", testNS)
 		assert.Equal(t, "prefix-test-client", session.ClientID())
 	})
 
 	t.Run("session factory with custom implementation", func(t *testing.T) {
 		// This demonstrates that custom Session implementations can be used
-		factory := func(clientID string) Session {
-			s := NewMemorySession(clientID)
+		factory := func(clientID, namespace string) Session {
+			s := NewMemorySession(clientID, namespace)
 			// Pre-populate with some data
 			s.AddSubscription(Subscription{TopicFilter: "$SYS/#", QoS: 0})
 			return s
 		}
 
-		session := factory("test-client")
+		session := factory("test-client", testNS)
 		assert.True(t, session.HasSubscription("$SYS/#"))
 	})
 }

@@ -38,6 +38,9 @@ type WillMessage struct {
 
 	// UserProperties are application-defined properties.
 	UserProperties []StringPair
+
+	// Namespace is the namespace for multi-tenancy isolation.
+	Namespace string
 }
 
 // WillMessageFromConnect extracts the will message from a CONNECT packet.
@@ -80,6 +83,7 @@ func (w *WillMessage) ToMessage() *Message {
 		ResponseTopic:   w.ResponseTopic,
 		CorrelationData: w.CorrelationData,
 		UserProperties:  w.UserProperties,
+		Namespace:       w.Namespace,
 	}
 }
 

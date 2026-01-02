@@ -87,6 +87,9 @@ type Message struct {
 	// SubscriptionIdentifiers contains subscription identifiers from matching subscriptions.
 	// Only set when receiving messages.
 	SubscriptionIdentifiers []uint32
+
+	// Namespace is the tenant namespace for multi-tenancy isolation.
+	Namespace string
 }
 
 // Clone creates a deep copy of the message.
@@ -104,6 +107,7 @@ func (m *Message) Clone() *Message {
 		PublishedAt:   m.PublishedAt,
 		ContentType:   m.ContentType,
 		ResponseTopic: m.ResponseTopic,
+		Namespace:     m.Namespace,
 	}
 
 	if m.Payload != nil {

@@ -138,7 +138,7 @@ func TestServerPublish(t *testing.T) {
 		require.NoError(t, err)
 
 		// Check retained store
-		retained := srv.config.retainedStore.Match("test/retained")
+		retained := srv.config.retainedStore.Match(DefaultNamespace, "test/retained")
 		require.Len(t, retained, 1)
 		assert.Equal(t, "test/retained", retained[0].Topic)
 		assert.Equal(t, []byte("data"), retained[0].Payload)
@@ -155,7 +155,7 @@ func TestServerPublish(t *testing.T) {
 		defer srv.running.Store(false)
 
 		// First store a retained message
-		srv.config.retainedStore.Set(&RetainedMessage{
+		srv.config.retainedStore.Set(DefaultNamespace, &RetainedMessage{
 			Topic:   "test/retained",
 			Payload: []byte("data"),
 		})
@@ -170,7 +170,7 @@ func TestServerPublish(t *testing.T) {
 		require.NoError(t, err)
 
 		// Check retained store is empty
-		retained := srv.config.retainedStore.Match("test/retained")
+		retained := srv.config.retainedStore.Match(DefaultNamespace, "test/retained")
 		assert.Empty(t, retained)
 	})
 }
@@ -515,7 +515,7 @@ func TestServerQoSRetryLogic(t *testing.T) {
 		// Create a mock client with a pending QoS 1 message
 		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
 		connect := &ConnectPacket{ClientID: "test-client"}
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
 
 		// Use a tracker with short retry interval
 		tracker := NewQoS1Tracker(10*time.Millisecond, 3)
@@ -558,7 +558,7 @@ func TestServerQoSRetryLogic(t *testing.T) {
 
 		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
 		connect := &ConnectPacket{ClientID: "test-client"}
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
 
 		tracker := NewQoS2Tracker(10*time.Millisecond, 3)
 		client.qos2Tracker = tracker
@@ -594,7 +594,7 @@ func TestServerQoSRetryLogic(t *testing.T) {
 
 		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
 		connect := &ConnectPacket{ClientID: "test-client"}
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
 
 		// Track a message
 		client.QoS1Tracker().Track(1, &Message{Topic: "test", Payload: []byte("data")})
@@ -686,7 +686,7 @@ func TestServerAuthentication(t *testing.T) {
 	credentialsAuth := &testAuthenticator{
 		authFunc: func(_ context.Context, ctx *AuthContext) (*AuthResult, error) {
 			if ctx.Username == "admin" && string(ctx.Password) == "secret" {
-				return &AuthResult{Success: true, ReasonCode: ReasonSuccess}, nil
+				return &AuthResult{Success: true, ReasonCode: ReasonSuccess, Namespace: DefaultNamespace}, nil
 			}
 			return &AuthResult{Success: false, ReasonCode: ReasonBadUserNameOrPassword}, nil
 		},
@@ -900,7 +900,7 @@ func TestServerAuthorization(t *testing.T) {
 		auth := &testAuthenticator{
 			authFunc: func(_ context.Context, ctx *AuthContext) (*AuthResult, error) {
 				if ctx.Username == "user1" && string(ctx.Password) == "pass1" {
-					return &AuthResult{Success: true, ReasonCode: ReasonSuccess}, nil
+					return &AuthResult{Success: true, ReasonCode: ReasonSuccess, Namespace: DefaultNamespace}, nil
 				}
 				return &AuthResult{Success: false, ReasonCode: ReasonBadUserNameOrPassword}, nil
 			},
@@ -1263,8 +1263,7 @@ func TestServerSessionRecoveryErrorHandling(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
 
-		sessionStore := NewMemorySessionStore()
-		srv := NewServer(WithListener(listener), WithSessionStore(sessionStore))
+		srv := NewServer(WithListener(listener))
 
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -1310,9 +1309,9 @@ func TestServerSessionRecoveryErrorHandling(t *testing.T) {
 		sessionStore := NewMemorySessionStore()
 
 		// Pre-create a session
-		existingSession := NewMemorySession("existing-client")
+		existingSession := NewMemorySession("existing-client", DefaultNamespace)
 		existingSession.AddSubscription(Subscription{TopicFilter: "test/topic", QoS: 1})
-		err = sessionStore.Create(existingSession)
+		err = sessionStore.Create(DefaultNamespace, existingSession)
 		require.NoError(t, err)
 
 		srv := NewServer(WithListener(listener), WithSessionStore(sessionStore))
@@ -1395,7 +1394,7 @@ func TestServerClientMaxPacketSize(t *testing.T) {
 		// Verify the server client has the correct max packet size
 		// by checking the clients map
 		srv.mu.RLock()
-		client, exists := srv.clients["test-client"]
+		client, exists := srv.clients[NamespaceKey(DefaultNamespace, "test-client")]
 		srv.mu.RUnlock()
 		require.True(t, exists)
 		assert.Equal(t, uint32(1024), client.maxPacketSize, "server should use client's smaller max packet size")
@@ -1443,7 +1442,7 @@ func TestServerClientMaxPacketSize(t *testing.T) {
 		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
 
 		srv.mu.RLock()
-		client, exists := srv.clients["test-client"]
+		client, exists := srv.clients[NamespaceKey(DefaultNamespace, "test-client")]
 		srv.mu.RUnlock()
 		require.True(t, exists)
 		assert.Equal(t, uint32(1024), client.maxPacketSize, "server should use its own smaller max packet size")
@@ -1489,7 +1488,7 @@ func TestServerClientMaxPacketSize(t *testing.T) {
 		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
 
 		srv.mu.RLock()
-		client, exists := srv.clients["test-client"]
+		client, exists := srv.clients[NamespaceKey(DefaultNamespace, "test-client")]
 		srv.mu.RUnlock()
 		require.True(t, exists)
 		assert.Equal(t, uint32(256*1024), client.maxPacketSize, "server should use its configured max packet size")
@@ -1540,7 +1539,7 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
 
 		srv.mu.RLock()
-		client, exists := srv.clients["test-client"]
+		client, exists := srv.clients[NamespaceKey(DefaultNamespace, "test-client")]
 		srv.mu.RUnlock()
 		require.True(t, exists)
 		assert.Equal(t, uint32(3600), client.SessionExpiryInterval(), "session expiry should be stored from CONNECT")
@@ -1635,7 +1634,7 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 		require.True(t, ok)
 
 		srv.mu.RLock()
-		client, exists := srv.clients["test-client"]
+		client, exists := srv.clients[NamespaceKey(DefaultNamespace, "test-client")]
 		srv.mu.RUnlock()
 		require.True(t, exists)
 		assert.Equal(t, uint32(0), client.SessionExpiryInterval(), "session expiry should be 0 when not specified")
@@ -1686,7 +1685,8 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
 
 		// Verify will is registered
-		assert.True(t, srv.wills.HasWill("test-client"))
+		clientKey := NamespaceKey(DefaultNamespace, "test-client")
+		assert.True(t, srv.wills.HasWill(clientKey))
 
 		// Close connection abruptly (without DISCONNECT) to trigger will
 		conn.Close()
@@ -1697,7 +1697,7 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 		// Will should be pending, but its publish time should be constrained by session expiry
 		// The will delay is 1 hour, but session expiry is 1 minute, so will should publish
 		// no later than session expiry
-		assert.True(t, srv.wills.HasPendingWill("test-client"), "will should be pending after unclean disconnect")
+		assert.True(t, srv.wills.HasPendingWill(clientKey), "will should be pending after unclean disconnect")
 
 		srv.Close()
 		wg.Wait()
@@ -1707,25 +1707,19 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 // TestServerOnSubscribeCallbackFiltering tests that onSubscribe callback only receives successful subscriptions
 func TestServerOnSubscribeCallbackFiltering(t *testing.T) {
 	t.Run("onSubscribe callback filters failed subscriptions", func(t *testing.T) {
-		listener, err := net.Listen("tcp", ":0")
-		require.NoError(t, err)
-		defer listener.Close()
-
 		var callbackSubs []Subscription
 		srv := NewServer(
-			WithListener(listener),
 			OnSubscribe(func(_ *ServerClient, subs []Subscription) {
 				callbackSubs = subs
 			}),
 		)
-		go srv.ListenAndServe()
 		defer srv.Close()
 
 		// Create a mock client
 		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
 		connect := &ConnectPacket{ClientID: "test-client"}
-		client := NewServerClient(conn, connect, 256*1024)
-		client.SetSession(NewMemorySession("test-client"))
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.SetSession(NewMemorySession("test-client", DefaultNamespace))
 
 		// Create SUBSCRIBE with mix of valid and invalid filters
 		sub := &SubscribePacket{
@@ -1814,17 +1808,18 @@ func TestRemoveClient(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
 
+		clientKey := NamespaceKey(DefaultNamespace, "test-client")
 		oldClient := &ServerClient{clientID: "test-client"}
 		newClient := &ServerClient{clientID: "test-client"}
 
 		srv.mu.Lock()
-		srv.clients["test-client"] = newClient
+		srv.clients[clientKey] = newClient
 		srv.mu.Unlock()
 
-		srv.removeClient("test-client", oldClient)
+		srv.removeClient(clientKey, oldClient)
 
 		srv.mu.RLock()
-		_, exists := srv.clients["test-client"]
+		_, exists := srv.clients[clientKey]
 		srv.mu.RUnlock()
 
 		assert.True(t, exists, "new client should still be in clients map")
@@ -1834,16 +1829,17 @@ func TestRemoveClient(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
 
+		clientKey := NamespaceKey(DefaultNamespace, "test-client")
 		client := &ServerClient{clientID: "test-client"}
 
 		srv.mu.Lock()
-		srv.clients["test-client"] = client
+		srv.clients[clientKey] = client
 		srv.mu.Unlock()
 
-		srv.removeClient("test-client", client)
+		srv.removeClient(clientKey, client)
 
 		srv.mu.RLock()
-		_, exists := srv.clients["test-client"]
+		_, exists := srv.clients[clientKey]
 		srv.mu.RUnlock()
 
 		assert.False(t, exists, "client should be removed")

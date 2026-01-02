@@ -15,6 +15,9 @@ type Session interface {
 	// ClientID returns the client identifier.
 	ClientID() string
 
+	// Namespace returns the namespace for multi-tenancy isolation.
+	Namespace() string
+
 	// Subscriptions returns a copy of all subscriptions.
 	Subscriptions() []Subscription
 
@@ -91,16 +94,16 @@ type Session interface {
 // SessionStore defines the interface for session persistence.
 type SessionStore interface {
 	// Create creates a new session.
-	Create(session Session) error
+	Create(namespace string, session Session) error
 
-	// Get retrieves a session by client ID.
-	Get(clientID string) (Session, error)
+	// Get retrieves a session by namespace and client ID.
+	Get(namespace, clientID string) (Session, error)
 
 	// Update updates an existing session.
-	Update(session Session) error
+	Update(namespace string, session Session) error
 
-	// Delete deletes a session by client ID.
-	Delete(clientID string) error
+	// Delete deletes a session by namespace and client ID.
+	Delete(namespace, clientID string) error
 
 	// List returns all sessions.
 	List() []Session
@@ -114,11 +117,11 @@ type SessionExpiryHandler func(session Session)
 
 // SessionFactory creates new Session instances.
 // This allows custom session implementations to be used with the server.
-type SessionFactory func(clientID string) Session
+type SessionFactory func(clientID, namespace string) Session
 
 // DefaultSessionFactory returns a factory that creates MemorySession instances.
 func DefaultSessionFactory() SessionFactory {
-	return func(clientID string) Session {
-		return NewMemorySession(clientID)
+	return func(clientID, namespace string) Session {
+		return NewMemorySession(clientID, namespace)
 	}
 }

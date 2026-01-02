@@ -86,7 +86,7 @@ func TestServerClient(t *testing.T) {
 			KeepAlive:  60,
 		}
 
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, testNS)
 
 		assert.Equal(t, "test-client", client.ClientID())
 		assert.Equal(t, "user1", client.Username())
@@ -104,10 +104,10 @@ func TestServerClient(t *testing.T) {
 		conn := &mockConn{}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, testNS)
 		assert.Nil(t, client.Session())
 
-		session := NewMemorySession("test-client")
+		session := NewMemorySession("test-client", testNS)
 		client.SetSession(session)
 		assert.Equal(t, session, client.Session())
 	})
@@ -116,7 +116,7 @@ func TestServerClient(t *testing.T) {
 		conn := &mockConn{}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, testNS)
 		client.SetTopicAliasMax(10, 20)
 
 		assert.Equal(t, uint16(10), client.TopicAliases().InboundMax())
@@ -127,7 +127,7 @@ func TestServerClient(t *testing.T) {
 		conn := &mockConn{}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, testNS)
 
 		// Default flow control
 		assert.NotNil(t, client.FlowControl())
@@ -145,7 +145,7 @@ func TestServerClient(t *testing.T) {
 		conn := &mockConn{}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, testNS)
 		assert.True(t, client.IsConnected())
 
 		err := client.Close()
@@ -162,7 +162,7 @@ func TestServerClient(t *testing.T) {
 		conn := &mockConn{}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, testNS)
 		client.Close()
 
 		msg := &Message{Topic: "test", Payload: []byte("data")}
@@ -174,7 +174,7 @@ func TestServerClient(t *testing.T) {
 		conn := &mockConn{}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, testNS)
 		client.Close()
 
 		pkt := &PingrespPacket{}
@@ -186,7 +186,7 @@ func TestServerClient(t *testing.T) {
 		conn := &mockConn{}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, testNS)
 		client.Close()
 
 		err := client.Disconnect(ReasonSuccess)
@@ -204,8 +204,8 @@ func TestServerClientSendQuotaRollbackOnFailure(t *testing.T) {
 		conn := &failingConn{writeErr: net.ErrClosed}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
-		client.SetSession(NewMemorySession("test-client"))
+		client := NewServerClient(conn, connect, 256*1024, testNS)
+		client.SetSession(NewMemorySession("test-client", testNS))
 
 		// Set a small receive maximum to make quota tracking visible
 		client.SetReceiveMaximum(2)
@@ -232,8 +232,8 @@ func TestServerClientSendQuotaRollbackOnFailure(t *testing.T) {
 		conn := &failingConn{writeErr: net.ErrClosed}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
-		client.SetSession(NewMemorySession("test-client"))
+		client := NewServerClient(conn, connect, 256*1024, testNS)
+		client.SetSession(NewMemorySession("test-client", testNS))
 		client.SetReceiveMaximum(2)
 
 		fc := client.FlowControl()
@@ -255,8 +255,8 @@ func TestServerClientSendQuotaRollbackOnFailure(t *testing.T) {
 		conn := &failingConn{writeErr: net.ErrClosed}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
-		client.SetSession(NewMemorySession("test-client"))
+		client := NewServerClient(conn, connect, 256*1024, testNS)
+		client.SetSession(NewMemorySession("test-client", testNS))
 
 		// Set very small receive maximum
 		client.SetReceiveMaximum(3)
@@ -285,7 +285,7 @@ func TestServerClientSendQuotaRollbackOnFailure(t *testing.T) {
 		conn := &failingConn{writeErr: net.ErrClosed}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, testNS)
 		client.SetReceiveMaximum(1)
 		fc := client.FlowControl()
 
@@ -322,7 +322,7 @@ func TestServerClientSessionExpiryInterval(t *testing.T) {
 	t.Run("default value is zero", func(t *testing.T) {
 		conn := &mockConn{}
 		connect := &ConnectPacket{ClientID: "test-client"}
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, testNS)
 
 		assert.Equal(t, uint32(0), client.SessionExpiryInterval())
 	})
@@ -330,7 +330,7 @@ func TestServerClientSessionExpiryInterval(t *testing.T) {
 	t.Run("set and get session expiry interval", func(t *testing.T) {
 		conn := &mockConn{}
 		connect := &ConnectPacket{ClientID: "test-client"}
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, testNS)
 
 		client.SetSessionExpiryInterval(3600)
 		assert.Equal(t, uint32(3600), client.SessionExpiryInterval())
@@ -344,8 +344,8 @@ func TestServerClientConcurrency(_ *testing.T) {
 	conn := &mockConn{}
 	connect := &ConnectPacket{ClientID: "test-client"}
 
-	client := NewServerClient(conn, connect, 256*1024)
-	session := NewMemorySession("test-client")
+	client := NewServerClient(conn, connect, 256*1024, testNS)
+	session := NewMemorySession("test-client", testNS)
 	client.SetSession(session)
 
 	var wg sync.WaitGroup
@@ -382,8 +382,8 @@ func TestServerClientConcurrentWrites(t *testing.T) {
 		conn := &mockConn{}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
-		session := NewMemorySession("test-client")
+		client := NewServerClient(conn, connect, 256*1024, testNS)
+		session := NewMemorySession("test-client", testNS)
 		client.SetSession(session)
 
 		var wg sync.WaitGroup
@@ -408,7 +408,7 @@ func TestServerClientConcurrentWrites(t *testing.T) {
 		conn := &mockConn{}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, testNS)
 
 		var wg sync.WaitGroup
 
@@ -430,7 +430,7 @@ func TestServerClientConcurrentWrites(t *testing.T) {
 		conn := &mockConn{}
 		connect := &ConnectPacket{ClientID: "test-client"}
 
-		client := NewServerClient(conn, connect, 256*1024)
+		client := NewServerClient(conn, connect, 256*1024, testNS)
 
 		var wg sync.WaitGroup
 
