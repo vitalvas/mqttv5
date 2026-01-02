@@ -12,7 +12,7 @@ func TestServerOptions(t *testing.T) {
 
 		assert.NotNil(t, cfg.sessionStore)
 		assert.NotNil(t, cfg.retainedStore)
-		assert.Equal(t, uint32(256*1024), cfg.maxPacketSize)
+		assert.Equal(t, uint32(MaxPacketSizeDefault), cfg.maxPacketSize)
 		assert.Equal(t, 0, cfg.maxConnections)
 		assert.Equal(t, uint16(65535), cfg.receiveMaximum)
 	})

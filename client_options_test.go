@@ -20,7 +20,7 @@ func TestDefaultOptions(t *testing.T) {
 	assert.Equal(t, 10, opts.maxReconnects)
 	assert.Equal(t, 1*time.Second, opts.reconnectBackoff)
 	assert.Equal(t, 60*time.Second, opts.maxBackoff)
-	assert.Equal(t, uint32(256*1024), opts.maxPacketSize)
+	assert.Equal(t, uint32(MaxPacketSizeDefault), opts.maxPacketSize)
 	assert.Equal(t, uint16(65535), opts.receiveMaximum)
 }
 

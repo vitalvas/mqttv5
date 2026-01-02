@@ -72,7 +72,7 @@ func defaultOptions() *clientOptions {
 		maxReconnects:    10,
 		reconnectBackoff: 1 * time.Second,
 		maxBackoff:       60 * time.Second,
-		maxPacketSize:    256 * 1024,
+		maxPacketSize:    MaxPacketSizeDefault,
 		receiveMaximum:   65535,
 		sessionFactory:   DefaultSessionFactory(),
 	}
@@ -193,6 +193,14 @@ func WithWillProps(props *Properties) Option {
 }
 
 // WithMaxPacketSize sets the maximum packet size the client will accept.
+// This limits the size of incoming MQTT packets to prevent memory exhaustion.
+//
+// Common values:
+//   - MaxPacketSizeDefault (4MB): typical broker default
+//   - MaxPacketSizeAWSIoT (128KB): AWS IoT Core limit
+//   - MaxPacketSizeMinimal (16KB): constrained IoT devices
+//
+// Default: MaxPacketSizeDefault (4MB)
 func WithMaxPacketSize(size uint32) Option {
 	return func(o *clientOptions) {
 		o.maxPacketSize = size
