@@ -13,6 +13,7 @@ Implements the [MQTT Version 5.0 OASIS Standard](https://docs.oasis-open.org/mqt
 - Shared subscriptions (`$share/group/topic`)
 - Multi-tenancy with namespace isolation
 - Message interceptors (producer/consumer)
+- Broker bridging with P2MP support
 - Transport: TCP, TLS, WebSocket, WSS, Unix Socket, QUIC
 - Pluggable authentication and authorization
 - Session persistence interface
@@ -240,4 +241,100 @@ srv := mqttv5.NewServer(
     mqttv5.WithListener(listener),
     mqttv5.WithMetrics(metrics),
 )
+```
+
+## Bridging
+
+Connect two MQTT brokers and forward messages between them with topic remapping and loop detection.
+
+### Simple Bridge
+
+```go
+bridge, _ := mqttv5.NewBridge(localServer, mqttv5.BridgeConfig{
+    RemoteAddr: "tcp://remote-broker:1883",
+    ClientID:   "bridge-1",
+    Topics: []mqttv5.BridgeTopic{
+        {
+            LocalPrefix:  "local/sensors",
+            RemotePrefix: "remote/sensors",
+            Direction:    mqttv5.BridgeDirectionBoth,
+            QoS:          1,
+        },
+    },
+})
+
+bridge.Start()
+defer bridge.Stop()
+
+// Forward local messages to remote (call from OnMessage callback)
+localServer.OnMessage(func(c *mqttv5.ServerClient, msg *mqttv5.Message) {
+    bridge.ForwardToRemote(msg)
+})
+```
+
+### Point-to-Multipoint (P2MP)
+
+Use `BridgeManager` to coordinate multiple bridges:
+
+```go
+manager := mqttv5.NewBridgeManager(localServer)
+
+// Add bridges to different remote brokers
+manager.Add(mqttv5.BridgeConfig{
+    RemoteAddr: "tcp://broker-a:1883",
+    ClientID:   "bridge-a",
+    Topics: []mqttv5.BridgeTopic{
+        {LocalPrefix: "sensors", RemotePrefix: "incoming/sensors", Direction: mqttv5.BridgeDirectionOut},
+    },
+})
+
+manager.Add(mqttv5.BridgeConfig{
+    RemoteAddr: "tcp://broker-b:1883",
+    ClientID:   "bridge-b",
+    Topics: []mqttv5.BridgeTopic{
+        {LocalPrefix: "commands", RemotePrefix: "device/commands", Direction: mqttv5.BridgeDirectionIn},
+    },
+})
+
+manager.StartAll()
+defer manager.StopAll()
+
+// Forward to all matching bridges
+localServer.OnMessage(func(c *mqttv5.ServerClient, msg *mqttv5.Message) {
+    manager.ForwardToRemote(msg)
+})
+```
+
+### Custom Topic Remapping
+
+```go
+bridge, _ := mqttv5.NewBridge(server, mqttv5.BridgeConfig{
+    RemoteAddr: "tcp://remote:1883",
+    Topics: []mqttv5.BridgeTopic{
+        {LocalPrefix: "local", RemotePrefix: "remote", Direction: mqttv5.BridgeDirectionBoth},
+    },
+    TopicRemapper: func(topic string, direction mqttv5.BridgeDirection) string {
+        if direction == mqttv5.BridgeDirectionOut {
+            return "custom/" + topic
+        }
+        return "" // Fall back to default prefix remapping
+    },
+})
+```
+
+### Bridge Metrics
+
+Bridge metrics are reported through the server's `MetricsCollector`:
+
+```go
+// Server metrics include bridge counters
+metrics := mqttv5.NewMetrics()
+srv := mqttv5.NewServer(
+    mqttv5.WithListener(listener),
+    mqttv5.WithMetrics(metrics),
+)
+
+// Bridge manager state
+managerMetrics := manager.Metrics()
+fmt.Printf("Total bridges: %d, Running: %d\n", managerMetrics.TotalBridges, managerMetrics.RunningBridges)
 ```

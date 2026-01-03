@@ -369,6 +369,11 @@ func (s *Server) Close() error {
 	return nil
 }
 
+// Metrics returns the server's metrics collector.
+func (s *Server) Metrics() MetricsCollector {
+	return s.config.metrics
+}
+
 // Publish sends a message to all matching subscribers.
 // The message's Namespace field determines the target namespace.
 func (s *Server) Publish(msg *Message) error {

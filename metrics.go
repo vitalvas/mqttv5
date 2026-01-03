@@ -46,6 +46,18 @@ const (
 
 	// MetricPublishLatencySum is the sum of publish latencies in seconds.
 	MetricPublishLatencySum = "mqtt_publish_latency_seconds_sum"
+
+	// MetricBridgeForwardedToLocal is the total messages forwarded to local broker.
+	MetricBridgeForwardedToLocal = "mqtt_bridge_forwarded_to_local_total"
+
+	// MetricBridgeForwardedToRemote is the total messages forwarded to remote broker.
+	MetricBridgeForwardedToRemote = "mqtt_bridge_forwarded_to_remote_total"
+
+	// MetricBridgeDroppedLoop is the total messages dropped due to loop detection.
+	MetricBridgeDroppedLoop = "mqtt_bridge_dropped_loop_total"
+
+	// MetricBridgeErrors is the total bridge forwarding errors.
+	MetricBridgeErrors = "mqtt_bridge_errors_total"
 )
 
 // Metrics provides broker metrics using expvar.
@@ -59,6 +71,12 @@ type Metrics struct {
 	latencyCount     *expvar.Int
 	latencySum       *expvar.Float
 
+	// Bridge metrics
+	bridgeForwardedToLocal  *expvar.Int
+	bridgeForwardedToRemote *expvar.Int
+	bridgeDroppedLoop       *expvar.Int
+	bridgeErrors            *expvar.Int
+
 	// Maps for labeled metrics
 	mu               sync.RWMutex
 	messagesReceived map[byte]*expvar.Int
@@ -70,18 +88,22 @@ type Metrics struct {
 // NewMetrics creates a new Metrics instance using expvar.
 func NewMetrics() *Metrics {
 	m := &Metrics{
-		connections:      expvar.NewInt(MetricConnections),
-		connectionsTotal: expvar.NewInt(MetricConnectionsTotal),
-		subscriptions:    expvar.NewInt(MetricSubscriptions),
-		retainedMessages: expvar.NewInt(MetricRetainedMessages),
-		bytesReceived:    expvar.NewInt(MetricBytesReceived),
-		bytesSent:        expvar.NewInt(MetricBytesSent),
-		latencyCount:     expvar.NewInt(MetricPublishLatencyCount),
-		latencySum:       expvar.NewFloat(MetricPublishLatencySum),
-		messagesReceived: make(map[byte]*expvar.Int),
-		messagesSent:     make(map[byte]*expvar.Int),
-		packetsReceived:  make(map[PacketType]*expvar.Int),
-		packetsSent:      make(map[PacketType]*expvar.Int),
+		connections:             expvar.NewInt(MetricConnections),
+		connectionsTotal:        expvar.NewInt(MetricConnectionsTotal),
+		subscriptions:           expvar.NewInt(MetricSubscriptions),
+		retainedMessages:        expvar.NewInt(MetricRetainedMessages),
+		bytesReceived:           expvar.NewInt(MetricBytesReceived),
+		bytesSent:               expvar.NewInt(MetricBytesSent),
+		latencyCount:            expvar.NewInt(MetricPublishLatencyCount),
+		latencySum:              expvar.NewFloat(MetricPublishLatencySum),
+		bridgeForwardedToLocal:  expvar.NewInt(MetricBridgeForwardedToLocal),
+		bridgeForwardedToRemote: expvar.NewInt(MetricBridgeForwardedToRemote),
+		bridgeDroppedLoop:       expvar.NewInt(MetricBridgeDroppedLoop),
+		bridgeErrors:            expvar.NewInt(MetricBridgeErrors),
+		messagesReceived:        make(map[byte]*expvar.Int),
+		messagesSent:            make(map[byte]*expvar.Int),
+		packetsReceived:         make(map[PacketType]*expvar.Int),
+		packetsSent:             make(map[PacketType]*expvar.Int),
 	}
 
 	// Pre-initialize QoS counters
@@ -212,6 +234,26 @@ func (m *Metrics) PacketSent(packetType PacketType) {
 	counter.Add(1)
 }
 
+// BridgeForwardedToLocal records a message forwarded to local broker.
+func (m *Metrics) BridgeForwardedToLocal() {
+	m.bridgeForwardedToLocal.Add(1)
+}
+
+// BridgeForwardedToRemote records a message forwarded to remote broker.
+func (m *Metrics) BridgeForwardedToRemote() {
+	m.bridgeForwardedToRemote.Add(1)
+}
+
+// BridgeDroppedLoop records a message dropped due to loop detection.
+func (m *Metrics) BridgeDroppedLoop() {
+	m.bridgeDroppedLoop.Add(1)
+}
+
+// BridgeError records a bridge forwarding error.
+func (m *Metrics) BridgeError() {
+	m.bridgeErrors.Add(1)
+}
+
 // NoOpMetrics is a no-op implementation for when metrics are disabled.
 type NoOpMetrics struct{}
 
@@ -254,6 +296,18 @@ func (n *NoOpMetrics) PacketReceived(_ PacketType) {}
 // PacketSent does nothing.
 func (n *NoOpMetrics) PacketSent(_ PacketType) {}
 
+// BridgeForwardedToLocal does nothing.
+func (n *NoOpMetrics) BridgeForwardedToLocal() {}
+
+// BridgeForwardedToRemote does nothing.
+func (n *NoOpMetrics) BridgeForwardedToRemote() {}
+
+// BridgeDroppedLoop does nothing.
+func (n *NoOpMetrics) BridgeDroppedLoop() {}
+
+// BridgeError does nothing.
+func (n *NoOpMetrics) BridgeError() {}
+
 // MetricsCollector defines the interface for metrics collection.
 type MetricsCollector interface {
 	ConnectionOpened()
@@ -269,6 +323,10 @@ type MetricsCollector interface {
 	PublishLatency(d time.Duration)
 	PacketReceived(packetType PacketType)
 	PacketSent(packetType PacketType)
+	BridgeForwardedToLocal()
+	BridgeForwardedToRemote()
+	BridgeDroppedLoop()
+	BridgeError()
 }
 
 // MemoryMetrics is an in-memory implementation for testing without expvar side effects.
@@ -281,6 +339,12 @@ type MemoryMetrics struct {
 	bytesSent        atomic.Int64
 	latencyCount     atomic.Int64
 	latencySum       atomic.Uint64
+
+	// Bridge metrics
+	bridgeForwardedToLocal  atomic.Int64
+	bridgeForwardedToRemote atomic.Int64
+	bridgeDroppedLoop       atomic.Int64
+	bridgeErrors            atomic.Int64
 
 	mu               sync.RWMutex
 	messagesReceived map[byte]*atomic.Int64
@@ -485,6 +549,46 @@ func (m *MemoryMetrics) PacketsSent(packetType PacketType) int64 {
 		return counter.Load()
 	}
 	return 0
+}
+
+// BridgeForwardedToLocal records a message forwarded to local broker.
+func (m *MemoryMetrics) BridgeForwardedToLocal() {
+	m.bridgeForwardedToLocal.Add(1)
+}
+
+// BridgeForwardedToLocalTotal returns the total messages forwarded to local.
+func (m *MemoryMetrics) BridgeForwardedToLocalTotal() int64 {
+	return m.bridgeForwardedToLocal.Load()
+}
+
+// BridgeForwardedToRemote records a message forwarded to remote broker.
+func (m *MemoryMetrics) BridgeForwardedToRemote() {
+	m.bridgeForwardedToRemote.Add(1)
+}
+
+// BridgeForwardedToRemoteTotal returns the total messages forwarded to remote.
+func (m *MemoryMetrics) BridgeForwardedToRemoteTotal() int64 {
+	return m.bridgeForwardedToRemote.Load()
+}
+
+// BridgeDroppedLoop records a message dropped due to loop detection.
+func (m *MemoryMetrics) BridgeDroppedLoop() {
+	m.bridgeDroppedLoop.Add(1)
+}
+
+// BridgeDroppedLoopTotal returns the total messages dropped due to loop detection.
+func (m *MemoryMetrics) BridgeDroppedLoopTotal() int64 {
+	return m.bridgeDroppedLoop.Load()
+}
+
+// BridgeError records a bridge forwarding error.
+func (m *MemoryMetrics) BridgeError() {
+	m.bridgeErrors.Add(1)
+}
+
+// BridgeErrorsTotal returns the total bridge forwarding errors.
+func (m *MemoryMetrics) BridgeErrorsTotal() int64 {
+	return m.bridgeErrors.Load()
 }
 
 // float64ToBits converts a float64 to uint64 bits.
