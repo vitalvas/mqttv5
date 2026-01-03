@@ -168,19 +168,6 @@
 //	    return &mqttv5.AuthzResult{Allowed: false, ReasonCode: mqttv5.ReasonNotAuthorized}, nil
 //	}
 //
-// # Clustering
-//
-// The package defines interfaces for building clustered MQTT brokers:
-//
-//   - ClusterNode: Represents a node in the cluster
-//   - ClusterTransport: Handles inter-node communication
-//   - SubscriptionSync: Synchronizes subscription state
-//   - RetainedSync: Synchronizes retained messages
-//   - SessionMigration: Handles session migration between nodes
-//
-// These interfaces are designed to be implemented by the user to support
-// various clustering backends (Redis, etcd, Raft, etc.).
-//
 // # Metrics
 //
 // Use the built-in metrics collectors for operational metrics:
