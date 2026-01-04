@@ -76,9 +76,10 @@ func ReadPacket(r io.Reader, maxSize uint32) (Packet, int, error) {
 		return nil, n, ErrUnknownPacketType
 	}
 
-	// Decode packet
-	reader := newBytesReader(remaining)
+	// Decode packet using pooled reader
+	reader := getBytesReader(remaining)
 	_, err = packet.Decode(reader, header)
+	putBytesReader(reader)
 	if err != nil {
 		return nil, n, err
 	}
@@ -100,15 +101,19 @@ func WritePacket(w io.Writer, packet Packet, maxSize uint32) (int, error) {
 
 	// If max size check is needed, encode to buffer first
 	if maxSize > 0 {
-		var buf bytesBuffer
-		n, err := packet.Encode(&buf)
+		buf := getBytesBuffer()
+		n, err := packet.Encode(buf)
 		if err != nil {
+			putBytesBuffer(buf)
 			return 0, err
 		}
 		if uint32(n) > maxSize {
+			putBytesBuffer(buf)
 			return 0, ErrPacketTooLarge
 		}
-		return w.Write(buf.Bytes())
+		written, err := w.Write(buf.Bytes())
+		putBytesBuffer(buf)
+		return written, err
 	}
 
 	return packet.Encode(w)
@@ -118,10 +123,6 @@ func WritePacket(w io.Writer, packet Packet, maxSize uint32) (int, error) {
 type bytesReader struct {
 	data []byte
 	pos  int
-}
-
-func newBytesReader(data []byte) *bytesReader {
-	return &bytesReader{data: data}
 }
 
 func (r *bytesReader) Read(p []byte) (int, error) {

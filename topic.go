@@ -87,6 +87,7 @@ func ValidateTopicFilter(filter string) error {
 }
 
 // TopicMatch checks if a topic name matches a topic filter.
+// This implementation avoids allocations by not using strings.Split.
 // MQTT v5.0 spec: Section 4.7
 func TopicMatch(filter, topic string) bool {
 	if filter == "" || topic == "" {
@@ -94,43 +95,61 @@ func TopicMatch(filter, topic string) bool {
 	}
 
 	// System topics ($SYS/) don't match wildcards at root level
-	if len(topic) > 0 && topic[0] == '$' {
-		if len(filter) > 0 && (filter[0] == singleLevelWildcard || filter[0] == multiLevelWildcard) {
+	if topic[0] == '$' {
+		if filter[0] == singleLevelWildcard || filter[0] == multiLevelWildcard {
 			return false
 		}
 	}
 
-	filterLevels := strings.Split(filter, string(topicSeparator))
-	topicLevels := strings.Split(topic, string(topicSeparator))
-
-	return matchLevels(filterLevels, topicLevels)
+	return matchTopicNoAlloc(filter, topic)
 }
 
-func matchLevels(filterLevels, topicLevels []string) bool {
-	for i, filterLevel := range filterLevels {
+// matchTopicNoAlloc matches topic against filter without allocations.
+func matchTopicNoAlloc(filter, topic string) bool {
+	fi, ti := 0, 0
+	flen, tlen := len(filter), len(topic)
+
+	for fi < flen {
+		// Get current filter level
+		fstart := fi
+		for fi < flen && filter[fi] != topicSeparator {
+			fi++
+		}
+		flevel := filter[fstart:fi]
+
 		// Multi-level wildcard matches everything remaining
-		if filterLevel == string(multiLevelWildcard) {
+		if flevel == "#" {
 			return true
 		}
 
-		// If we've run out of topic levels, no match
-		if i >= len(topicLevels) {
+		// Check if we have a topic level to match
+		if ti >= tlen {
 			return false
 		}
+
+		// Get current topic level
+		tstart := ti
+		for ti < tlen && topic[ti] != topicSeparator {
+			ti++
+		}
+		tlevel := topic[tstart:ti]
 
 		// Single-level wildcard matches any single level
-		if filterLevel == string(singleLevelWildcard) {
-			continue
+		if flevel != "+" && flevel != tlevel {
+			return false
 		}
 
-		// Exact match required
-		if filterLevel != topicLevels[i] {
-			return false
+		// Move past separator if present
+		if fi < flen {
+			fi++ // skip '/'
+		}
+		if ti < tlen {
+			ti++ // skip '/'
 		}
 	}
 
-	// All filter levels matched; topic must also be exhausted
-	return len(filterLevels) == len(topicLevels)
+	// Filter exhausted - topic must also be exhausted
+	return ti >= tlen
 }
 
 // IsSystemTopic returns true if the topic is a system topic ($SYS/).

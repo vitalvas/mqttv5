@@ -54,40 +54,53 @@ const (
 	PropTypeStringPair  PropertyType = 6 // UTF-8 string pair
 )
 
-// propertyTypeMap maps property IDs to their data types.
-var propertyTypeMap = map[PropertyID]PropertyType{
-	PropPayloadFormatIndicator:   PropTypeByte,
-	PropMessageExpiryInterval:    PropTypeFourByteInt,
-	PropContentType:              PropTypeString,
-	PropResponseTopic:            PropTypeString,
-	PropCorrelationData:          PropTypeBinary,
-	PropSubscriptionIdentifier:   PropTypeVarInt,
-	PropSessionExpiryInterval:    PropTypeFourByteInt,
-	PropAssignedClientIdentifier: PropTypeString,
-	PropServerKeepAlive:          PropTypeTwoByteInt,
-	PropAuthenticationMethod:     PropTypeString,
-	PropAuthenticationData:       PropTypeBinary,
-	PropRequestProblemInfo:       PropTypeByte,
-	PropWillDelayInterval:        PropTypeFourByteInt,
-	PropRequestResponseInfo:      PropTypeByte,
-	PropResponseInformation:      PropTypeString,
-	PropServerReference:          PropTypeString,
-	PropReasonString:             PropTypeString,
-	PropReceiveMaximum:           PropTypeTwoByteInt,
-	PropTopicAliasMaximum:        PropTypeTwoByteInt,
-	PropTopicAlias:               PropTypeTwoByteInt,
-	PropMaximumQoS:               PropTypeByte,
-	PropRetainAvailable:          PropTypeByte,
-	PropUserProperty:             PropTypeStringPair,
-	PropMaximumPacketSize:        PropTypeFourByteInt,
-	PropWildcardSubAvailable:     PropTypeByte,
-	PropSubscriptionIDAvailable:  PropTypeByte,
-	PropSharedSubAvailable:       PropTypeByte,
+// propertyTypeArray provides O(1) lookup for property types.
+// Index is PropertyID, value is PropertyType+1 (0 means unknown).
+var propertyTypeArray = [64]PropertyType{
+	0x01: PropTypeByte + 1,        // PayloadFormatIndicator
+	0x02: PropTypeFourByteInt + 1, // MessageExpiryInterval
+	0x03: PropTypeString + 1,      // ContentType
+	0x08: PropTypeString + 1,      // ResponseTopic
+	0x09: PropTypeBinary + 1,      // CorrelationData
+	0x0B: PropTypeVarInt + 1,      // SubscriptionIdentifier
+	0x11: PropTypeFourByteInt + 1, // SessionExpiryInterval
+	0x12: PropTypeString + 1,      // AssignedClientIdentifier
+	0x13: PropTypeTwoByteInt + 1,  // ServerKeepAlive
+	0x15: PropTypeString + 1,      // AuthenticationMethod
+	0x16: PropTypeBinary + 1,      // AuthenticationData
+	0x17: PropTypeByte + 1,        // RequestProblemInfo
+	0x18: PropTypeFourByteInt + 1, // WillDelayInterval
+	0x19: PropTypeByte + 1,        // RequestResponseInfo
+	0x1A: PropTypeString + 1,      // ResponseInformation
+	0x1C: PropTypeString + 1,      // ServerReference
+	0x1F: PropTypeString + 1,      // ReasonString
+	0x21: PropTypeTwoByteInt + 1,  // ReceiveMaximum
+	0x22: PropTypeTwoByteInt + 1,  // TopicAliasMaximum
+	0x23: PropTypeTwoByteInt + 1,  // TopicAlias
+	0x24: PropTypeByte + 1,        // MaximumQoS
+	0x25: PropTypeByte + 1,        // RetainAvailable
+	0x26: PropTypeStringPair + 1,  // UserProperty
+	0x27: PropTypeFourByteInt + 1, // MaximumPacketSize
+	0x28: PropTypeByte + 1,        // WildcardSubAvailable
+	0x29: PropTypeByte + 1,        // SubscriptionIDAvailable
+	0x2A: PropTypeByte + 1,        // SharedSubAvailable
+}
+
+// lookupPropertyType returns the property type and whether it's valid.
+func lookupPropertyType(id PropertyID) (PropertyType, bool) {
+	if int(id) >= len(propertyTypeArray) {
+		return 0, false
+	}
+	t := propertyTypeArray[id]
+	if t == 0 {
+		return 0, false
+	}
+	return t - 1, true
 }
 
 // PropertyType returns the data type for this property ID.
 func (p PropertyID) PropertyType() PropertyType {
-	if t, ok := propertyTypeMap[p]; ok {
+	if t, ok := lookupPropertyType(p); ok {
 		return t
 	}
 	return PropTypeByte // default
@@ -98,6 +111,7 @@ var (
 	ErrUnknownPropertyID   = errors.New("unknown property identifier")
 	ErrInvalidPropertyType = errors.New("invalid property type for identifier")
 	ErrDuplicateProperty   = errors.New("duplicate property not allowed")
+	ErrPropertiesTooLarge  = errors.New("properties exceed maximum size")
 )
 
 // Properties represents a collection of MQTT v5.0 properties.
@@ -332,6 +346,12 @@ func (p *Properties) Encode(w io.Writer) (int, error) {
 	// Calculate the size of the properties
 	size := p.size()
 
+	// Check for overflow before converting to uint32
+	// maxVarint (268435455) is the maximum value for MQTT variable byte integer
+	if size < 0 || size > maxVarint {
+		return 0, ErrPropertiesTooLarge
+	}
+
 	// Write the length as a variable byte integer
 	n, err := encodeVarint(w, uint32(size))
 	if err != nil {
@@ -449,8 +469,9 @@ func (p *Properties) Decode(r io.Reader) (int, error) {
 		return n, nil
 	}
 
-	// Track seen properties to detect duplicates
-	seen := make(map[PropertyID]bool)
+	// Track seen properties using a bitset (no allocation)
+	// PropertyIDs are < 64, so uint64 suffices
+	var seen uint64
 
 	// Read properties
 	remaining := int(length)
@@ -465,16 +486,17 @@ func (p *Properties) Decode(r io.Reader) (int, error) {
 		}
 
 		id := PropertyID(idBuf[0])
-		propType, ok := propertyTypeMap[id]
+		propType, ok := lookupPropertyType(id)
 		if !ok {
 			return n, ErrUnknownPropertyID
 		}
 
-		// Check for duplicates (only UserProperty and SubscriptionIdentifier can appear multiple times)
-		if seen[id] && !id.allowsMultiple() {
+		// Check for duplicates using bitset (only UserProperty and SubscriptionIdentifier can appear multiple times)
+		bit := uint64(1) << id
+		if seen&bit != 0 && !id.allowsMultiple() {
 			return n, ErrDuplicateProperty
 		}
-		seen[id] = true
+		seen |= bit
 
 		// Read value based on type
 		var value any

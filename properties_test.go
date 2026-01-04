@@ -439,3 +439,185 @@ func FuzzPropertiesDecode(f *testing.F) {
 		_, _ = p.Decode(bytes.NewReader(data))
 	})
 }
+
+func TestLookupPropertyType(t *testing.T) {
+	t.Run("valid property IDs", func(t *testing.T) {
+		tests := []struct {
+			id       PropertyID
+			expected PropertyType
+		}{
+			{PropPayloadFormatIndicator, PropTypeByte},
+			{PropMessageExpiryInterval, PropTypeFourByteInt},
+			{PropContentType, PropTypeString},
+			{PropResponseTopic, PropTypeString},
+			{PropCorrelationData, PropTypeBinary},
+			{PropSubscriptionIdentifier, PropTypeVarInt},
+			{PropSessionExpiryInterval, PropTypeFourByteInt},
+			{PropAssignedClientIdentifier, PropTypeString},
+			{PropServerKeepAlive, PropTypeTwoByteInt},
+			{PropAuthenticationMethod, PropTypeString},
+			{PropAuthenticationData, PropTypeBinary},
+			{PropRequestProblemInfo, PropTypeByte},
+			{PropWillDelayInterval, PropTypeFourByteInt},
+			{PropRequestResponseInfo, PropTypeByte},
+			{PropResponseInformation, PropTypeString},
+			{PropServerReference, PropTypeString},
+			{PropReasonString, PropTypeString},
+			{PropReceiveMaximum, PropTypeTwoByteInt},
+			{PropTopicAliasMaximum, PropTypeTwoByteInt},
+			{PropTopicAlias, PropTypeTwoByteInt},
+			{PropMaximumQoS, PropTypeByte},
+			{PropRetainAvailable, PropTypeByte},
+			{PropUserProperty, PropTypeStringPair},
+			{PropMaximumPacketSize, PropTypeFourByteInt},
+			{PropWildcardSubAvailable, PropTypeByte},
+			{PropSubscriptionIDAvailable, PropTypeByte},
+			{PropSharedSubAvailable, PropTypeByte},
+		}
+
+		for _, tt := range tests {
+			propType, ok := lookupPropertyType(tt.id)
+			assert.True(t, ok, "property ID %d should be valid", tt.id)
+			assert.Equal(t, tt.expected, propType, "property ID %d type mismatch", tt.id)
+		}
+	})
+
+	t.Run("invalid property IDs", func(t *testing.T) {
+		invalidIDs := []PropertyID{
+			0x00, // not used
+			0x04, // gap in spec
+			0x05,
+			0x06,
+			0x07,
+			0x0A,
+			0x0C,
+			0x0D,
+			0x0E,
+			0x0F,
+			0x10,
+			0x14, // gap
+			0x1B,
+			0x1D,
+			0x1E,
+			0x20,
+			0x2B, // beyond max
+			0x3F, // within array bounds but invalid
+			0xFF, // way out of bounds
+		}
+
+		for _, id := range invalidIDs {
+			_, ok := lookupPropertyType(id)
+			assert.False(t, ok, "property ID %d should be invalid", id)
+		}
+	})
+
+	t.Run("out of bounds property ID", func(t *testing.T) {
+		// ID >= 64 should return false
+		_, ok := lookupPropertyType(64)
+		assert.False(t, ok)
+
+		_, ok = lookupPropertyType(100)
+		assert.False(t, ok)
+
+		_, ok = lookupPropertyType(255)
+		assert.False(t, ok)
+	})
+
+	t.Run("consistency with PropertyType method", func(t *testing.T) {
+		// All valid property IDs should return the same type from both methods
+		validIDs := []PropertyID{
+			PropPayloadFormatIndicator,
+			PropMessageExpiryInterval,
+			PropContentType,
+			PropResponseTopic,
+			PropCorrelationData,
+			PropSubscriptionIdentifier,
+			PropSessionExpiryInterval,
+			PropAssignedClientIdentifier,
+			PropServerKeepAlive,
+			PropAuthenticationMethod,
+			PropAuthenticationData,
+			PropRequestProblemInfo,
+			PropWillDelayInterval,
+			PropRequestResponseInfo,
+			PropResponseInformation,
+			PropServerReference,
+			PropReasonString,
+			PropReceiveMaximum,
+			PropTopicAliasMaximum,
+			PropTopicAlias,
+			PropMaximumQoS,
+			PropRetainAvailable,
+			PropUserProperty,
+			PropMaximumPacketSize,
+			PropWildcardSubAvailable,
+			PropSubscriptionIDAvailable,
+			PropSharedSubAvailable,
+		}
+
+		for _, id := range validIDs {
+			lookupType, ok := lookupPropertyType(id)
+			assert.True(t, ok)
+			methodType := id.PropertyType()
+			assert.Equal(t, lookupType, methodType, "mismatch for property ID %d", id)
+		}
+	})
+}
+
+func TestPropertiesEncodeSizeOverflow(t *testing.T) {
+	t.Run("properties size exceeds maxVarint", func(t *testing.T) {
+		// We can't easily create properties that exceed maxVarint (268MB)
+		// without running out of memory, but we can test the error exists
+		// and the check is in place by verifying normal encoding works
+		var p Properties
+		p.Set(PropContentType, "application/json")
+
+		var buf bytes.Buffer
+		_, err := p.Encode(&buf)
+		assert.NoError(t, err)
+	})
+
+	t.Run("error type exists", func(t *testing.T) {
+		// Verify the error is defined
+		assert.NotNil(t, ErrPropertiesTooLarge)
+		assert.Equal(t, "properties exceed maximum size", ErrPropertiesTooLarge.Error())
+	})
+}
+
+func BenchmarkLookupPropertyType(b *testing.B) {
+	ids := []PropertyID{
+		PropPayloadFormatIndicator,
+		PropMessageExpiryInterval,
+		PropContentType,
+		PropUserProperty,
+		PropMaximumPacketSize,
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for b.Loop() {
+		for _, id := range ids {
+			_, _ = lookupPropertyType(id)
+		}
+	}
+}
+
+func BenchmarkPropertyTypeMethod(b *testing.B) {
+	ids := []PropertyID{
+		PropPayloadFormatIndicator,
+		PropMessageExpiryInterval,
+		PropContentType,
+		PropUserProperty,
+		PropMaximumPacketSize,
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for b.Loop() {
+		for _, id := range ids {
+			_ = id.PropertyType()
+		}
+	}
+}

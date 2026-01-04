@@ -256,6 +256,202 @@ func TestTopicMatcherInvalidFilter(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidTopicFilter)
 }
 
+func TestMatchTopicNoAlloc(t *testing.T) {
+	t.Run("exact matches", func(t *testing.T) {
+		tests := []struct {
+			filter string
+			topic  string
+			match  bool
+		}{
+			{"a", "a", true},
+			{"test", "test", true},
+			{"a/b", "a/b", true},
+			{"a/b/c", "a/b/c", true},
+			{"test/topic/name", "test/topic/name", true},
+			// Note: empty strings are handled by TopicMatch before calling matchTopicNoAlloc
+		}
+
+		for _, tt := range tests {
+			result := matchTopicNoAlloc(tt.filter, tt.topic)
+			assert.Equal(t, tt.match, result, "filter=%q topic=%q", tt.filter, tt.topic)
+		}
+	})
+
+	t.Run("non-matches", func(t *testing.T) {
+		tests := []struct {
+			filter string
+			topic  string
+		}{
+			{"a", "b"},
+			{"test", "other"},
+			{"a/b", "a/c"},
+			{"a/b", "a/b/c"},
+			{"a/b/c", "a/b"},
+			{"test/topic", "test/other"},
+			{"foo/bar", "foo/baz"},
+		}
+
+		for _, tt := range tests {
+			result := matchTopicNoAlloc(tt.filter, tt.topic)
+			assert.False(t, result, "filter=%q topic=%q should not match", tt.filter, tt.topic)
+		}
+	})
+
+	t.Run("single level wildcard +", func(t *testing.T) {
+		tests := []struct {
+			filter string
+			topic  string
+			match  bool
+		}{
+			{"+", "a", true},
+			{"+", "test", true},
+			{"+/b", "a/b", true},
+			{"a/+", "a/b", true},
+			{"a/+/c", "a/b/c", true},
+			{"+/+", "a/b", true},
+			{"+/+/+", "a/b/c", true},
+			{"+", "a/b", false}, // + matches only one level
+			{"a/+", "a", false},
+			{"+/b", "a/c", false},
+		}
+
+		for _, tt := range tests {
+			result := matchTopicNoAlloc(tt.filter, tt.topic)
+			assert.Equal(t, tt.match, result, "filter=%q topic=%q", tt.filter, tt.topic)
+		}
+	})
+
+	t.Run("multi level wildcard #", func(t *testing.T) {
+		tests := []struct {
+			filter string
+			topic  string
+			match  bool
+		}{
+			{"#", "a", true},
+			{"#", "a/b", true},
+			{"#", "a/b/c", true},
+			{"#", "a/b/c/d/e", true},
+			{"a/#", "a", true},
+			{"a/#", "a/b", true},
+			{"a/#", "a/b/c", true},
+			{"a/b/#", "a/b", true},
+			{"a/b/#", "a/b/c", true},
+			{"a/b/#", "a/b/c/d", true},
+		}
+
+		for _, tt := range tests {
+			result := matchTopicNoAlloc(tt.filter, tt.topic)
+			assert.True(t, result, "filter=%q topic=%q should match", tt.filter, tt.topic)
+		}
+	})
+
+	t.Run("combined wildcards", func(t *testing.T) {
+		tests := []struct {
+			filter string
+			topic  string
+			match  bool
+		}{
+			{"+/#", "a", true},
+			{"+/#", "a/b", true},
+			{"+/#", "a/b/c", true},
+			{"+/+/#", "a/b", true},
+			{"+/+/#", "a/b/c", true},
+			{"+/b/#", "a/b/c", true},
+			{"a/+/#", "a/b/c", true},
+		}
+
+		for _, tt := range tests {
+			result := matchTopicNoAlloc(tt.filter, tt.topic)
+			assert.True(t, result, "filter=%q topic=%q should match", tt.filter, tt.topic)
+		}
+	})
+
+	t.Run("edge cases with separators", func(t *testing.T) {
+		tests := []struct {
+			filter string
+			topic  string
+			match  bool
+		}{
+			{"/", "/", true},
+			{"/a", "/a", true},
+			{"a/", "a/", true},
+			{"/a/", "/a/", true},
+			{"//", "//", true},
+			{"+/", "a/", true},
+			{"/+", "/a", true},
+			{"/#", "/a/b", true},
+		}
+
+		for _, tt := range tests {
+			result := matchTopicNoAlloc(tt.filter, tt.topic)
+			assert.Equal(t, tt.match, result, "filter=%q topic=%q", tt.filter, tt.topic)
+		}
+	})
+
+	t.Run("long topics", func(t *testing.T) {
+		// Test with longer topic paths
+		longFilter := "level1/level2/level3/level4/level5"
+		longTopic := "level1/level2/level3/level4/level5"
+		assert.True(t, matchTopicNoAlloc(longFilter, longTopic))
+
+		wildcardFilter := "level1/+/level3/+/level5"
+		assert.True(t, matchTopicNoAlloc(wildcardFilter, longTopic))
+
+		hashFilter := "level1/level2/#"
+		assert.True(t, matchTopicNoAlloc(hashFilter, longTopic))
+	})
+}
+
+func BenchmarkMatchTopicNoAlloc(b *testing.B) {
+	b.Run("exact_match", func(b *testing.B) {
+		filter := "sensor/living/temperature"
+		topic := "sensor/living/temperature"
+
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		for b.Loop() {
+			_ = matchTopicNoAlloc(filter, topic)
+		}
+	})
+
+	b.Run("wildcard_plus", func(b *testing.B) {
+		filter := "sensor/+/temperature"
+		topic := "sensor/living/temperature"
+
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		for b.Loop() {
+			_ = matchTopicNoAlloc(filter, topic)
+		}
+	})
+
+	b.Run("wildcard_hash", func(b *testing.B) {
+		filter := "sensor/#"
+		topic := "sensor/living/temperature"
+
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		for b.Loop() {
+			_ = matchTopicNoAlloc(filter, topic)
+		}
+	})
+
+	b.Run("long_topic", func(b *testing.B) {
+		filter := "level1/level2/level3/level4/level5"
+		topic := "level1/level2/level3/level4/level5"
+
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		for b.Loop() {
+			_ = matchTopicNoAlloc(filter, topic)
+		}
+	})
+}
+
 func BenchmarkValidateTopicName(b *testing.B) {
 	topic := "sensor/living/temperature"
 
