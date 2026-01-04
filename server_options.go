@@ -45,6 +45,13 @@ type serverConfig struct {
 	onSubscribe        func(*ServerClient, []Subscription)
 	onUnsubscribe      func(*ServerClient, []string)
 
+	// Server capabilities (MQTT v5 spec section 3.2.2.3)
+	maxQoS             byte // Maximum QoS level (0, 1, or 2)
+	retainAvailable    bool // Whether retained messages are supported
+	wildcardSubAvail   bool // Whether wildcard subscriptions are supported
+	subIDAvailable     bool // Whether subscription identifiers are supported
+	sharedSubAvailable bool // Whether shared subscriptions are supported
+
 	// Interceptors
 	producerInterceptors []ProducerInterceptor
 	consumerInterceptors []ConsumerInterceptor
@@ -62,6 +69,12 @@ func defaultServerConfig() *serverConfig {
 		maxPacketSize:      MaxPacketSizeDefault,
 		maxConnections:     0, // unlimited
 		receiveMaximum:     65535,
+		// Default capabilities (all features enabled)
+		maxQoS:             QoS2, // QoS 0, 1, 2 all supported
+		retainAvailable:    true, // Retained messages supported
+		wildcardSubAvail:   true, // Wildcard subscriptions supported
+		subIDAvailable:     true, // Subscription identifiers supported
+		sharedSubAvailable: true, // Shared subscriptions supported
 	}
 }
 
@@ -251,5 +264,49 @@ func WithServerProducerInterceptors(interceptors ...ProducerInterceptor) ServerO
 func WithServerConsumerInterceptors(interceptors ...ConsumerInterceptor) ServerOption {
 	return func(c *serverConfig) {
 		c.consumerInterceptors = append(c.consumerInterceptors, interceptors...)
+	}
+}
+
+// WithMaxQoS sets the maximum QoS level supported by the server.
+// Valid values are 0, 1, or 2. Default is 2 (all QoS levels supported).
+// Clients attempting to publish or subscribe with higher QoS will be rejected.
+func WithMaxQoS(maxQoS byte) ServerOption {
+	return func(c *serverConfig) {
+		if maxQoS <= QoS2 {
+			c.maxQoS = maxQoS
+		}
+	}
+}
+
+// WithRetainAvailable sets whether retained messages are supported.
+// Default is true. If set to false, PUBLISH with retain flag will be rejected.
+// Note: If retainedStore is nil, this is automatically set to false.
+func WithRetainAvailable(available bool) ServerOption {
+	return func(c *serverConfig) {
+		c.retainAvailable = available
+	}
+}
+
+// WithWildcardSubAvailable sets whether wildcard subscriptions are supported.
+// Default is true. If set to false, subscriptions with # or + wildcards will be rejected.
+func WithWildcardSubAvailable(available bool) ServerOption {
+	return func(c *serverConfig) {
+		c.wildcardSubAvail = available
+	}
+}
+
+// WithSubIDAvailable sets whether subscription identifiers are supported.
+// Default is true. If set to false, SUBSCRIBE with subscription identifiers will be rejected.
+func WithSubIDAvailable(available bool) ServerOption {
+	return func(c *serverConfig) {
+		c.subIDAvailable = available
+	}
+}
+
+// WithSharedSubAvailable sets whether shared subscriptions are supported.
+// Default is true. If set to false, shared subscription filters ($share/...) will be rejected.
+func WithSharedSubAvailable(available bool) ServerOption {
+	return func(c *serverConfig) {
+		c.sharedSubAvailable = available
 	}
 }

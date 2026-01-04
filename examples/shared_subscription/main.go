@@ -144,7 +144,7 @@ func runPublisher(ctx context.Context, topic string) {
 		err := client.Publish(&mqttv5.Message{
 			Topic:   topic,
 			Payload: []byte(payload),
-			QoS:     1,
+			QoS:     mqttv5.QoS1,
 		})
 		if err != nil {
 			log.Printf("[%s] Failed to publish message %d: %v", clientID, i, err)

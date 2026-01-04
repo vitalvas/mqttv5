@@ -62,6 +62,9 @@ type clientOptions struct {
 	// Interceptors
 	producerInterceptors []ProducerInterceptor
 	consumerInterceptors []ConsumerInterceptor
+
+	// Enhanced authentication
+	enhancedAuth ClientEnhancedAuthenticator
 }
 
 // defaultOptions returns options with sensible defaults.
@@ -284,6 +287,14 @@ func WithProducerInterceptors(interceptors ...ProducerInterceptor) Option {
 func WithConsumerInterceptors(interceptors ...ConsumerInterceptor) Option {
 	return func(o *clientOptions) {
 		o.consumerInterceptors = append(o.consumerInterceptors, interceptors...)
+	}
+}
+
+// WithEnhancedAuthentication sets the enhanced authenticator for SASL-style authentication.
+// Enhanced authentication allows multi-step authentication exchanges using AUTH packets.
+func WithEnhancedAuthentication(auth ClientEnhancedAuthenticator) Option {
+	return func(o *clientOptions) {
+		o.enhancedAuth = auth
 	}
 }
 

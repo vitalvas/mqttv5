@@ -39,7 +39,7 @@ func main() {
 				LocalPrefix:  "local/sensors",
 				RemotePrefix: "remote/sensors",
 				Direction:    mqttv5.BridgeDirectionBoth,
-				QoS:          1,
+				QoS:          mqttv5.QoS1,
 			},
 		},
 	})

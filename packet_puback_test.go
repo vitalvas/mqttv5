@@ -180,3 +180,11 @@ func FuzzPubackPacketDecode(f *testing.F) {
 		_, _ = p.Decode(bytes.NewReader(remaining), header)
 	})
 }
+
+func TestPubackPacketProperties(t *testing.T) {
+	p := &PubackPacket{}
+	p.Props.Set(PropReasonString, "test reason")
+	props := p.Properties()
+	require.NotNil(t, props)
+	assert.Equal(t, "test reason", props.GetString(PropReasonString))
+}

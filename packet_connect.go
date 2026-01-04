@@ -110,7 +110,7 @@ func (p *ConnectPacket) setConnectFlags(flags byte) error {
 	p.WillRetain = flags&connectFlagWillRetain != 0
 
 	// Will QoS must be 0 if Will Flag is 0
-	if !p.WillFlag && p.WillQoS != 0 {
+	if !p.WillFlag && p.WillQoS != QoS0 {
 		return ErrInvalidConnectFlags
 	}
 
@@ -120,7 +120,7 @@ func (p *ConnectPacket) setConnectFlags(flags byte) error {
 	}
 
 	// Will QoS must not be 3
-	if p.WillQoS > 2 {
+	if p.WillQoS > QoS2 {
 		return ErrInvalidConnectFlags
 	}
 
@@ -131,6 +131,14 @@ func (p *ConnectPacket) setConnectFlags(flags byte) error {
 func (p *ConnectPacket) Encode(w io.Writer) (int, error) {
 	if err := p.Validate(); err != nil {
 		return 0, err
+	}
+	if err := p.Props.ValidateFor(PropCtxCONNECT); err != nil {
+		return 0, err
+	}
+	if p.WillFlag {
+		if err := p.WillProps.ValidateFor(PropCtxWILL); err != nil {
+			return 0, err
+		}
 	}
 
 	// Build variable header and payload
@@ -291,6 +299,9 @@ func (p *ConnectPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 	if err != nil {
 		return totalRead, err
 	}
+	if err := p.Props.ValidateFor(PropCtxCONNECT); err != nil {
+		return totalRead, err
+	}
 
 	// Payload
 
@@ -306,6 +317,9 @@ func (p *ConnectPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 		n, err = p.WillProps.Decode(r)
 		totalRead += n
 		if err != nil {
+			return totalRead, err
+		}
+		if err := p.WillProps.ValidateFor(PropCtxWILL); err != nil {
 			return totalRead, err
 		}
 
@@ -356,12 +370,12 @@ func (p *ConnectPacket) Validate() error {
 	}
 
 	// Will QoS must be valid
-	if p.WillQoS > 2 {
+	if p.WillQoS > QoS2 {
 		return ErrInvalidConnectFlags
 	}
 
 	// Will Retain and Will QoS should be 0 if Will Flag is not set
-	if !p.WillFlag && (p.WillRetain || p.WillQoS != 0) {
+	if !p.WillFlag && (p.WillRetain || p.WillQoS != QoS0) {
 		return ErrInvalidConnectFlags
 	}
 

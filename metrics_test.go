@@ -159,3 +159,80 @@ func BenchmarkMemoryMetricsMessageReceived(b *testing.B) {
 		m.MessageReceived(1)
 	}
 }
+
+func TestExpvarMetrics(t *testing.T) {
+	// Note: expvar counters persist across tests and NewMetrics panics on reuse
+	// So we create the Metrics instance once and test relative changes
+	m := NewMetrics()
+
+	t.Run("connection metrics", func(t *testing.T) {
+		initialConns := m.Connections()
+		initialTotal := m.ConnectionsTotal()
+
+		m.ConnectionOpened()
+		assert.Equal(t, initialConns+1, m.Connections())
+		assert.Equal(t, initialTotal+1, m.ConnectionsTotal())
+
+		m.ConnectionClosed()
+		assert.Equal(t, initialConns, m.Connections())
+		assert.Equal(t, initialTotal+1, m.ConnectionsTotal())
+	})
+
+	t.Run("message metrics", func(t *testing.T) {
+		initialQoS0 := m.messagesReceived[0].Value()
+		initialQoS1Sent := m.messagesSent[1].Value()
+
+		m.MessageReceived(0)
+		m.MessageSent(1)
+
+		assert.Equal(t, initialQoS0+1, m.messagesReceived[0].Value())
+		assert.Equal(t, initialQoS1Sent+1, m.messagesSent[1].Value())
+	})
+
+	t.Run("bytes metrics", func(t *testing.T) {
+		initialRecv := m.bytesReceived.Value()
+		initialSent := m.bytesSent.Value()
+
+		m.BytesReceived(100)
+		m.BytesSent(200)
+
+		assert.Equal(t, initialRecv+100, m.bytesReceived.Value())
+		assert.Equal(t, initialSent+200, m.bytesSent.Value())
+	})
+
+	t.Run("subscription metrics", func(t *testing.T) {
+		initial := m.Subscriptions()
+
+		m.SubscriptionAdded()
+		assert.Equal(t, initial+1, m.Subscriptions())
+
+		m.SubscriptionRemoved()
+		assert.Equal(t, initial, m.Subscriptions())
+	})
+
+	t.Run("retained message metrics", func(t *testing.T) {
+		initial := m.RetainedMessages()
+
+		m.RetainedMessageSet()
+		assert.Equal(t, initial+1, m.RetainedMessages())
+
+		m.RetainedMessageRemoved()
+		assert.Equal(t, initial, m.RetainedMessages())
+	})
+
+	t.Run("latency metrics", func(t *testing.T) {
+		m.PublishLatency(10 * time.Millisecond)
+
+		// latencyCount and latencySum should have been updated
+		assert.Greater(t, m.latencyCount.Value(), int64(0))
+	})
+
+	t.Run("packet metrics", func(t *testing.T) {
+		m.PacketReceived(PacketCONNECT)
+		m.PacketSent(PacketCONNACK)
+
+		// Counters should be created and incremented
+		assert.NotNil(t, m.packetsReceived[PacketCONNECT])
+		assert.NotNil(t, m.packetsSent[PacketCONNACK])
+	})
+}

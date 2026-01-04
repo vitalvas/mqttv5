@@ -80,7 +80,7 @@ type AllowAllAuthorizer struct{}
 
 // Authorize always allows the action.
 func (a *AllowAllAuthorizer) Authorize(_ context.Context, _ *AuthzContext) (*AuthzResult, error) {
-	return &AuthzResult{Allowed: true, MaxQoS: 2}, nil
+	return &AuthzResult{Allowed: true, MaxQoS: QoS2}, nil
 }
 
 // DenyAllAuthorizer denies all actions.

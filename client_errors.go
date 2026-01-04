@@ -70,6 +70,21 @@ var (
 
 	// ErrTooManySubscriptions is returned when the subscription limit is reached.
 	ErrTooManySubscriptions = errors.New("too many subscriptions")
+
+	// ErrQoSNotSupported is returned when the requested QoS level exceeds server's maximum.
+	ErrQoSNotSupported = errors.New("QoS level not supported by server")
+
+	// ErrRetainNotSupported is returned when retained messages are not supported by server.
+	ErrRetainNotSupported = errors.New("retained messages not supported by server")
+
+	// ErrWildcardSubNotSupported is returned when wildcard subscriptions are not supported by server.
+	ErrWildcardSubNotSupported = errors.New("wildcard subscriptions not supported by server")
+
+	// ErrSharedSubNotSupported is returned when shared subscriptions are not supported by server.
+	ErrSharedSubNotSupported = errors.New("shared subscriptions not supported by server")
+
+	// ErrSubIDNotSupported is returned when subscription identifiers are not supported by server.
+	ErrSubIDNotSupported = errors.New("subscription identifiers not supported by server")
 )
 
 // ConnectedEvent contains details about a successful connection.

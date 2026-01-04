@@ -83,6 +83,9 @@ func (p *PublishPacket) Encode(w io.Writer) (int, error) {
 	if err := p.Validate(); err != nil {
 		return 0, err
 	}
+	if err := p.Props.ValidateFor(PropCtxPUBLISH); err != nil {
+		return 0, err
+	}
 
 	var buf bytes.Buffer
 
@@ -94,7 +97,7 @@ func (p *PublishPacket) Encode(w io.Writer) (int, error) {
 	_ = n
 
 	// Packet Identifier (only for QoS > 0)
-	if p.QoS > 0 {
+	if p.QoS > QoS0 {
 		_, err = buf.Write([]byte{byte(p.PacketID >> 8), byte(p.PacketID)})
 		if err != nil {
 			return 0, err
@@ -139,7 +142,7 @@ func (p *PublishPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 	p.setFlags(header.Flags)
 
 	// Validate QoS
-	if p.QoS > 2 {
+	if p.QoS > QoS2 {
 		return 0, ErrInvalidQoS
 	}
 
@@ -155,7 +158,7 @@ func (p *PublishPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 	}
 
 	// Packet Identifier (only for QoS > 0)
-	if p.QoS > 0 {
+	if p.QoS > QoS0 {
 		var idBuf [2]byte
 		n, err = io.ReadFull(r, idBuf[:])
 		totalRead += n
@@ -169,6 +172,9 @@ func (p *PublishPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 	n, err = p.Props.Decode(r)
 	totalRead += n
 	if err != nil {
+		return totalRead, err
+	}
+	if err := p.Props.ValidateFor(PropCtxPUBLISH); err != nil {
 		return totalRead, err
 	}
 
@@ -189,17 +195,17 @@ func (p *PublishPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 // Validate validates the packet contents.
 func (p *PublishPacket) Validate() error {
 	// QoS must be 0, 1, or 2
-	if p.QoS > 2 {
+	if p.QoS > QoS2 {
 		return ErrInvalidQoS
 	}
 
 	// DUP must be 0 for QoS 0
-	if p.QoS == 0 && p.DUP {
+	if p.QoS == QoS0 && p.DUP {
 		return ErrInvalidPacketFlags
 	}
 
 	// Packet ID is required for QoS > 0
-	if p.QoS > 0 && p.PacketID == 0 {
+	if p.QoS > QoS0 && p.PacketID == 0 {
 		return ErrPacketIDRequired
 	}
 

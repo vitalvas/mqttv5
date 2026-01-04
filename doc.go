@@ -99,7 +99,7 @@
 //
 //	session.AddSubscription(mqttv5.Subscription{
 //	    TopicFilter: "sensors/#",
-//	    QoS: 1,
+//	    QoS: mqttv5.QoS1,
 //	})
 //	packetID := session.NextPacketID()
 //
@@ -163,7 +163,7 @@
 //	type MyAuthz struct{}
 //	func (a *MyAuthz) Authorize(ctx context.Context, authzCtx *mqttv5.AuthzContext) (*mqttv5.AuthzResult, error) {
 //	    if authzCtx.Topic == "public" {
-//	        return &mqttv5.AuthzResult{Allowed: true, MaxQoS: 1}, nil
+//	        return &mqttv5.AuthzResult{Allowed: true, MaxQoS: mqttv5.QoS1}, nil
 //	    }
 //	    return &mqttv5.AuthzResult{Allowed: false, ReasonCode: mqttv5.ReasonNotAuthorized}, nil
 //	}

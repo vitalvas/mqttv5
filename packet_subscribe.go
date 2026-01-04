@@ -49,6 +49,9 @@ func (p *SubscribePacket) Encode(w io.Writer) (int, error) {
 	if err := p.Validate(); err != nil {
 		return 0, err
 	}
+	if err := p.Props.ValidateFor(PropCtxSUBSCRIBE); err != nil {
+		return 0, err
+	}
 
 	var buf bytes.Buffer
 
@@ -128,6 +131,9 @@ func (p *SubscribePacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 	if err != nil {
 		return totalRead, err
 	}
+	if err := p.Props.ValidateFor(PropCtxSUBSCRIBE); err != nil {
+		return totalRead, err
+	}
 
 	// Validate subscription identifier if present (must be 1-268435455 per MQTT v5.0 spec)
 	var subscriptionID uint32
@@ -191,7 +197,7 @@ func (p *SubscribePacket) Validate() error {
 		if sub.TopicFilter == "" {
 			return ErrProtocolViolation
 		}
-		if sub.QoS > 2 {
+		if sub.QoS > QoS2 {
 			return ErrInvalidQoS
 		}
 		if sub.RetainHandling > 2 {

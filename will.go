@@ -121,7 +121,7 @@ func (w *WillMessage) Validate() error {
 	if err := ValidateTopicName(w.Topic); err != nil {
 		return err
 	}
-	if w.QoS > 2 {
+	if w.QoS > QoS2 {
 		return ErrInvalidQoS
 	}
 	return nil

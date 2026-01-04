@@ -172,6 +172,12 @@ func (d *WSDialer) Dial(ctx context.Context, address string) (Conn, error) {
 		return nil, &WSDialError{Err: err, Response: resp}
 	}
 
+	// Verify server negotiated the MQTT subprotocol per MQTT-over-WebSocket spec
+	if conn.Subprotocol() != WebSocketSubprotocol {
+		conn.Close()
+		return nil, &WSDialError{Err: ErrProtocolViolation, Response: resp}
+	}
+
 	return newWSConn(conn), nil
 }
 

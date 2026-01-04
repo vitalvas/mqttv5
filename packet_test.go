@@ -7,6 +7,23 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestQoSConstants(t *testing.T) {
+	t.Run("QoS values are correct per MQTT spec", func(t *testing.T) {
+		assert.Equal(t, byte(0), QoS0, "QoS0 should be 0")
+		assert.Equal(t, byte(1), QoS1, "QoS1 should be 1")
+		assert.Equal(t, byte(2), QoS2, "QoS2 should be 2")
+	})
+
+	t.Run("QoS constants can be used in Message", func(t *testing.T) {
+		m := &Message{
+			Topic: "test",
+			QoS:   QoS1,
+		}
+		assert.Equal(t, "test", m.Topic)
+		assert.Equal(t, QoS1, m.QoS)
+	})
+}
+
 func TestMessageClone(t *testing.T) {
 	t.Run("nil message", func(t *testing.T) {
 		var m *Message

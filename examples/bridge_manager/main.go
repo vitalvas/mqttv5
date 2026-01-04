@@ -48,13 +48,13 @@ func main() {
 				LocalPrefix:  "sensors",
 				RemotePrefix: "devices/local-site/sensors",
 				Direction:    mqttv5.BridgeDirectionOut, // local -> cloud
-				QoS:          1,
+				QoS:          mqttv5.QoS1,
 			},
 			{
 				LocalPrefix:  "commands",
 				RemotePrefix: "devices/local-site/commands",
 				Direction:    mqttv5.BridgeDirectionIn, // cloud -> local
-				QoS:          1,
+				QoS:          mqttv5.QoS1,
 			},
 		},
 	})
@@ -71,7 +71,7 @@ func main() {
 				LocalPrefix:  "metrics",
 				RemotePrefix: "ingest/metrics",
 				Direction:    mqttv5.BridgeDirectionOut,
-				QoS:          0,
+				QoS:          mqttv5.QoS0,
 			},
 		},
 	})
@@ -88,7 +88,7 @@ func main() {
 				LocalPrefix:  "alerts",
 				RemotePrefix: "notifications",
 				Direction:    mqttv5.BridgeDirectionBoth,
-				QoS:          2,
+				QoS:          mqttv5.QoS2,
 			},
 		},
 		TopicRemapper: func(topic string, direction mqttv5.BridgeDirection) string {

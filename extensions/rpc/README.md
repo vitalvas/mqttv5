@@ -99,7 +99,7 @@ resp, err := handler.CallWithTimeout("service/api", &rpc.Request{
 ```go
 handler, err := rpc.NewHandler(client, &rpc.HandlerOptions{
     ResponseTopic: "my-app/responses/client-1",
-    QoS:           1,
+    QoS:           mqttv5.QoS1,
 })
 ```
 

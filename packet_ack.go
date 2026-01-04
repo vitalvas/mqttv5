@@ -53,8 +53,8 @@ func encodeAck(w io.Writer, packetType PacketType, flags byte, ack *ackPacket) (
 	return total + n, err
 }
 
-// decodeAck decodes an acknowledgment packet.
-func decodeAck(r io.Reader, header FixedHeader, ack *ackPacket) (int, error) {
+// decodeAck decodes an acknowledgment packet with property validation.
+func decodeAck(r io.Reader, header FixedHeader, ack *ackPacket, propCtx PropertyContext) (int, error) {
 	var totalRead int
 
 	// Packet Identifier
@@ -81,6 +81,9 @@ func decodeAck(r io.Reader, header FixedHeader, ack *ackPacket) (int, error) {
 			n, err = ack.Props.Decode(r)
 			totalRead += n
 			if err != nil {
+				return totalRead, err
+			}
+			if err := ack.Props.ValidateFor(propCtx); err != nil {
 				return totalRead, err
 			}
 		}

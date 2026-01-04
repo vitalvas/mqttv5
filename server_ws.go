@@ -48,24 +48,6 @@ func (s *WSServer) handleWSConnection(conn Conn) {
 		return
 	}
 
-	// Check max connections
-	if s.config.maxConnections > 0 {
-		s.mu.RLock()
-		count := len(s.clients)
-		s.mu.RUnlock()
-
-		if count >= s.config.maxConnections {
-			// Send best-effort CONNACK with ServerBusy before closing
-			// This matches TCP behavior and gives clients a proper reason code
-			connack := &ConnackPacket{
-				ReasonCode: ReasonServerBusy,
-			}
-			WritePacket(conn, connack, s.config.maxPacketSize)
-			conn.Close()
-			return
-		}
-	}
-
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -102,6 +84,55 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		return
 	}
 
+	// Determine max packet size for outbound messages early (minimum of server and client limits)
+	// Per MQTT 5.0 spec, server must not send packets larger than client's advertised limit
+	// Computed before any CONNACK responses so all error paths respect client's valid limit
+	clientMaxPacketSize := s.config.maxPacketSize
+	if clientLimit := connect.Props.GetUint32(PropMaximumPacketSize); clientLimit > 0 && clientLimit <= MaxPacketSizeProtocol && clientLimit < clientMaxPacketSize {
+		clientMaxPacketSize = clientLimit
+	}
+
+	// Check max connections after reading CONNECT (per MQTT spec, CONNACK must follow CONNECT)
+	if s.config.maxConnections > 0 {
+		s.mu.RLock()
+		count := len(s.clients)
+		s.mu.RUnlock()
+
+		if count >= s.config.maxConnections {
+			logger.Warn("max connections reached", nil)
+			connack := &ConnackPacket{
+				ReasonCode: ReasonServerBusy,
+			}
+			WritePacket(conn, connack, clientMaxPacketSize)
+			return
+		}
+	}
+
+	// Validate CONNECT properties per MQTT v5 spec
+	// Maximum Packet Size MUST be > 0 and <= 268435455 (Section 3.1.2.11.4)
+	// Validate first so we can use valid client limit for subsequent error responses
+	if connect.Props.Has(PropMaximumPacketSize) {
+		clientMaxPS := connect.Props.GetUint32(PropMaximumPacketSize)
+		if clientMaxPS == 0 || clientMaxPS > MaxPacketSizeProtocol {
+			logger.Warn("maximum packet size invalid (protocol error)", nil)
+			connack := &ConnackPacket{
+				ReasonCode: ReasonProtocolError,
+			}
+			WritePacket(conn, connack, clientMaxPacketSize)
+			return
+		}
+	}
+
+	// Receive Maximum MUST be > 0 (Section 3.1.2.11.3)
+	if connect.Props.Has(PropReceiveMaximum) && connect.Props.GetUint16(PropReceiveMaximum) == 0 {
+		logger.Warn("receive maximum is zero (protocol error)", nil)
+		connack := &ConnackPacket{
+			ReasonCode: ReasonProtocolError,
+		}
+		WritePacket(conn, connack, clientMaxPacketSize)
+		return
+	}
+
 	// Validate and handle client ID (matching TCP behavior)
 	clientID := connect.ClientID
 	var assignedClientID string
@@ -112,7 +143,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 			connack := &ConnackPacket{
 				ReasonCode: ReasonClientIDNotValid,
 			}
-			WritePacket(conn, connack, s.config.maxPacketSize)
+			WritePacket(conn, connack, clientMaxPacketSize)
 			return
 		}
 		// CleanStart=true with empty ClientID: assign one
@@ -124,7 +155,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 
 	// Perform authentication (standard or enhanced) - same as TCP path
-	authResult, newClientID, namespace, ok := s.authenticateClient(conn, connect, clientID, logger)
+	authResult, newClientID, namespace, ok := s.authenticateClient(conn, connect, clientID, clientMaxPacketSize, logger)
 	if !ok {
 		return // Auth failed, connection closed
 	}
@@ -144,14 +175,8 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		connack := &ConnackPacket{
 			ReasonCode: ReasonNotAuthorized,
 		}
-		WritePacket(conn, connack, s.config.maxPacketSize)
+		WritePacket(conn, connack, clientMaxPacketSize)
 		return
-	}
-
-	// Determine max packet size for outbound messages (minimum of server and client limits)
-	clientMaxPacketSize := s.config.maxPacketSize
-	if clientLimit := connect.Props.GetUint32(PropMaximumPacketSize); clientLimit > 0 && clientLimit < clientMaxPacketSize {
-		clientMaxPacketSize = clientLimit
 	}
 
 	// Create client using the constructor to ensure all fields are initialized

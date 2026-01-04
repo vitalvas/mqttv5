@@ -123,3 +123,24 @@ func FuzzPubrecPacketDecode(f *testing.F) {
 		_, _ = p.Decode(bytes.NewReader(remaining), header)
 	})
 }
+
+func TestPubrecPacketMethods(t *testing.T) {
+	t.Run("Properties", func(t *testing.T) {
+		p := &PubrecPacket{}
+		p.Props.Set(PropReasonString, "test reason")
+		props := p.Properties()
+		require.NotNil(t, props)
+		assert.Equal(t, "test reason", props.GetString(PropReasonString))
+	})
+
+	t.Run("GetPacketID", func(t *testing.T) {
+		p := &PubrecPacket{PacketID: 12345}
+		assert.Equal(t, uint16(12345), p.GetPacketID())
+	})
+
+	t.Run("SetPacketID", func(t *testing.T) {
+		p := &PubrecPacket{}
+		p.SetPacketID(54321)
+		assert.Equal(t, uint16(54321), p.PacketID)
+	})
+}

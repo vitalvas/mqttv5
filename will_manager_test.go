@@ -213,4 +213,26 @@ func TestWillManager(t *testing.T) {
 		next := m.GetNextPublishTime()
 		assert.True(t, next.IsZero())
 	})
+
+	t.Run("get pending count", func(t *testing.T) {
+		m := NewWillManager()
+
+		// Initially zero
+		assert.Equal(t, 0, m.GetPendingCount())
+
+		// Register and trigger wills
+		will1 := &WillMessage{Topic: "t1", Payload: []byte("m1"), DelayInterval: 60}
+		will2 := &WillMessage{Topic: "t2", Payload: []byte("m2"), DelayInterval: 60}
+
+		m.Register("client1", will1)
+		m.Register("client2", will2)
+		m.TriggerWill("client1", 0)
+		m.TriggerWill("client2", 0)
+
+		assert.Equal(t, 2, m.GetPendingCount())
+
+		// Cancel one
+		m.CancelPending("client1")
+		assert.Equal(t, 1, m.GetPendingCount())
+	})
 }

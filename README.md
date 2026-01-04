@@ -60,7 +60,7 @@ func main() {
     client.Publish(&mqttv5.Message{
         Topic:   "sensors/temperature",
         Payload: []byte("23.5"),
-        QoS:     1,
+        QoS:     mqttv5.QoS1,
     })
 }
 ```
@@ -258,7 +258,7 @@ bridge, _ := mqttv5.NewBridge(localServer, mqttv5.BridgeConfig{
             LocalPrefix:  "local/sensors",
             RemotePrefix: "remote/sensors",
             Direction:    mqttv5.BridgeDirectionBoth,
-            QoS:          1,
+            QoS:          mqttv5.QoS1,
         },
     },
 })

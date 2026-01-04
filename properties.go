@@ -112,7 +112,91 @@ var (
 	ErrInvalidPropertyType = errors.New("invalid property type for identifier")
 	ErrDuplicateProperty   = errors.New("duplicate property not allowed")
 	ErrPropertiesTooLarge  = errors.New("properties exceed maximum size")
+	ErrPropertyNotAllowed  = errors.New("property not allowed for this packet type")
 )
+
+// PropertyContext identifies the packet type context for property validation.
+type PropertyContext byte
+
+const (
+	PropCtxCONNECT     PropertyContext = 0
+	PropCtxCONNACK     PropertyContext = 1
+	PropCtxPUBLISH     PropertyContext = 2
+	PropCtxPUBACK      PropertyContext = 3
+	PropCtxPUBREC      PropertyContext = 4
+	PropCtxPUBREL      PropertyContext = 5
+	PropCtxPUBCOMP     PropertyContext = 6
+	PropCtxSUBSCRIBE   PropertyContext = 7
+	PropCtxSUBACK      PropertyContext = 8
+	PropCtxUNSUBSCRIBE PropertyContext = 9
+	PropCtxUNSUBACK    PropertyContext = 10
+	PropCtxDISCONNECT  PropertyContext = 11
+	PropCtxAUTH        PropertyContext = 12
+	PropCtxWILL        PropertyContext = 13
+)
+
+// allowedProperties defines which properties are allowed for each packet type.
+// Uses bitmask where bit position corresponds to PropertyID.
+// MQTT v5.0 spec: Sections 3.1-3.15
+var allowedProperties = [14]uint64{
+	// CONNECT: Session Expiry, Receive Max, Max Packet Size, Topic Alias Max,
+	// Request Response Info, Request Problem Info, User Property, Auth Method, Auth Data
+	PropCtxCONNECT: (1 << PropSessionExpiryInterval) | (1 << PropReceiveMaximum) |
+		(1 << PropMaximumPacketSize) | (1 << PropTopicAliasMaximum) |
+		(1 << PropRequestResponseInfo) | (1 << PropRequestProblemInfo) |
+		(1 << PropUserProperty) | (1 << PropAuthenticationMethod) | (1 << PropAuthenticationData),
+
+	// CONNACK: Session Expiry, Receive Max, Max QoS, Retain Available, Max Packet Size,
+	// Assigned Client ID, Topic Alias Max, Reason String, User Property,
+	// Wildcard Sub Available, Sub ID Available, Shared Sub Available,
+	// Server Keep Alive, Response Info, Server Reference, Auth Method, Auth Data
+	PropCtxCONNACK: (1 << PropSessionExpiryInterval) | (1 << PropReceiveMaximum) |
+		(1 << PropMaximumQoS) | (1 << PropRetainAvailable) | (1 << PropMaximumPacketSize) |
+		(1 << PropAssignedClientIdentifier) | (1 << PropTopicAliasMaximum) |
+		(1 << PropReasonString) | (1 << PropUserProperty) |
+		(1 << PropWildcardSubAvailable) | (1 << PropSubscriptionIDAvailable) |
+		(1 << PropSharedSubAvailable) | (1 << PropServerKeepAlive) |
+		(1 << PropResponseInformation) | (1 << PropServerReference) |
+		(1 << PropAuthenticationMethod) | (1 << PropAuthenticationData),
+
+	// PUBLISH: Payload Format, Message Expiry, Topic Alias, Response Topic,
+	// Correlation Data, User Property, Subscription ID, Content Type
+	PropCtxPUBLISH: (1 << PropPayloadFormatIndicator) | (1 << PropMessageExpiryInterval) |
+		(1 << PropTopicAlias) | (1 << PropResponseTopic) | (1 << PropCorrelationData) |
+		(1 << PropUserProperty) | (1 << PropSubscriptionIdentifier) | (1 << PropContentType),
+
+	// PUBACK, PUBREC, PUBREL, PUBCOMP: Reason String, User Property
+	PropCtxPUBACK:  (1 << PropReasonString) | (1 << PropUserProperty),
+	PropCtxPUBREC:  (1 << PropReasonString) | (1 << PropUserProperty),
+	PropCtxPUBREL:  (1 << PropReasonString) | (1 << PropUserProperty),
+	PropCtxPUBCOMP: (1 << PropReasonString) | (1 << PropUserProperty),
+
+	// SUBSCRIBE: Subscription ID, User Property
+	PropCtxSUBSCRIBE: (1 << PropSubscriptionIdentifier) | (1 << PropUserProperty),
+
+	// SUBACK: Reason String, User Property
+	PropCtxSUBACK: (1 << PropReasonString) | (1 << PropUserProperty),
+
+	// UNSUBSCRIBE: User Property
+	PropCtxUNSUBSCRIBE: (1 << PropUserProperty),
+
+	// UNSUBACK: Reason String, User Property
+	PropCtxUNSUBACK: (1 << PropReasonString) | (1 << PropUserProperty),
+
+	// DISCONNECT: Session Expiry, Reason String, User Property, Server Reference
+	PropCtxDISCONNECT: (1 << PropSessionExpiryInterval) | (1 << PropReasonString) |
+		(1 << PropUserProperty) | (1 << PropServerReference),
+
+	// AUTH: Auth Method, Auth Data, Reason String, User Property
+	PropCtxAUTH: (1 << PropAuthenticationMethod) | (1 << PropAuthenticationData) |
+		(1 << PropReasonString) | (1 << PropUserProperty),
+
+	// WILL: Will Delay, Payload Format, Message Expiry, Content Type,
+	// Response Topic, Correlation Data, User Property
+	PropCtxWILL: (1 << PropWillDelayInterval) | (1 << PropPayloadFormatIndicator) |
+		(1 << PropMessageExpiryInterval) | (1 << PropContentType) |
+		(1 << PropResponseTopic) | (1 << PropCorrelationData) | (1 << PropUserProperty),
+}
 
 // Properties represents a collection of MQTT v5.0 properties.
 // MQTT v5.0 spec: Section 2.2.2
@@ -549,4 +633,22 @@ func (p *Properties) Decode(r io.Reader) (int, error) {
 	}
 
 	return n, nil
+}
+
+// ValidateFor checks that all properties are allowed for the given packet context.
+// Returns ErrPropertyNotAllowed if any property is not permitted.
+// MQTT v5.0 spec: Each packet type has specific allowed properties.
+func (p *Properties) ValidateFor(ctx PropertyContext) error {
+	if p == nil || len(p.props) == 0 {
+		return nil
+	}
+
+	allowed := allowedProperties[ctx]
+	for i := range p.props {
+		id := p.props[i].id
+		if id >= 64 || (allowed&(1<<id)) == 0 {
+			return ErrPropertyNotAllowed
+		}
+	}
+	return nil
 }

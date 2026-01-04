@@ -94,6 +94,11 @@ func (c *ServerClient) KeepAlive() uint16 {
 	return c.keepAlive
 }
 
+// MaxPacketSize returns the negotiated maximum packet size for this client.
+func (c *ServerClient) MaxPacketSize() uint32 {
+	return c.maxPacketSize
+}
+
 // IsConnected returns whether the client is connected.
 func (c *ServerClient) IsConnected() bool {
 	return c.connected.Load()
@@ -187,7 +192,7 @@ func (c *ServerClient) Send(msg *Message) error {
 	}
 
 	// For QoS > 0, check flow control before sending
-	if msg.QoS > 0 {
+	if msg.QoS > QoS0 {
 		if !c.flowControl.TryAcquire() {
 			return ErrQuotaExceeded
 		}
@@ -206,7 +211,7 @@ func (c *ServerClient) Send(msg *Message) error {
 	}
 
 	// Assign packet ID for QoS > 0
-	if msg.QoS > 0 {
+	if msg.QoS > QoS0 {
 		if c.session != nil {
 			pub.PacketID = c.session.NextPacketID()
 			if pub.PacketID == 0 {
@@ -217,7 +222,7 @@ func (c *ServerClient) Send(msg *Message) error {
 		}
 		// Track for acknowledgment
 		switch msg.QoS {
-		case 1:
+		case QoS1:
 			qos1Msg := &QoS1Message{
 				PacketID:     pub.PacketID,
 				Message:      msg,
@@ -230,7 +235,7 @@ func (c *ServerClient) Send(msg *Message) error {
 			if c.session != nil {
 				c.session.AddInflightQoS1(pub.PacketID, qos1Msg)
 			}
-		case 2:
+		case QoS2:
 			qos2Msg := &QoS2Message{
 				PacketID:     pub.PacketID,
 				Message:      msg,
@@ -274,13 +279,13 @@ func (c *ServerClient) Send(msg *Message) error {
 	_, err := WritePacket(c.conn, pub, c.maxPacketSize)
 	c.writeMu.Unlock()
 
-	if err != nil && msg.QoS > 0 {
+	if err != nil && msg.QoS > QoS0 {
 		// Rollback: release flow control quota and remove tracker entry
 		c.flowControl.Release()
 		switch msg.QoS {
-		case 1:
+		case QoS1:
 			c.qos1Tracker.Remove(pub.PacketID)
-		case 2:
+		case QoS2:
 			// Use Remove instead of HandlePubcomp since message is in QoS2AwaitingPubrec state
 			c.qos2Tracker.Remove(pub.PacketID)
 		}
@@ -315,10 +320,18 @@ func (c *ServerClient) Close() error {
 }
 
 // Disconnect sends a DISCONNECT packet and closes the connection.
+// When the server sends a DISCONNECT packet (for any reason), the Will message
+// is NOT published because it's a controlled termination. The client is being
+// properly notified, so Will (meant for unexpected disconnections) doesn't apply.
 func (c *ServerClient) Disconnect(reason ReasonCode) error {
 	if !c.connected.Load() {
 		return ErrNotConnected
 	}
+
+	// Mark as clean disconnect - server is explicitly sending DISCONNECT,
+	// which is a controlled termination. Will messages are for unexpected
+	// disconnections where the client can't notify others.
+	c.cleanDisconnect.Store(true)
 
 	disconnect := &DisconnectPacket{
 		ReasonCode: reason,

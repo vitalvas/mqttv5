@@ -26,6 +26,10 @@ func TestPropertyType(t *testing.T) {
 	for _, tt := range tests {
 		assert.Equal(t, tt.expected, tt.id.PropertyType())
 	}
+
+	// Unknown property ID should return default (PropTypeByte)
+	unknownID := PropertyID(0xFF)
+	assert.Equal(t, PropTypeByte, unknownID.PropertyType())
 }
 
 func TestPropertiesBasicOperations(t *testing.T) {
@@ -57,6 +61,138 @@ func TestPropertiesBasicOperations(t *testing.T) {
 	assert.Equal(t, 1, p.Len())
 	assert.False(t, p.Has(PropContentType))
 	assert.True(t, p.Has(PropMessageExpiryInterval))
+}
+
+func TestPropertiesNilSafety(t *testing.T) {
+	// All operations on nil should not panic
+	var p *Properties
+
+	t.Run("Len on nil", func(t *testing.T) {
+		assert.Equal(t, 0, p.Len())
+	})
+
+	t.Run("Has on nil", func(t *testing.T) {
+		assert.False(t, p.Has(PropContentType))
+	})
+
+	t.Run("Get on nil", func(t *testing.T) {
+		assert.Nil(t, p.Get(PropContentType))
+	})
+
+	t.Run("GetAll on nil", func(t *testing.T) {
+		assert.Nil(t, p.GetAll(PropContentType))
+	})
+
+	t.Run("Set on nil", func(_ *testing.T) {
+		// Should not panic
+		p.Set(PropContentType, "test")
+	})
+
+	t.Run("Add on nil", func(_ *testing.T) {
+		// Should not panic
+		p.Add(PropUserProperty, StringPair{Key: "k", Value: "v"})
+	})
+
+	t.Run("Delete on nil", func(_ *testing.T) {
+		// Should not panic
+		p.Delete(PropContentType)
+	})
+
+	t.Run("Merge on nil", func(_ *testing.T) {
+		// Should not panic
+		var other Properties
+		other.Set(PropContentType, "test")
+		p.Merge(&other)
+	})
+}
+
+func TestPropertiesMerge(t *testing.T) {
+	t.Run("merge single properties", func(t *testing.T) {
+		var p1 Properties
+		p1.Set(PropContentType, "text/plain")
+
+		var p2 Properties
+		p2.Set(PropMessageExpiryInterval, uint32(3600))
+		p2.Set(PropContentType, "application/json") // Should replace
+
+		p1.Merge(&p2)
+
+		assert.Equal(t, "application/json", p1.GetString(PropContentType))
+		assert.Equal(t, uint32(3600), p1.GetUint32(PropMessageExpiryInterval))
+	})
+
+	t.Run("merge user properties are appended", func(t *testing.T) {
+		var p1 Properties
+		p1.Add(PropUserProperty, StringPair{Key: "k1", Value: "v1"})
+
+		var p2 Properties
+		p2.Add(PropUserProperty, StringPair{Key: "k2", Value: "v2"})
+
+		p1.Merge(&p2)
+
+		pairs := p1.GetAllStringPairs(PropUserProperty)
+		assert.Len(t, pairs, 2)
+	})
+
+	t.Run("merge subscription identifiers are appended", func(t *testing.T) {
+		var p1 Properties
+		p1.Add(PropSubscriptionIdentifier, uint32(100))
+
+		var p2 Properties
+		p2.Add(PropSubscriptionIdentifier, uint32(200))
+
+		p1.Merge(&p2)
+
+		all := p1.GetAllVarInts(PropSubscriptionIdentifier)
+		assert.Len(t, all, 2)
+	})
+
+	t.Run("merge with nil other", func(t *testing.T) {
+		var p Properties
+		p.Set(PropContentType, "test")
+		p.Merge(nil)
+		assert.Equal(t, "test", p.GetString(PropContentType))
+	})
+}
+
+func TestPropertiesTypedGettersTypeMismatch(t *testing.T) {
+	var p Properties
+	// Set a string value in a property that should be byte
+	p.props = append(p.props, property{id: PropPayloadFormatIndicator, value: "wrong type"})
+
+	t.Run("GetByte with wrong type", func(t *testing.T) {
+		assert.Equal(t, byte(0), p.GetByte(PropPayloadFormatIndicator))
+	})
+
+	t.Run("GetUint16 with wrong type", func(t *testing.T) {
+		var p2 Properties
+		p2.props = append(p2.props, property{id: PropServerKeepAlive, value: "wrong type"})
+		assert.Equal(t, uint16(0), p2.GetUint16(PropServerKeepAlive))
+	})
+
+	t.Run("GetUint32 with wrong type", func(t *testing.T) {
+		var p2 Properties
+		p2.props = append(p2.props, property{id: PropMessageExpiryInterval, value: "wrong type"})
+		assert.Equal(t, uint32(0), p2.GetUint32(PropMessageExpiryInterval))
+	})
+
+	t.Run("GetString with wrong type", func(t *testing.T) {
+		var p2 Properties
+		p2.props = append(p2.props, property{id: PropContentType, value: 12345})
+		assert.Equal(t, "", p2.GetString(PropContentType))
+	})
+
+	t.Run("GetBinary with wrong type", func(t *testing.T) {
+		var p2 Properties
+		p2.props = append(p2.props, property{id: PropCorrelationData, value: "wrong type"})
+		assert.Nil(t, p2.GetBinary(PropCorrelationData))
+	})
+
+	t.Run("GetStringPair with wrong type", func(t *testing.T) {
+		var p2 Properties
+		p2.props = append(p2.props, property{id: PropUserProperty, value: "wrong type"})
+		assert.Equal(t, StringPair{}, p2.GetStringPair(PropUserProperty))
+	})
 }
 
 func TestPropertiesAddMultiple(t *testing.T) {

@@ -248,3 +248,11 @@ func FuzzUnsubackPacketDecode(f *testing.F) {
 		_, _ = p.Decode(bytes.NewReader(remaining), header)
 	})
 }
+
+func TestUnsubackPacketProperties(t *testing.T) {
+	p := &UnsubackPacket{}
+	p.Props.Set(PropReasonString, "test reason")
+	props := p.Properties()
+	require.NotNil(t, props)
+	assert.Equal(t, "test reason", props.GetString(PropReasonString))
+}

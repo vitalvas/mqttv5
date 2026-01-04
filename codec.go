@@ -24,8 +24,9 @@ func ReadPacket(r io.Reader, maxSize uint32) (Packet, int, error) {
 		return nil, n, err
 	}
 
-	// Check max size
-	if maxSize > 0 && header.RemainingLength > maxSize {
+	// Check max size - MQTT v5 Maximum Packet Size is total packet (fixed header + remaining)
+	totalPacketSize := uint32(n) + header.RemainingLength
+	if maxSize > 0 && totalPacketSize > maxSize {
 		return nil, n, ErrPacketTooLarge
 	}
 

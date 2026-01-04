@@ -564,3 +564,57 @@ func FuzzTopicMatch(f *testing.F) {
 		_ = TopicMatch(filter, topic)
 	})
 }
+
+func TestContainsWildcard(t *testing.T) {
+	t.Run("returns true for multi-level wildcard", func(t *testing.T) {
+		assert.True(t, containsWildcard("#"))
+		assert.True(t, containsWildcard("sensor/#"))
+		assert.True(t, containsWildcard("home/+/temperature/#"))
+	})
+
+	t.Run("returns true for single-level wildcard", func(t *testing.T) {
+		assert.True(t, containsWildcard("+"))
+		assert.True(t, containsWildcard("+/temperature"))
+		assert.True(t, containsWildcard("sensor/+/data"))
+		assert.True(t, containsWildcard("home/+/+"))
+	})
+
+	t.Run("returns true for mixed wildcards", func(t *testing.T) {
+		assert.True(t, containsWildcard("+/#"))
+		assert.True(t, containsWildcard("+/+/#"))
+	})
+
+	t.Run("returns false for no wildcards", func(t *testing.T) {
+		assert.False(t, containsWildcard("sensor"))
+		assert.False(t, containsWildcard("sensor/temperature"))
+		assert.False(t, containsWildcard("home/living-room/temperature"))
+		assert.False(t, containsWildcard(""))
+	})
+}
+
+func TestIsSharedSubscription(t *testing.T) {
+	t.Run("returns true for valid shared subscriptions", func(t *testing.T) {
+		assert.True(t, isSharedSubscription("$share/group/topic"))
+		assert.True(t, isSharedSubscription("$share/mygroup/sensor/+/data"))
+		assert.True(t, isSharedSubscription("$share/consumers/#"))
+		assert.True(t, isSharedSubscription("$share/g/t"))
+	})
+
+	t.Run("returns false for non-shared subscriptions", func(t *testing.T) {
+		assert.False(t, isSharedSubscription("sensor/temperature"))
+		assert.False(t, isSharedSubscription("#"))
+		assert.False(t, isSharedSubscription("+/data"))
+		assert.False(t, isSharedSubscription(""))
+	})
+
+	t.Run("returns false for $SYS topics", func(t *testing.T) {
+		assert.False(t, isSharedSubscription("$SYS/broker/clients"))
+		assert.False(t, isSharedSubscription("$SYS/#"))
+	})
+
+	t.Run("returns false for incomplete shared prefix", func(t *testing.T) {
+		assert.False(t, isSharedSubscription("$share"))
+		assert.False(t, isSharedSubscription("$shar/group/topic"))
+		assert.False(t, isSharedSubscription("share/group/topic"))
+	})
+}

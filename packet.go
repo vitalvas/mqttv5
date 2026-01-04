@@ -5,6 +5,22 @@ import (
 	"time"
 )
 
+// QoS levels for MQTT message delivery.
+// MQTT v5.0 spec: Section 4.3
+const (
+	// QoS0 (At most once) - Message is delivered at most once.
+	// No acknowledgment or retransmission.
+	QoS0 byte = 0
+
+	// QoS1 (At least once) - Message is delivered at least once.
+	// Acknowledged with PUBACK, may be retransmitted.
+	QoS1 byte = 1
+
+	// QoS2 (Exactly once) - Message is delivered exactly once.
+	// Uses PUBREC/PUBREL/PUBCOMP handshake.
+	QoS2 byte = 2
+)
+
 // Packet is the interface that all MQTT control packets implement.
 // MQTT v5.0 spec: Section 2.1
 type Packet interface {

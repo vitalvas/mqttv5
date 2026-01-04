@@ -90,7 +90,7 @@ func run() error {
 			msg := &mqttv5.Message{
 				Topic:   "$SYS/broker/status",
 				Payload: []byte(fmt.Sprintf(`{"time":"%s","clients":%d}`, t.Format(time.RFC3339), srv.ClientCount())),
-				QoS:     0,
+				QoS:     mqttv5.QoS0,
 				Retain:  true, // Retain so new subscribers get the last status
 			}
 			if err := srv.Publish(msg); err != nil {

@@ -236,3 +236,11 @@ func FuzzAuthPacketDecode(f *testing.F) {
 		_, _ = p.Decode(bytes.NewReader(remaining), header)
 	})
 }
+
+func TestAuthPacketProperties(t *testing.T) {
+	p := &AuthPacket{}
+	p.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
+	props := p.Properties()
+	require.NotNil(t, props)
+	assert.Equal(t, "SCRAM-SHA-256", props.GetString(PropAuthenticationMethod))
+}

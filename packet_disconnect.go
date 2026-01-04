@@ -24,6 +24,9 @@ func (p *DisconnectPacket) Encode(w io.Writer) (int, error) {
 	if err := p.Validate(); err != nil {
 		return 0, err
 	}
+	if err := p.Props.ValidateFor(PropCtxDISCONNECT); err != nil {
+		return 0, err
+	}
 
 	var buf bytes.Buffer
 
@@ -82,6 +85,9 @@ func (p *DisconnectPacket) Decode(r io.Reader, header FixedHeader) (int, error) 
 			n, err = p.Props.Decode(r)
 			totalRead += n
 			if err != nil {
+				return totalRead, err
+			}
+			if err := p.Props.ValidateFor(PropCtxDISCONNECT); err != nil {
 				return totalRead, err
 			}
 		}

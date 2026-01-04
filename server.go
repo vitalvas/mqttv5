@@ -38,7 +38,7 @@ func (s *Server) setupSession(client *ServerClient, clientID, namespace string, 
 
 // authenticateClient performs authentication (standard or enhanced) and returns
 // the auth result, any assigned client ID, namespace, and whether authentication succeeded.
-func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clientID string, logger Logger) (*AuthResult, string, string, bool) {
+func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clientID string, maxPacketSize uint32, logger Logger) (*AuthResult, string, string, bool) {
 	// Check for enhanced authentication (AuthMethod in CONNECT properties)
 	authMethod := connect.Props.GetString(PropAuthenticationMethod)
 	if authMethod != "" {
@@ -50,12 +50,12 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 			connack := &ConnackPacket{
 				ReasonCode: ReasonBadAuthMethod,
 			}
-			WritePacket(conn, connack, s.config.maxPacketSize)
+			WritePacket(conn, connack, maxPacketSize)
 			return nil, "", "", false
 		}
 
 		// Perform enhanced authentication
-		enhancedResult, ok := s.performEnhancedAuth(conn, connect, clientID, authMethod, logger)
+		enhancedResult, ok := s.performEnhancedAuth(conn, connect, clientID, authMethod, maxPacketSize, logger)
 		if !ok {
 			return nil, "", "", false
 		}
@@ -100,7 +100,7 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 			connack := &ConnackPacket{
 				ReasonCode: reasonCode,
 			}
-			WritePacket(conn, connack, s.config.maxPacketSize)
+			WritePacket(conn, connack, maxPacketSize)
 			return nil, "", "", false
 		}
 		logger.Debug("authentication successful", nil)
@@ -206,6 +206,18 @@ func (s *Server) buildConnack(sessionPresent bool, authResult *AuthResult, assig
 		connack.Props.Set(PropMaximumPacketSize, s.config.maxPacketSize)
 	}
 
+	// Advertise server capabilities (MQTT v5 spec section 3.2.2.3)
+	// Maximum QoS property: only include when maxQoS is 0 or 1
+	// Per MQTT v5 spec section 3.2.2.3.4, valid values are 0 or 1 only
+	// If server supports QoS 2, the property MUST be absent (client assumes QoS 2 if absent)
+	if s.config.maxQoS < QoS2 {
+		connack.Props.Set(PropMaximumQoS, s.config.maxQoS)
+	}
+	connack.Props.Set(PropRetainAvailable, boolToByte(s.config.retainAvailable))
+	connack.Props.Set(PropWildcardSubAvailable, boolToByte(s.config.wildcardSubAvail))
+	connack.Props.Set(PropSubscriptionIDAvailable, boolToByte(s.config.subIDAvailable))
+	connack.Props.Set(PropSharedSubAvailable, boolToByte(s.config.sharedSubAvailable))
+
 	return connack
 }
 
@@ -228,12 +240,26 @@ type Server struct {
 	wg        sync.WaitGroup
 }
 
+// boolToByte converts a boolean to a byte (0 or 1) for MQTT properties.
+func boolToByte(b bool) byte {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // NewServer creates a new MQTT server.
 // Use WithListener to add one or more listeners before calling ListenAndServe.
 func NewServer(opts ...ServerOption) *Server {
 	config := defaultServerConfig()
 	for _, opt := range opts {
 		opt(config)
+	}
+
+	// Adjust capabilities based on interface availability
+	// If retainedStore is nil, disable retain support
+	if config.retainedStore == nil {
+		config.retainAvailable = false
 	}
 
 	ka := NewKeepAliveManager()
@@ -307,28 +333,6 @@ func (s *Server) acceptLoop(listener net.Listener) {
 					LogFieldError: err.Error(),
 				})
 				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-		}
-
-		// Check max connections
-		if s.config.maxConnections > 0 {
-			s.mu.RLock()
-			count := len(s.clients)
-			s.mu.RUnlock()
-
-			if count >= s.config.maxConnections {
-				s.config.logger.Warn("max connections reached", LogFields{
-					LogFieldRemoteAddr: conn.RemoteAddr().String(),
-				})
-				// Send CONNACK with ServerBusy before closing (best effort)
-				// Per MQTT spec, we should wait for CONNECT first, but this is
-				// a graceful rejection that gives the client a reason code
-				connack := &ConnackPacket{
-					ReasonCode: ReasonServerBusy,
-				}
-				WritePacket(conn, connack, s.config.maxPacketSize)
-				conn.Close()
 				continue
 			}
 		}
@@ -476,14 +480,14 @@ func (s *Server) Publish(msg *Message) error {
 
 		if !ok {
 			// Client is offline - queue QoS > 0 messages to session for later delivery
-			if deliveryQoS > 0 {
+			if deliveryQoS > QoS0 {
 				s.queueOfflineMessage(entry.Namespace, entry.ClientID, deliveryMsg)
 			}
 			continue
 		}
 
 		// Try to send, queue on failure for QoS > 0
-		if err := client.Send(deliveryMsg); err != nil && deliveryQoS > 0 {
+		if err := client.Send(deliveryMsg); err != nil && deliveryQoS > QoS0 {
 			// Queue for later delivery if quota exceeded or connection lost
 			s.queueOfflineMessage(entry.Namespace, entry.ClientID, deliveryMsg)
 		}
@@ -575,6 +579,30 @@ func (s *Server) handleConnection(conn net.Conn) {
 		return
 	}
 
+	// Determine max packet size for outbound messages early (minimum of server and client limits)
+	// Per MQTT 5.0 spec, server must not send packets larger than client's advertised limit
+	// Computed before any CONNACK responses so all error paths respect client's valid limit
+	clientMaxPacketSize := s.config.maxPacketSize
+	if clientLimit := connect.Props.GetUint32(PropMaximumPacketSize); clientLimit > 0 && clientLimit <= MaxPacketSizeProtocol && clientLimit < clientMaxPacketSize {
+		clientMaxPacketSize = clientLimit
+	}
+
+	// Check max connections after reading CONNECT (per MQTT spec, CONNACK must follow CONNECT)
+	if s.config.maxConnections > 0 {
+		s.mu.RLock()
+		count := len(s.clients)
+		s.mu.RUnlock()
+
+		if count >= s.config.maxConnections {
+			logger.Warn("max connections reached", nil)
+			connack := &ConnackPacket{
+				ReasonCode: ReasonServerBusy,
+			}
+			WritePacket(conn, connack, clientMaxPacketSize)
+			return
+		}
+	}
+
 	// Validate and handle client ID
 	clientID := connect.ClientID
 	var assignedClientID string
@@ -585,7 +613,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 			connack := &ConnackPacket{
 				ReasonCode: ReasonClientIDNotValid,
 			}
-			WritePacket(conn, connack, s.config.maxPacketSize)
+			WritePacket(conn, connack, clientMaxPacketSize)
 			return
 		}
 		// CleanStart=true with empty ClientID: assign one
@@ -596,8 +624,33 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 
+	// Validate CONNECT properties per MQTT v5 spec
+	// Maximum Packet Size MUST be > 0 and <= 268435455 (Section 3.1.2.11.4)
+	// Validate first so we can use valid client limit for subsequent error responses
+	if connect.Props.Has(PropMaximumPacketSize) {
+		clientMaxPS := connect.Props.GetUint32(PropMaximumPacketSize)
+		if clientMaxPS == 0 || clientMaxPS > MaxPacketSizeProtocol {
+			logger.Warn("maximum packet size invalid (protocol error)", nil)
+			connack := &ConnackPacket{
+				ReasonCode: ReasonProtocolError,
+			}
+			WritePacket(conn, connack, clientMaxPacketSize)
+			return
+		}
+	}
+
+	// Receive Maximum MUST be > 0 (Section 3.1.2.11.3)
+	if connect.Props.Has(PropReceiveMaximum) && connect.Props.GetUint16(PropReceiveMaximum) == 0 {
+		logger.Warn("receive maximum is zero (protocol error)", nil)
+		connack := &ConnackPacket{
+			ReasonCode: ReasonProtocolError,
+		}
+		WritePacket(conn, connack, clientMaxPacketSize)
+		return
+	}
+
 	// Perform authentication (standard or enhanced)
-	authResult, newClientID, namespace, ok := s.authenticateClient(conn, connect, clientID, logger)
+	authResult, newClientID, namespace, ok := s.authenticateClient(conn, connect, clientID, clientMaxPacketSize, logger)
 	if !ok {
 		return // Auth failed, connection closed
 	}
@@ -617,15 +670,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 		connack := &ConnackPacket{
 			ReasonCode: ReasonNotAuthorized,
 		}
-		WritePacket(conn, connack, s.config.maxPacketSize)
+		WritePacket(conn, connack, clientMaxPacketSize)
 		return
-	}
-
-	// Determine max packet size for outbound messages (minimum of server and client limits)
-	// Per MQTT 5.0 spec, server must not send packets larger than client's advertised limit
-	clientMaxPacketSize := s.config.maxPacketSize
-	if clientLimit := connect.Props.GetUint32(PropMaximumPacketSize); clientLimit > 0 && clientLimit < clientMaxPacketSize {
-		clientMaxPacketSize = clientLimit
 	}
 
 	// Create client with the effective max packet size and namespace
@@ -778,6 +824,13 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 
 		pkt, n, err := ReadPacket(conn, s.config.maxPacketSize)
 		if err != nil {
+			// Send DISCONNECT with appropriate reason code for protocol errors
+			// Network errors (io.EOF, connection reset, etc.) don't need DISCONNECT
+			// as the connection is already broken
+			reason := s.errorToReasonCode(err)
+			if reason != ReasonSuccess {
+				client.Disconnect(reason)
+			}
 			return
 		}
 
@@ -812,15 +865,20 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 
 		case *PingreqPacket:
 			pingresp := &PingrespPacket{}
-			if n, err := WritePacket(conn, pingresp, s.config.maxPacketSize); err == nil {
+			if n, err := WritePacket(conn, pingresp, client.MaxPacketSize()); err == nil {
 				s.config.metrics.BytesSent(n)
 				s.config.metrics.PacketSent(PacketPINGRESP)
 			}
 
 		case *DisconnectPacket:
-			// Clean disconnect - mark it and close
-			logger.Debug("clean disconnect received", nil)
-			client.SetCleanDisconnect()
+			// Per MQTT v5 spec: if client sends DISCONNECT with reason 0x04 (DisconnectWithWill),
+			// the Will message SHOULD be published. Otherwise, it's a clean disconnect.
+			if p.ReasonCode != ReasonDisconnectWithWill {
+				client.SetCleanDisconnect()
+				logger.Debug("clean disconnect received", nil)
+			} else {
+				logger.Debug("disconnect with will received - will publish Will message", nil)
+			}
 			// Handle session expiry interval update from DISCONNECT
 			// Per MQTT 5.0 spec: client can update session expiry on DISCONNECT,
 			// but cannot set it to non-zero if CONNECT had zero
@@ -832,6 +890,16 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 			}
 			client.Close()
 			return
+
+		case *AuthPacket:
+			// Handle re-authentication per MQTT v5.0 spec section 4.12
+			// If enhanced auth is not configured, disconnect with protocol error
+			if s.config.enhancedAuth == nil {
+				logger.Warn("AUTH packet received but enhanced auth not configured", nil)
+				client.Disconnect(ReasonProtocolError)
+				return
+			}
+			s.handleReauth(client, p, clientKey, logger)
 		}
 	}
 }
@@ -846,9 +914,30 @@ func (s *Server) handlePuback(client *ServerClient, p *PubackPacket) {
 }
 
 func (s *Server) handlePubrec(client *ServerClient, p *PubrecPacket) {
+	// Per MQTT v5 spec section 4.3.3: "The Sender MUST send a PUBREL message
+	// in response to a PUBREC message". We must always send PUBREL to complete
+	// the exchange, even when PUBREC contains an error reason code.
+	// This prevents strict peers from retransmitting PUBREC indefinitely.
+
+	// Handle error reason code (>= 0x80)
+	if p.ReasonCode.IsError() {
+		client.QoS2Tracker().Remove(p.PacketID)
+		client.FlowControl().Release()
+		if session := client.Session(); session != nil {
+			session.RemoveInflightQoS2(p.PacketID)
+		}
+		// Send PUBREL to complete exchange even on error
+		pubrel := &PubrelPacket{PacketID: p.PacketID}
+		if n, err := WritePacket(client.Conn(), pubrel, client.MaxPacketSize()); err == nil {
+			s.config.metrics.BytesSent(n)
+			s.config.metrics.PacketSent(PacketPUBREL)
+		}
+		return
+	}
+
 	if _, ok := client.QoS2Tracker().HandlePubrec(p.PacketID); ok {
 		pubrel := &PubrelPacket{PacketID: p.PacketID}
-		if n, err := WritePacket(client.Conn(), pubrel, s.config.maxPacketSize); err == nil {
+		if n, err := WritePacket(client.Conn(), pubrel, client.MaxPacketSize()); err == nil {
 			s.config.metrics.BytesSent(n)
 			s.config.metrics.PacketSent(PacketPUBREL)
 		}
@@ -864,11 +953,21 @@ func (s *Server) handlePubrec(client *ServerClient, p *PubrecPacket) {
 func (s *Server) handlePubrel(client *ServerClient, p *PubrelPacket) {
 	msg, ok := client.QoS2Tracker().HandlePubrel(p.PacketID)
 	if !ok {
+		// Unknown packet ID - respond with PUBCOMP containing PacketIDNotFound
+		// per MQTT v5 spec to prevent sender from retrying indefinitely
+		pubcomp := &PubcompPacket{
+			PacketID:   p.PacketID,
+			ReasonCode: ReasonPacketIDNotFound,
+		}
+		if n, err := WritePacket(client.Conn(), pubcomp, client.MaxPacketSize()); err == nil {
+			s.config.metrics.BytesSent(n)
+			s.config.metrics.PacketSent(PacketPUBCOMP)
+		}
 		return
 	}
 
 	pubcomp := &PubcompPacket{PacketID: p.PacketID}
-	if n, err := WritePacket(client.Conn(), pubcomp, s.config.maxPacketSize); err == nil {
+	if n, err := WritePacket(client.Conn(), pubcomp, client.MaxPacketSize()); err == nil {
 		s.config.metrics.BytesSent(n)
 		s.config.metrics.PacketSent(PacketPUBCOMP)
 	}
@@ -896,48 +995,78 @@ func (s *Server) handlePubcomp(client *ServerClient, p *PubcompPacket) {
 	}
 }
 
-func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger Logger) {
-	clientID := client.ClientID()
-	namespace := client.Namespace()
-	startTime := time.Now()
-
-	// Resolve topic alias
+// resolvePublishTopic resolves topic alias and validates the topic.
+// Returns the resolved topic and a reason code (ReasonSuccess if valid).
+func (s *Server) resolvePublishTopic(client *ServerClient, pub *PublishPacket) (string, ReasonCode) {
 	topic := pub.Topic
 	if alias := pub.Props.GetUint16(PropTopicAlias); alias > 0 {
 		if topic != "" {
 			if err := client.TopicAliases().SetInbound(alias, topic); err != nil {
-				client.Disconnect(ReasonTopicAliasInvalid)
-				return
+				return "", ReasonTopicAliasInvalid
 			}
 		} else {
 			resolved, err := client.TopicAliases().GetInbound(alias)
 			if err != nil {
-				client.Disconnect(ReasonTopicAliasInvalid)
-				return
+				return "", ReasonTopicAliasInvalid
 			}
 			topic = resolved
 		}
 	}
 
-	// Validate topic is not empty after alias resolution
 	if topic == "" {
-		client.Disconnect(ReasonProtocolError)
+		return "", ReasonProtocolError
+	}
+
+	if err := ValidateTopicName(topic); err != nil {
+		return "", ReasonTopicNameInvalid
+	}
+
+	return topic, ReasonSuccess
+}
+
+// validatePublishFlags validates QoS and retain flags against server config.
+// Returns a reason code (ReasonSuccess if valid).
+func (s *Server) validatePublishFlags(pub *PublishPacket) ReasonCode {
+	if pub.QoS > s.config.maxQoS {
+		return ReasonQoSNotSupported
+	}
+	if pub.Retain && !s.config.retainAvailable {
+		return ReasonRetainNotSupported
+	}
+	return ReasonSuccess
+}
+
+func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger Logger) {
+	clientID := client.ClientID()
+	namespace := client.Namespace()
+	startTime := time.Now()
+
+	// Resolve topic alias and validate topic
+	topic, reason := s.resolvePublishTopic(client, pub)
+	if reason != ReasonSuccess {
+		client.Disconnect(reason)
 		return
 	}
 
-	// Validate topic name (no wildcards, valid UTF-8)
-	if err := ValidateTopicName(topic); err != nil {
-		client.Disconnect(ReasonTopicNameInvalid)
+	// Validate QoS and retain flags
+	if reason := s.validatePublishFlags(pub); reason != ReasonSuccess {
+		logger.Warn("publish validation failed", LogFields{
+			LogFieldTopic:      topic,
+			LogFieldReasonCode: reason.String(),
+		})
+		client.Disconnect(reason)
 		return
 	}
+
+	// Check if this is a DUP retransmit (either DUP flag set, or QoS 2 packet already being tracked)
+	_, alreadyTracked := client.QoS2Tracker().Get(pub.PacketID)
+	isRetransmit := pub.DUP || (pub.QoS == QoS2 && alreadyTracked)
 
 	// Enforce server's Receive Maximum for inbound QoS 1/2 messages
-	if pub.QoS > 0 {
-		if !client.InboundFlowControl().TryAcquire() {
-			// Client has exceeded the receive maximum - protocol error
-			client.Disconnect(ReasonReceiveMaxExceeded)
-			return
-		}
+	// Skip quota acquisition for DUP retransmits to avoid double-counting
+	if pub.QoS > QoS0 && !isRetransmit && !client.InboundFlowControl().TryAcquire() {
+		client.Disconnect(ReasonReceiveMaxExceeded)
+		return
 	}
 
 	logger.Debug("publish received", LogFields{
@@ -970,20 +1099,20 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 				LogFieldReasonCode: reasonCode.String(),
 			})
 			switch pub.QoS {
-			case 1:
+			case QoS1:
 				puback := &PubackPacket{
 					PacketID:   pub.PacketID,
 					ReasonCode: reasonCode,
 				}
-				WritePacket(client.Conn(), puback, s.config.maxPacketSize)
+				WritePacket(client.Conn(), puback, client.MaxPacketSize())
 				client.InboundFlowControl().Release()
-			case 2:
+			case QoS2:
 				// QoS 2 requires PUBREC, not PUBACK
 				pubrec := &PubrecPacket{
 					PacketID:   pub.PacketID,
 					ReasonCode: reasonCode,
 				}
-				WritePacket(client.Conn(), pubrec, s.config.maxPacketSize)
+				WritePacket(client.Conn(), pubrec, client.MaxPacketSize())
 				client.InboundFlowControl().Release()
 			}
 			return
@@ -998,12 +1127,12 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 	s.config.metrics.MessageReceived(pub.QoS)
 
 	// Send PUBACK for QoS 1
-	if pub.QoS == 1 {
+	if pub.QoS == QoS1 {
 		puback := &PubackPacket{
 			PacketID:   pub.PacketID,
 			ReasonCode: ReasonSuccess,
 		}
-		if n, err := WritePacket(client.Conn(), puback, s.config.maxPacketSize); err == nil {
+		if n, err := WritePacket(client.Conn(), puback, client.MaxPacketSize()); err == nil {
 			s.config.metrics.BytesSent(n)
 			s.config.metrics.PacketSent(PacketPUBACK)
 		}
@@ -1027,35 +1156,42 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 
 	// Send PUBREC for QoS 2 and track the message
 	// Per MQTT 5.0 spec, message delivery happens after PUBREL is received
-	if pub.QoS == 2 {
-		client.QoS2Tracker().TrackReceive(pub.PacketID, msg)
+	if pub.QoS == QoS2 {
+		// Only track new messages, not DUP retransmits
+		if !isRetransmit {
+			client.QoS2Tracker().TrackReceive(pub.PacketID, msg)
 
-		// Persist receiver-side QoS 2 state for session resume
-		if session := client.Session(); session != nil {
-			session.AddInflightQoS2(pub.PacketID, &QoS2Message{
-				PacketID:     pub.PacketID,
-				Message:      msg,
-				State:        QoS2ReceivedPublish,
-				SentAt:       time.Now(),
-				RetryTimeout: 30 * time.Second,
-				IsSender:     false,
-			})
+			// Persist receiver-side QoS 2 state for session resume
+			if session := client.Session(); session != nil {
+				session.AddInflightQoS2(pub.PacketID, &QoS2Message{
+					PacketID:     pub.PacketID,
+					Message:      msg,
+					State:        QoS2ReceivedPublish,
+					SentAt:       time.Now(),
+					RetryTimeout: 30 * time.Second,
+					IsSender:     false,
+				})
+			}
 		}
 
+		// Send PUBREC for both new messages and retransmits
 		pubrec := &PubrecPacket{
 			PacketID:   pub.PacketID,
 			ReasonCode: ReasonSuccess,
 		}
-		if n, err := WritePacket(client.Conn(), pubrec, s.config.maxPacketSize); err == nil {
+		if n, err := WritePacket(client.Conn(), pubrec, client.MaxPacketSize()); err == nil {
 			s.config.metrics.BytesSent(n)
 			s.config.metrics.PacketSent(PacketPUBREC)
-			client.QoS2Tracker().SendPubrec(pub.PacketID)
 
-			// Update session state after PUBREC sent
-			if session := client.Session(); session != nil {
-				if qos2Msg, exists := session.GetInflightQoS2(pub.PacketID); exists {
-					qos2Msg.State = QoS2AwaitingPubrel
-					qos2Msg.SentAt = time.Now()
+			if !isRetransmit {
+				client.QoS2Tracker().SendPubrec(pub.PacketID)
+
+				// Update session state after PUBREC sent
+				if session := client.Session(); session != nil {
+					if qos2Msg, exists := session.GetInflightQoS2(pub.PacketID); exists {
+						qos2Msg.State = QoS2AwaitingPubrel
+						qos2Msg.SentAt = time.Now()
+					}
 				}
 			}
 		}
@@ -1148,14 +1284,14 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 
 		if !ok {
 			// Client is offline - queue QoS > 0 messages to session for later delivery
-			if deliveryQoS > 0 {
+			if deliveryQoS > QoS0 {
 				s.queueOfflineMessage(entry.Namespace, entry.ClientID, deliveryMsg)
 			}
 			continue
 		}
 
 		// Try to send, queue on failure for QoS > 0
-		if err := client.Send(deliveryMsg); err != nil && deliveryQoS > 0 {
+		if err := client.Send(deliveryMsg); err != nil && deliveryQoS > QoS0 {
 			// Queue for later delivery if quota exceeded or connection lost
 			s.queueOfflineMessage(entry.Namespace, entry.ClientID, deliveryMsg)
 		}
@@ -1185,9 +1321,40 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 	namespace := client.Namespace()
 	session := client.Session()
 
+	// Check subscription identifier support
+	if sub.Props.Has(PropSubscriptionIdentifier) && !s.config.subIDAvailable {
+		logger.Warn("subscription identifiers not supported", nil)
+		client.Disconnect(ReasonSubIDsNotSupported)
+		return
+	}
+
 	reasonCodes := make([]ReasonCode, len(sub.Subscriptions))
 
 	for i, subscription := range sub.Subscriptions {
+		// Check wildcard subscription support
+		if !s.config.wildcardSubAvail && containsWildcard(subscription.TopicFilter) {
+			logger.Warn("wildcard subscriptions not supported", LogFields{
+				LogFieldTopic: subscription.TopicFilter,
+			})
+			reasonCodes[i] = ReasonWildcardSubsNotSupported
+			continue
+		}
+
+		// Check shared subscription support
+		if !s.config.sharedSubAvailable && isSharedSubscription(subscription.TopicFilter) {
+			logger.Warn("shared subscriptions not supported", LogFields{
+				LogFieldTopic: subscription.TopicFilter,
+			})
+			reasonCodes[i] = ReasonSharedSubsNotSupported
+			continue
+		}
+
+		// Enforce server's Maximum QoS - cap subscription QoS to what server supports
+		if subscription.QoS > s.config.maxQoS {
+			subscription.QoS = s.config.maxQoS
+			sub.Subscriptions[i] = subscription
+		}
+
 		// Authorization
 		if s.config.authz != nil {
 			azCtx := &AuthzContext{
@@ -1282,7 +1449,7 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 				}
 
 				// Handle send failures for QoS > 0 retained messages
-				if err := client.Send(deliveryMsg); err != nil && deliveryQoS > 0 {
+				if err := client.Send(deliveryMsg); err != nil && deliveryQoS > QoS0 {
 					// Queue for later delivery if quota exceeded or connection issue
 					s.queueOfflineMessage(namespace, clientID, deliveryMsg)
 				}
@@ -1308,7 +1475,7 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 		PacketID:    sub.PacketID,
 		ReasonCodes: reasonCodes,
 	}
-	if n, err := WritePacket(client.Conn(), suback, s.config.maxPacketSize); err == nil {
+	if n, err := WritePacket(client.Conn(), suback, client.MaxPacketSize()); err == nil {
 		s.config.metrics.BytesSent(n)
 		s.config.metrics.PacketSent(PacketSUBACK)
 	}
@@ -1322,6 +1489,15 @@ func (s *Server) handleUnsubscribe(client *ServerClient, unsub *UnsubscribePacke
 	reasonCodes := make([]ReasonCode, len(unsub.TopicFilters))
 
 	for i, filter := range unsub.TopicFilters {
+		// Validate topic filter per MQTT v5 spec
+		if err := ValidateTopicFilter(filter); err != nil {
+			reasonCodes[i] = ReasonTopicFilterInvalid
+			logger.Warn("invalid topic filter in UNSUBSCRIBE", LogFields{
+				LogFieldTopic: filter,
+			})
+			continue
+		}
+
 		if s.subs.Unsubscribe(clientID, namespace, filter) {
 			reasonCodes[i] = ReasonSuccess
 			s.config.metrics.SubscriptionRemoved()
@@ -1346,7 +1522,7 @@ func (s *Server) handleUnsubscribe(client *ServerClient, unsub *UnsubscribePacke
 		PacketID:    unsub.PacketID,
 		ReasonCodes: reasonCodes,
 	}
-	if n, err := WritePacket(client.Conn(), unsuback, s.config.maxPacketSize); err == nil {
+	if n, err := WritePacket(client.Conn(), unsuback, client.MaxPacketSize()); err == nil {
 		s.config.metrics.BytesSent(n)
 		s.config.metrics.PacketSent(PacketUNSUBACK)
 	}
@@ -1380,6 +1556,57 @@ func (s *Server) removeClient(clientKey string, client *ServerClient) {
 		s.keepAlive.Unregister(clientKey)
 		s.subs.UnsubscribeAll(clientID, namespace)
 	}
+}
+
+// errorToReasonCode maps read/decode errors to MQTT v5 reason codes.
+// Returns ReasonSuccess if the error is a network error (connection closed,
+// timeout, etc.) which doesn't require sending DISCONNECT.
+func (s *Server) errorToReasonCode(err error) ReasonCode {
+	if err == nil {
+		return ReasonSuccess
+	}
+
+	// Check for specific protocol errors that require DISCONNECT
+	switch {
+	case errors.Is(err, ErrPacketTooLarge):
+		return ReasonPacketTooLarge
+	case errors.Is(err, ErrUnknownPacketType):
+		return ReasonProtocolError
+	case errors.Is(err, ErrProtocolViolation):
+		return ReasonProtocolError
+	case errors.Is(err, ErrInvalidPacketType):
+		return ReasonProtocolError
+	case errors.Is(err, ErrDuplicateProperty):
+		return ReasonProtocolError
+	case errors.Is(err, ErrPropertyNotAllowed):
+		return ReasonProtocolError
+	case errors.Is(err, ErrInvalidReasonCode):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrInvalidPacketFlags):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrInvalidPacketID):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrInvalidQoS):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrPacketIDRequired):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrVarintTooLarge):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrVarintMalformed):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrVarintOverlong):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrUnknownPropertyID):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrInvalidPropertyType):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrInvalidUTF8):
+		return ReasonMalformedPacket
+	}
+
+	// For network errors (io.EOF, connection reset, timeout, etc.)
+	// return ReasonSuccess to indicate no DISCONNECT should be sent
+	return ReasonSuccess
 }
 
 // deliverPendingMessages delivers queued messages to a reconnected client.
@@ -1423,9 +1650,9 @@ func (s *Server) restoreInflightMessages(client *ServerClient, session Session, 
 		pub := &PublishPacket{}
 		pub.FromMessage(msg.Message)
 		pub.PacketID = packetID
-		pub.QoS = 1 // Ensure QoS 1 for restored QoS 1 messages
+		pub.QoS = QoS1 // Ensure QoS 1 for restored QoS 1 messages
 		pub.DUP = true
-		if n, err := WritePacket(conn, pub, s.config.maxPacketSize); err == nil {
+		if n, err := WritePacket(conn, pub, client.MaxPacketSize()); err == nil {
 			s.config.metrics.BytesSent(n)
 			s.config.metrics.PacketSent(PacketPUBLISH)
 		}
@@ -1450,9 +1677,9 @@ func (s *Server) restoreInflightMessages(client *ServerClient, session Session, 
 				pub := &PublishPacket{}
 				pub.FromMessage(msg.Message)
 				pub.PacketID = packetID
-				pub.QoS = 2 // Ensure QoS 2 for restored QoS 2 messages
+				pub.QoS = QoS2 // Ensure QoS 2 for restored QoS 2 messages
 				pub.DUP = true
-				if n, err := WritePacket(conn, pub, s.config.maxPacketSize); err == nil {
+				if n, err := WritePacket(conn, pub, client.MaxPacketSize()); err == nil {
 					s.config.metrics.BytesSent(n)
 					s.config.metrics.PacketSent(PacketPUBLISH)
 				}
@@ -1469,7 +1696,7 @@ func (s *Server) restoreInflightMessages(client *ServerClient, session Session, 
 				}
 
 				pubrel := &PubrelPacket{PacketID: packetID}
-				if n, err := WritePacket(conn, pubrel, s.config.maxPacketSize); err == nil {
+				if n, err := WritePacket(conn, pubrel, client.MaxPacketSize()); err == nil {
 					s.config.metrics.BytesSent(n)
 					s.config.metrics.PacketSent(PacketPUBREL)
 				}
@@ -1584,9 +1811,9 @@ func (s *Server) retryClientMessages(client *ServerClient) {
 		pub := &PublishPacket{}
 		pub.FromMessage(msg.Message)
 		pub.PacketID = msg.PacketID
-		pub.QoS = 1 // Ensure QoS 1 for QoS1Tracker messages
+		pub.QoS = QoS1 // Ensure QoS 1 for QoS1Tracker messages
 		pub.DUP = true
-		WritePacket(conn, pub, s.config.maxPacketSize)
+		WritePacket(conn, pub, client.MaxPacketSize())
 	}
 
 	// Retry QoS 2 messages
@@ -1597,13 +1824,13 @@ func (s *Server) retryClientMessages(client *ServerClient) {
 			pub := &PublishPacket{}
 			pub.FromMessage(msg.Message)
 			pub.PacketID = msg.PacketID
-			pub.QoS = 2 // Ensure QoS 2 for QoS2Tracker messages
+			pub.QoS = QoS2 // Ensure QoS 2 for QoS2Tracker messages
 			pub.DUP = true
-			WritePacket(conn, pub, s.config.maxPacketSize)
+			WritePacket(conn, pub, client.MaxPacketSize())
 		case QoS2AwaitingPubcomp:
 			// Retransmit PUBREL
 			pubrel := &PubrelPacket{PacketID: msg.PacketID}
-			WritePacket(conn, pubrel, s.config.maxPacketSize)
+			WritePacket(conn, pubrel, client.MaxPacketSize())
 		}
 	}
 
@@ -1631,7 +1858,7 @@ func (s *Server) sessionExpiryLoop() {
 
 // performEnhancedAuth performs enhanced authentication with AUTH packet exchanges.
 // Returns the final EnhancedAuthResult and true if successful, or nil and false if failed.
-func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, clientID, authMethod string, logger Logger) (*EnhancedAuthResult, bool) {
+func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, clientID, authMethod string, maxPacketSize uint32, logger Logger) (*EnhancedAuthResult, bool) {
 	// Build initial context from CONNECT
 	eaCtx := &EnhancedAuthContext{
 		ClientID:   clientID,
@@ -1650,7 +1877,7 @@ func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, clie
 		connack := &ConnackPacket{
 			ReasonCode: ReasonNotAuthorized,
 		}
-		WritePacket(conn, connack, s.config.maxPacketSize)
+		WritePacket(conn, connack, maxPacketSize)
 		return nil, false
 	}
 
@@ -1666,7 +1893,7 @@ func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, clie
 		}
 		authPkt.Props.Merge(&result.Properties)
 
-		if _, err := WritePacket(conn, authPkt, s.config.maxPacketSize); err != nil {
+		if _, err := WritePacket(conn, authPkt, maxPacketSize); err != nil {
 			logger.Warn("failed to send AUTH packet", LogFields{
 				LogFieldError: err.Error(),
 			})
@@ -1693,7 +1920,7 @@ func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, clie
 			connack := &ConnackPacket{
 				ReasonCode: ReasonProtocolError,
 			}
-			WritePacket(conn, connack, s.config.maxPacketSize)
+			WritePacket(conn, connack, maxPacketSize)
 			return nil, false
 		}
 
@@ -1711,7 +1938,7 @@ func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, clie
 			connack := &ConnackPacket{
 				ReasonCode: ReasonNotAuthorized,
 			}
-			WritePacket(conn, connack, s.config.maxPacketSize)
+			WritePacket(conn, connack, maxPacketSize)
 			return nil, false
 		}
 	}
@@ -1729,7 +1956,7 @@ func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, clie
 		connack := &ConnackPacket{
 			ReasonCode: reasonCode,
 		}
-		WritePacket(conn, connack, s.config.maxPacketSize)
+		WritePacket(conn, connack, maxPacketSize)
 		return nil, false
 	}
 
@@ -1738,6 +1965,138 @@ func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, clie
 	})
 
 	return result, true
+}
+
+// handleReauth handles re-authentication via AUTH packet after CONNECT.
+// Per MQTT v5.0 spec section 4.12, clients may initiate re-authentication.
+func (s *Server) handleReauth(client *ServerClient, authPkt *AuthPacket, clientKey string, logger Logger) {
+	conn := client.Conn()
+	authMethod := authPkt.Props.GetString(PropAuthenticationMethod)
+
+	// Update keep-alive activity at start of re-auth
+	s.keepAlive.UpdateActivity(clientKey)
+
+	// Verify auth method is supported
+	if authMethod == "" || !s.config.enhancedAuth.SupportsMethod(authMethod) {
+		logger.Warn("unsupported re-authentication method", LogFields{
+			"authMethod": authMethod,
+		})
+		client.Disconnect(ReasonBadAuthMethod)
+		return
+	}
+
+	// Build context for re-authentication
+	eaCtx := &EnhancedAuthContext{
+		ClientID:   client.ClientID(),
+		AuthMethod: authMethod,
+		AuthData:   authPkt.Props.GetBinary(PropAuthenticationData),
+		ReasonCode: authPkt.ReasonCode,
+		RemoteAddr: conn.RemoteAddr(),
+	}
+
+	// Start re-authentication
+	result, err := s.config.enhancedAuth.AuthStart(authCtx, eaCtx)
+	if err != nil || result == nil {
+		logger.Warn("re-authentication start failed", LogFields{
+			"authMethod": authMethod,
+		})
+		client.Disconnect(ReasonNotAuthorized)
+		return
+	}
+
+	// Multi-step re-authentication loop
+	for result.Continue {
+		// Send AUTH packet to client
+		respPkt := &AuthPacket{
+			ReasonCode: ReasonContinueAuth,
+		}
+		respPkt.Props.Set(PropAuthenticationMethod, authMethod)
+		if len(result.AuthData) > 0 {
+			respPkt.Props.Set(PropAuthenticationData, result.AuthData)
+		}
+		respPkt.Props.Merge(&result.Properties)
+
+		if _, err := WritePacket(conn, respPkt, client.MaxPacketSize()); err != nil {
+			logger.Warn("failed to send AUTH packet during re-auth", LogFields{
+				LogFieldError: err.Error(),
+			})
+			return
+		}
+
+		// Read client's AUTH response
+		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		pkt, _, err := ReadPacket(conn, s.config.maxPacketSize)
+		conn.SetReadDeadline(time.Time{})
+
+		if err != nil {
+			logger.Warn("failed to read AUTH response during re-auth", LogFields{
+				LogFieldError: err.Error(),
+			})
+			return
+		}
+
+		clientAuth, ok := pkt.(*AuthPacket)
+		if !ok {
+			logger.Warn("expected AUTH packet during re-auth", LogFields{
+				LogFieldPacketType: pkt.Type().String(),
+			})
+			client.Disconnect(ReasonProtocolError)
+			return
+		}
+
+		// Update keep-alive activity after receiving AUTH response
+		s.keepAlive.UpdateActivity(clientKey)
+
+		// Update context for next step
+		eaCtx.AuthData = clientAuth.Props.GetBinary(PropAuthenticationData)
+		eaCtx.ReasonCode = clientAuth.ReasonCode
+		eaCtx.State = result.State
+
+		// Continue authentication
+		result, err = s.config.enhancedAuth.AuthContinue(authCtx, eaCtx)
+		if err != nil || result == nil {
+			logger.Warn("re-authentication continue failed", LogFields{
+				"authMethod": authMethod,
+			})
+			client.Disconnect(ReasonNotAuthorized)
+			return
+		}
+	}
+
+	// Check final result
+	if !result.Success {
+		reasonCode := result.ReasonCode
+		if reasonCode == 0 {
+			reasonCode = ReasonNotAuthorized
+		}
+		logger.Warn("re-authentication failed", LogFields{
+			"authMethod":       authMethod,
+			LogFieldReasonCode: reasonCode.String(),
+		})
+		client.Disconnect(reasonCode)
+		return
+	}
+
+	// Send success AUTH packet
+	successPkt := &AuthPacket{
+		ReasonCode: ReasonSuccess,
+	}
+	successPkt.Props.Set(PropAuthenticationMethod, authMethod)
+	if len(result.AuthData) > 0 {
+		successPkt.Props.Set(PropAuthenticationData, result.AuthData)
+	}
+	successPkt.Props.Merge(&result.Properties)
+
+	if _, err := WritePacket(conn, successPkt, client.MaxPacketSize()); err != nil {
+		logger.Warn("failed to send success AUTH packet", LogFields{
+			LogFieldError: err.Error(),
+		})
+		return
+	}
+
+	logger.Debug("re-authentication successful", LogFields{
+		"authMethod": authMethod,
+	})
 }
 
 // messageFromPublishPacket creates a Message from a PublishPacket.

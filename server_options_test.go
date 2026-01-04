@@ -196,3 +196,79 @@ func TestServerOptions(t *testing.T) {
 		assert.Equal(t, "test-client", session.ClientID())
 	})
 }
+
+func TestServerCapabilityOptions(t *testing.T) {
+	t.Run("default capabilities", func(t *testing.T) {
+		cfg := defaultServerConfig()
+
+		assert.Equal(t, byte(2), cfg.maxQoS)
+		assert.True(t, cfg.retainAvailable)
+		assert.True(t, cfg.wildcardSubAvail)
+		assert.True(t, cfg.subIDAvailable)
+		assert.True(t, cfg.sharedSubAvailable)
+	})
+
+	t.Run("WithMaxQoS sets maximum QoS", func(t *testing.T) {
+		cfg := defaultServerConfig()
+
+		WithMaxQoS(0)(cfg)
+		assert.Equal(t, byte(0), cfg.maxQoS)
+
+		WithMaxQoS(1)(cfg)
+		assert.Equal(t, byte(1), cfg.maxQoS)
+
+		WithMaxQoS(2)(cfg)
+		assert.Equal(t, byte(2), cfg.maxQoS)
+	})
+
+	t.Run("WithMaxQoS ignores invalid values", func(t *testing.T) {
+		cfg := defaultServerConfig()
+		cfg.maxQoS = 1
+
+		WithMaxQoS(3)(cfg) // Invalid, should be ignored
+		assert.Equal(t, byte(1), cfg.maxQoS)
+
+		WithMaxQoS(255)(cfg) // Invalid, should be ignored
+		assert.Equal(t, byte(1), cfg.maxQoS)
+	})
+
+	t.Run("WithRetainAvailable sets retain support", func(t *testing.T) {
+		cfg := defaultServerConfig()
+
+		WithRetainAvailable(false)(cfg)
+		assert.False(t, cfg.retainAvailable)
+
+		WithRetainAvailable(true)(cfg)
+		assert.True(t, cfg.retainAvailable)
+	})
+
+	t.Run("WithWildcardSubAvailable sets wildcard subscription support", func(t *testing.T) {
+		cfg := defaultServerConfig()
+
+		WithWildcardSubAvailable(false)(cfg)
+		assert.False(t, cfg.wildcardSubAvail)
+
+		WithWildcardSubAvailable(true)(cfg)
+		assert.True(t, cfg.wildcardSubAvail)
+	})
+
+	t.Run("WithSubIDAvailable sets subscription identifier support", func(t *testing.T) {
+		cfg := defaultServerConfig()
+
+		WithSubIDAvailable(false)(cfg)
+		assert.False(t, cfg.subIDAvailable)
+
+		WithSubIDAvailable(true)(cfg)
+		assert.True(t, cfg.subIDAvailable)
+	})
+
+	t.Run("WithSharedSubAvailable sets shared subscription support", func(t *testing.T) {
+		cfg := defaultServerConfig()
+
+		WithSharedSubAvailable(false)(cfg)
+		assert.False(t, cfg.sharedSubAvailable)
+
+		WithSharedSubAvailable(true)(cfg)
+		assert.True(t, cfg.sharedSubAvailable)
+	})
+}

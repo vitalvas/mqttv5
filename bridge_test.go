@@ -580,3 +580,38 @@ func TestBridgeIntegration(t *testing.T) {
 		assert.Equal(t, []byte("25.5"), receivedMsg.Payload)
 	})
 }
+
+func TestBridgeHandleClientEvent(t *testing.T) {
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer listener.Close()
+
+	srv := NewServer(WithListener(listener))
+
+	config := BridgeConfig{
+		RemoteAddr: "tcp://localhost:1883",
+		ClientID:   "test-bridge",
+		Topics: []BridgeTopic{
+			{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionBoth},
+		},
+	}
+
+	bridge, err := NewBridge(srv, config)
+	require.NoError(t, err)
+
+	t.Run("nil event is no-op", func(_ *testing.T) {
+		// Should not panic
+		bridge.handleClientEvent(nil)
+	})
+
+	t.Run("connection lost error", func(_ *testing.T) {
+		event := &ConnectionLostError{Cause: assert.AnError}
+		// Should not panic
+		bridge.handleClientEvent(event)
+	})
+
+	t.Run("disconnect error", func(_ *testing.T) {
+		event := &DisconnectError{ReasonCode: ReasonServerShuttingDown}
+		// Should not panic
+		bridge.handleClientEvent(event)
+	})
+}

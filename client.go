@@ -3,6 +3,7 @@ package mqttv5
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -21,11 +22,13 @@ type Client struct {
 	addr    string
 
 	// Session state
-	session           Session
-	packetIDMgr       *PacketIDManager
-	qos1Tracker       *QoS1Tracker
-	qos2Tracker       *QoS2Tracker
-	serverFlowControl *FlowController // limits outbound QoS 1/2 per server's Receive Maximum
+	session            Session
+	packetIDMgr        *PacketIDManager
+	qos1Tracker        *QoS1Tracker
+	qos2Tracker        *QoS2Tracker
+	topicAliases       *TopicAliasManager // resolves inbound topic aliases from server
+	serverFlowControl  *FlowController    // limits outbound QoS 1/2 per server's Receive Maximum
+	inboundFlowControl *FlowController    // limits inbound QoS 1/2 per client's Receive Maximum
 
 	// Subscriptions with handlers
 	subscriptions   map[string]MessageHandler
@@ -41,19 +44,31 @@ type Client struct {
 	// options.maxPacketSize limits packets we receive from the server (our configured limit)
 	outboundMaxPacketSize uint32
 
+	// Server capabilities (from CONNACK properties)
+	serverMaxQoS             byte // Maximum QoS level supported by server (0, 1, or 2)
+	serverRetainAvailable    bool // Whether server supports retained messages
+	serverWildcardSubAvail   bool // Whether server supports wildcard subscriptions
+	serverSubIDAvailable     bool // Whether server supports subscription identifiers
+	serverSharedSubAvailable bool // Whether server supports shared subscriptions
+
+	// Enhanced authentication state
+	enhancedAuthState any // Holds authenticator-specific state during auth exchanges
+
 	// Connection state
 	connected    atomic.Bool
 	reconnecting atomic.Bool
 	closed       atomic.Bool
 
 	// Lifecycle control
-	parentCtx  context.Context // User's context for lifecycle management
-	ctx        context.Context
-	cancel     context.CancelFunc
-	done       chan struct{}
-	readDone   chan struct{}
-	writeMu    sync.Mutex
-	lastPacket atomic.Int64 // Unix nano timestamp for thread-safe access
+	parentCtx     context.Context // User's context for lifecycle management
+	ctx           context.Context
+	cancel        context.CancelFunc
+	done          chan struct{}
+	readDone      chan struct{}
+	reconnectStop chan struct{} // Used to cancel reconnection attempts
+	reconnectMu   sync.Mutex    // Protects reconnectStop
+	writeMu       sync.Mutex
+	lastPacket    atomic.Int64 // Unix nano timestamp for thread-safe access
 }
 
 // Dial connects to an MQTT broker and returns a client.
@@ -78,8 +93,16 @@ func DialContext(ctx context.Context, addr string, opts ...Option) (*Client, err
 		packetIDMgr:         NewPacketIDManager(),
 		qos1Tracker:         NewQoS1Tracker(30*time.Second, 3),
 		qos2Tracker:         NewQoS2Tracker(30*time.Second, 3),
-		serverFlowControl:   NewFlowController(65535), // Default, updated from CONNACK
+		topicAliases:        NewTopicAliasManager(options.topicAliasMaximum, 0), // Inbound from our advertised max, no outbound yet
+		serverFlowControl:   NewFlowController(65535),                           // Default, updated from CONNACK
+		inboundFlowControl:  NewFlowController(options.receiveMaximum),          // Client's Receive Maximum for inbound QoS 1/2
 		done:                make(chan struct{}),
+		// Default server capabilities (MQTT v5 spec: if not present, assume supported)
+		serverMaxQoS:             QoS2, // QoS 0, 1, 2 all supported
+		serverRetainAvailable:    true, // Retained messages supported
+		serverWildcardSubAvail:   true, // Wildcard subscriptions supported
+		serverSubIDAvailable:     true, // Subscription identifiers supported
+		serverSharedSubAvailable: true, // Shared subscriptions supported
 	}
 
 	// Generate client ID if not provided
@@ -96,7 +119,107 @@ func DialContext(ctx context.Context, addr string, opts ...Option) (*Client, err
 		return nil, err
 	}
 
+	// Watch parent context for cancellation to support graceful shutdown
+	// When the parent context is canceled, close the client
+	go c.watchParentContext()
+
 	return c, nil
+}
+
+// watchParentContext monitors the parent context and closes the client when canceled.
+// This ensures that canceling the context passed to DialContext properly shuts down
+// the client and stops any reconnection attempts.
+func (c *Client) watchParentContext() {
+	if c.parentCtx == nil {
+		return
+	}
+
+	select {
+	case <-c.parentCtx.Done():
+		// Parent context canceled - close the client
+		c.Close()
+	case <-c.done:
+		// Client already closed
+	}
+}
+
+// readConnackWithAuth reads the response after CONNECT and handles any enhanced
+// authentication exchange. Returns the CONNACK packet on success.
+func (c *Client) readConnackWithAuth(ctx context.Context) (*ConnackPacket, error) {
+	c.conn.SetReadDeadline(time.Now().Add(c.options.connectTimeout))
+	pkt, _, err := ReadPacket(c.conn, c.options.maxPacketSize)
+	c.conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Handle enhanced authentication exchange
+	for {
+		authPkt, isAuth := pkt.(*AuthPacket)
+		if !isAuth {
+			break // Not an AUTH packet, proceed to CONNACK handling
+		}
+
+		if c.options.enhancedAuth == nil {
+			return nil, fmt.Errorf("received AUTH packet but enhanced auth not configured")
+		}
+
+		// Check if authentication succeeded
+		if authPkt.ReasonCode == ReasonSuccess {
+			c.conn.SetReadDeadline(time.Now().Add(c.options.connectTimeout))
+			pkt, _, err = ReadPacket(c.conn, c.options.maxPacketSize)
+			c.conn.SetReadDeadline(time.Time{})
+			if err != nil {
+				return nil, fmt.Errorf("failed to read CONNACK after AUTH success: %w", err)
+			}
+			break
+		}
+
+		if authPkt.ReasonCode != ReasonContinueAuth {
+			return nil, fmt.Errorf("enhanced auth failed: %s", authPkt.ReasonCode)
+		}
+
+		authCtx := &ClientEnhancedAuthContext{
+			AuthMethod: authPkt.Props.GetString(PropAuthenticationMethod),
+			AuthData:   authPkt.Props.GetBinary(PropAuthenticationData),
+			ReasonCode: authPkt.ReasonCode,
+			State:      c.enhancedAuthState,
+		}
+
+		authResult, err := c.options.enhancedAuth.AuthContinue(ctx, authCtx)
+		if err != nil {
+			return nil, fmt.Errorf("enhanced auth continue failed: %w", err)
+		}
+		c.enhancedAuthState = authResult.State
+
+		respAuth := &AuthPacket{ReasonCode: ReasonContinueAuth}
+		respAuth.Props.Set(PropAuthenticationMethod, c.options.enhancedAuth.AuthMethod())
+		if len(authResult.AuthData) > 0 {
+			respAuth.Props.Set(PropAuthenticationData, authResult.AuthData)
+		}
+
+		if err := c.writePacket(respAuth); err != nil {
+			return nil, fmt.Errorf("failed to send AUTH: %w", err)
+		}
+
+		c.conn.SetReadDeadline(time.Now().Add(c.options.connectTimeout))
+		pkt, _, err = ReadPacket(c.conn, c.options.maxPacketSize)
+		c.conn.SetReadDeadline(time.Time{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response: %w", err)
+		}
+	}
+
+	connack, ok := pkt.(*ConnackPacket)
+	if !ok {
+		return nil, fmt.Errorf("expected CONNACK, got %T", pkt)
+	}
+
+	if connack.ReasonCode != ReasonSuccess {
+		return nil, NewConnectError(connack.ReasonCode, connack.Properties())
+	}
+
+	return connack, nil
 }
 
 // connect establishes the TCP/TLS connection and performs MQTT handshake.
@@ -121,6 +244,15 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	}
 	c.ctx, c.cancel = context.WithCancel(parentCtx)
 	c.readDone = make(chan struct{})
+
+	// Clear topic alias mappings per MQTT v5 spec section 3.3.2.3.4
+	// Topic alias mappings are specific to a Network Connection and
+	// MUST NOT be reused across connections.
+	c.topicAliases.Clear()
+
+	// Reset inbound flow control to prevent stale in-flight count from
+	// previous connection causing spurious ReasonReceiveMaxExceeded errors.
+	c.inboundFlowControl.Reset()
 
 	conn, err := c.dial(ctx)
 	if err != nil {
@@ -170,6 +302,21 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		connectPkt.Props.Add(PropUserProperty, StringPair{Key: key, Value: value})
 	}
 
+	// Add enhanced authentication if configured
+	if c.options.enhancedAuth != nil {
+		authResult, err := c.options.enhancedAuth.AuthStart(ctx)
+		if err != nil {
+			c.cancel()
+			c.conn.Close()
+			return false, fmt.Errorf("enhanced auth start failed: %w", err)
+		}
+		connectPkt.Props.Set(PropAuthenticationMethod, c.options.enhancedAuth.AuthMethod())
+		if len(authResult.AuthData) > 0 {
+			connectPkt.Props.Set(PropAuthenticationData, authResult.AuthData)
+		}
+		c.enhancedAuthState = authResult.State
+	}
+
 	// Send CONNECT
 	if err := c.writePacket(connectPkt); err != nil {
 		c.cancel()
@@ -177,59 +324,22 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("failed to send CONNECT: %w", err)
 	}
 
-	// Read CONNACK with timeout
-	c.conn.SetReadDeadline(time.Now().Add(c.options.connectTimeout))
-	pkt, _, err := ReadPacket(c.conn, c.options.maxPacketSize)
-	c.conn.SetReadDeadline(time.Time{})
-
+	// Read response and handle any enhanced authentication exchange
+	connack, err := c.readConnackWithAuth(ctx)
 	if err != nil {
 		c.cancel()
 		c.conn.Close()
-		return false, fmt.Errorf("failed to read CONNACK: %w", err)
-	}
-
-	connack, ok := pkt.(*ConnackPacket)
-	if !ok {
-		c.cancel()
-		c.conn.Close()
-		return false, fmt.Errorf("expected CONNACK, got %T", pkt)
-	}
-
-	// Check reason code
-	if connack.ReasonCode != ReasonSuccess {
-		c.cancel()
-		c.conn.Close()
-		return false, NewConnectError(connack.ReasonCode, connack.Properties())
+		return false, err
 	}
 
 	// Initialize outbound packet size limit to our configured max
 	c.outboundMaxPacketSize = c.options.maxPacketSize
 
 	// Apply CONNACK properties
-	props := connack.Properties()
-	if props != nil {
-		// Assigned Client Identifier - server assigned us a new client ID
-		if assignedID := props.GetString(PropAssignedClientIdentifier); assignedID != "" {
-			c.options.clientID = assignedID
-			c.session = c.options.sessionFactory(assignedID, "") // Client-side sessions don't need namespace
-		}
-		// Server Keep Alive - server overrides our keep-alive
-		if serverKA := props.GetUint16(PropServerKeepAlive); serverKA > 0 {
-			c.options.keepAlive = serverKA
-		}
-		// Maximum Packet Size - limit our OUTBOUND packets only
-		// This limits what we can SEND to the server, NOT what we can receive
-		// options.maxPacketSize remains unchanged for inbound packet limiting
-		if maxPacketSize := props.GetUint32(PropMaximumPacketSize); maxPacketSize > 0 {
-			c.outboundMaxPacketSize = maxPacketSize
-		}
-		// Receive Maximum - limit outbound QoS 1/2 messages in flight
-		// Per MQTT v5 spec, client must not exceed server's advertised receive maximum
-		if serverRM := props.GetUint16(PropReceiveMaximum); serverRM > 0 {
-			c.serverFlowControl.SetReceiveMaximum(serverRM)
-		}
-		// Topic Alias Maximum - limit topic aliases we can use
-		// (stored for future use when sending publishes)
+	if err := c.applyConnackProperties(connack); err != nil {
+		c.cancel()
+		c.conn.Close()
+		return false, err
 	}
 
 	c.connected.Store(true)
@@ -244,6 +354,80 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	c.emit(NewConnectedEvent(connack.SessionPresent, connack.Properties()))
 
 	return connack.SessionPresent, nil
+}
+
+// applyConnackProperties applies properties from CONNACK to the client.
+// Returns an error if the server sends invalid properties.
+func (c *Client) applyConnackProperties(connack *ConnackPacket) error {
+	props := connack.Properties()
+	if props == nil {
+		return nil
+	}
+
+	// Assigned Client Identifier - server assigned us a new client ID
+	if assignedID := props.GetString(PropAssignedClientIdentifier); assignedID != "" {
+		c.options.clientID = assignedID
+		c.session = c.options.sessionFactory(assignedID, "") // Client-side sessions don't need namespace
+	}
+
+	// Server Keep Alive - server overrides our keep-alive
+	if serverKA := props.GetUint16(PropServerKeepAlive); serverKA > 0 {
+		c.options.keepAlive = serverKA
+	}
+
+	// Maximum Packet Size - limit our OUTBOUND packets only
+	// This limits what we can SEND to the server, NOT what we can receive
+	// options.maxPacketSize remains unchanged for inbound packet limiting
+	// Per MQTT v5 spec section 3.2.2.3.5, value must be > 0 and <= 268435455
+	if props.Has(PropMaximumPacketSize) {
+		maxPacketSize := props.GetUint32(PropMaximumPacketSize)
+		if maxPacketSize == 0 || maxPacketSize > MaxPacketSizeProtocol {
+			return fmt.Errorf("server sent invalid Maximum Packet Size: %w", ErrProtocolViolation)
+		}
+		c.outboundMaxPacketSize = maxPacketSize
+	}
+
+	// Receive Maximum - limit outbound QoS 1/2 messages in flight
+	// Per MQTT v5 spec, client must not exceed server's advertised receive maximum
+	// If server explicitly sends Receive Maximum = 0, it's a protocol error (Section 3.2.2.3.3)
+	if props.Has(PropReceiveMaximum) {
+		serverRM := props.GetUint16(PropReceiveMaximum)
+		if serverRM == 0 {
+			return fmt.Errorf("server sent Receive Maximum = 0: %w", ErrProtocolViolation)
+		}
+		c.serverFlowControl.SetReceiveMaximum(serverRM)
+	}
+
+	// Topic Alias Maximum - limit topic aliases we can use for outbound publishes
+	if serverTAM := props.GetUint16(PropTopicAliasMaximum); serverTAM > 0 {
+		c.topicAliases.SetOutboundMax(serverTAM)
+	}
+
+	// Server capability properties (MQTT v5 spec section 3.2.2.3)
+	// If present, these override the defaults set in DialContext
+	if props.Has(PropMaximumQoS) {
+		maxQoS := props.GetByte(PropMaximumQoS)
+		// Per MQTT v5 spec section 3.2.2.3.4, Maximum QoS can only be 0 or 1
+		// Value of 2 or higher is a protocol error
+		if maxQoS > QoS1 {
+			return fmt.Errorf("server sent invalid Maximum QoS = %d: %w", maxQoS, ErrProtocolViolation)
+		}
+		c.serverMaxQoS = maxQoS
+	}
+	if props.Has(PropRetainAvailable) {
+		c.serverRetainAvailable = props.GetByte(PropRetainAvailable) == 1
+	}
+	if props.Has(PropWildcardSubAvailable) {
+		c.serverWildcardSubAvail = props.GetByte(PropWildcardSubAvailable) == 1
+	}
+	if props.Has(PropSubscriptionIDAvailable) {
+		c.serverSubIDAvailable = props.GetByte(PropSubscriptionIDAvailable) == 1
+	}
+	if props.Has(PropSharedSubAvailable) {
+		c.serverSharedSubAvailable = props.GetByte(PropSharedSubAvailable) == 1
+	}
+
+	return nil
 }
 
 // dial creates the network connection.
@@ -380,6 +564,16 @@ func (c *Client) Publish(msg *Message) error {
 		return ErrNotConnected
 	}
 
+	// Check server capability: QoS level
+	if msg.QoS > c.serverMaxQoS {
+		return ErrQoSNotSupported
+	}
+
+	// Check server capability: retained messages
+	if msg.Retain && !c.serverRetainAvailable {
+		return ErrRetainNotSupported
+	}
+
 	// Apply producer interceptors
 	msg = applyProducerInterceptors(c.options.producerInterceptors, msg)
 	if msg == nil {
@@ -394,7 +588,7 @@ func (c *Client) Publish(msg *Message) error {
 	pkt.FromMessage(msg)
 
 	// Assign packet ID for QoS > 0
-	if msg.QoS > 0 {
+	if msg.QoS > QoS0 {
 		// Check flow control before sending (per MQTT v5 spec)
 		if !c.serverFlowControl.TryAcquire() {
 			return ErrQuotaExceeded
@@ -409,22 +603,22 @@ func (c *Client) Publish(msg *Message) error {
 
 		// Track for acknowledgment
 		switch msg.QoS {
-		case 1:
+		case QoS1:
 			c.qos1Tracker.Track(packetID, msg)
-		case 2:
+		case QoS2:
 			c.qos2Tracker.TrackSend(packetID, msg)
 		}
 	}
 
 	if err := c.writePacket(pkt); err != nil {
-		if msg.QoS > 0 {
+		if msg.QoS > QoS0 {
 			c.serverFlowControl.Release()
 			_ = c.packetIDMgr.Release(pkt.PacketID)
 			// Use Remove to unconditionally remove tracker entry regardless of state
 			switch msg.QoS {
-			case 1:
+			case QoS1:
 				c.qos1Tracker.Remove(pkt.PacketID)
-			case 2:
+			case QoS2:
 				c.qos2Tracker.Remove(pkt.PacketID)
 			}
 		}
@@ -486,9 +680,19 @@ func (c *Client) SubscribeMultiple(filters map[string]byte, handler MessageHandl
 		if err := ValidateTopicFilter(filter); err != nil {
 			return err
 		}
+		// Check server capability: wildcard subscriptions
+		if !c.serverWildcardSubAvail && containsWildcard(filter) {
+			return ErrWildcardSubNotSupported
+		}
+		// Check server capability: shared subscriptions
+		if !c.serverSharedSubAvailable && isSharedSubscription(filter) {
+			return ErrSharedSubNotSupported
+		}
+		// Enforce server's Maximum QoS - cap subscription QoS to what server supports
+		effectiveQoS := min(qos, c.serverMaxQoS)
 		subs = append(subs, Subscription{
 			TopicFilter: filter,
-			QoS:         qos,
+			QoS:         effectiveQoS,
 		})
 		topicFilters = append(topicFilters, filter)
 	}
@@ -640,7 +844,19 @@ func (c *Client) readLoop() {
 				return
 			}
 
+			// Check if this is a protocol/malformed packet error vs network error
+			// Per MQTT v5 spec, client should send DISCONNECT with proper reason code
+			if reason := clientErrorToReasonCode(err); reason != ReasonSuccess {
+				c.sendDisconnect(reason)
+			}
+
 			c.connected.Store(false)
+
+			// Cancel context to stop keepAliveLoop and qosRetryLoop goroutines
+			// This prevents goroutine leaks when connection is lost
+			if c.cancel != nil {
+				c.cancel()
+			}
 
 			// Close connection to avoid stale/half-open sockets
 			if c.conn != nil {
@@ -681,37 +897,99 @@ func (c *Client) handlePacket(pkt Packet) {
 	case *DisconnectPacket:
 		c.handleDisconnect(p)
 	case *AuthPacket:
-		// Enhanced authentication is not implemented on the client side.
-		// Per MQTT v5.0 spec, if we receive an AUTH packet but don't support
-		// enhanced auth, we should disconnect with protocol error.
-		c.emit(NewDisconnectError(ReasonProtocolError, nil, true))
-		c.CloseWithCode(ReasonProtocolError)
+		c.handleAuth(p)
 	}
 }
 
 // handlePublish processes an incoming PUBLISH packet.
 func (c *Client) handlePublish(pkt *PublishPacket) {
+	topic := pkt.Topic
+
+	// Resolve topic alias if present (MQTT v5.0 spec section 3.3.2.3.4)
+	if alias := pkt.Props.GetUint16(PropTopicAlias); alias > 0 {
+		if topic != "" {
+			// Topic present with alias - store the mapping
+			if err := c.topicAliases.SetInbound(alias, topic); err != nil {
+				// Invalid alias - disconnect per MQTT spec
+				c.emit(NewDisconnectError(ReasonTopicAliasInvalid, nil, true))
+				c.CloseWithCode(ReasonTopicAliasInvalid)
+				return
+			}
+		} else {
+			// No topic - resolve alias from previous mapping
+			resolved, err := c.topicAliases.GetInbound(alias)
+			if err != nil {
+				// Alias not found - disconnect per MQTT spec
+				c.emit(NewDisconnectError(ReasonTopicAliasInvalid, nil, true))
+				c.CloseWithCode(ReasonTopicAliasInvalid)
+				return
+			}
+			topic = resolved
+			pkt.Topic = topic // Update packet for ToMessage()
+		}
+	}
+
+	// MQTT v5.0 spec: PUBLISH must have either a topic name or a valid topic alias
+	if topic == "" {
+		c.emit(NewDisconnectError(ReasonProtocolError, nil, true))
+		c.CloseWithCode(ReasonProtocolError)
+		return
+	}
+
 	msg := pkt.ToMessage()
 
 	// Handle QoS acknowledgments
 	switch pkt.QoS {
-	case 1:
+	case QoS1:
+		// For QoS 1, DUP retransmits don't consume additional quota since
+		// we immediately acknowledge and release. Send PUBACK regardless.
+		// Note: QoS 1 has no tracking state, so we can't detect DUP retransmits,
+		// but the acquire/release is atomic so no quota leak occurs.
+		if c.inboundFlowControl != nil && !pkt.DUP {
+			if err := c.inboundFlowControl.Acquire(); err != nil {
+				c.emit(NewDisconnectError(ReasonReceiveMaxExceeded, nil, true))
+				c.CloseWithCode(ReasonReceiveMaxExceeded)
+				return
+			}
+		}
 		puback := &PubackPacket{
 			PacketID:   pkt.PacketID,
 			ReasonCode: ReasonSuccess,
 		}
 		c.writePacket(puback)
-	case 2:
-		// Track the message and send PUBREC, but don't deliver yet
-		// Per MQTT 5.0 spec, message delivery happens after PUBREL is received
-		c.qos2Tracker.TrackReceive(pkt.PacketID, msg)
+		// Release inbound quota after sending PUBACK (only if we acquired)
+		if c.inboundFlowControl != nil && !pkt.DUP {
+			c.inboundFlowControl.Release()
+		}
+	case QoS2:
+		// Check if this is a DUP retransmit by seeing if we're already tracking this packet ID
+		_, isRetransmit := c.qos2Tracker.Get(pkt.PacketID)
+
+		// Only acquire quota for new messages, not DUP retransmits
+		if !isRetransmit {
+			if c.inboundFlowControl != nil {
+				if err := c.inboundFlowControl.Acquire(); err != nil {
+					c.emit(NewDisconnectError(ReasonReceiveMaxExceeded, nil, true))
+					c.CloseWithCode(ReasonReceiveMaxExceeded)
+					return
+				}
+			}
+			// Track the message (only for new messages, not retransmits)
+			c.qos2Tracker.TrackReceive(pkt.PacketID, msg)
+		}
+
+		// Send PUBREC for both new messages and retransmits
 		pubrec := &PubrecPacket{
 			PacketID:   pkt.PacketID,
 			ReasonCode: ReasonSuccess,
 		}
 		c.writePacket(pubrec)
-		c.qos2Tracker.SendPubrec(pkt.PacketID)
+
+		if !isRetransmit {
+			c.qos2Tracker.SendPubrec(pkt.PacketID)
+		}
 		// QoS 2 message delivery is deferred until PUBREL is received
+		// Inbound quota is released after PUBCOMP is sent
 		return
 	}
 
@@ -745,14 +1023,50 @@ func (c *Client) deliverMessage(msg *Message, topic string) {
 
 // handlePuback processes a PUBACK packet.
 func (c *Client) handlePuback(pkt *PubackPacket) {
-	if _, ok := c.qos1Tracker.Acknowledge(pkt.PacketID); ok {
+	msg, ok := c.qos1Tracker.Acknowledge(pkt.PacketID)
+	if ok {
 		c.serverFlowControl.Release()
+
+		// Check for error reason code (>= 0x80) per MQTT v5 spec
+		if pkt.ReasonCode.IsError() {
+			topic := ""
+			if msg != nil && msg.Message != nil {
+				topic = msg.Message.Topic
+			}
+			c.emit(NewPublishError(topic, pkt.PacketID, pkt.ReasonCode))
+		}
 	}
 	c.packetIDMgr.Release(pkt.PacketID)
 }
 
 // handlePubrec processes a PUBREC packet.
 func (c *Client) handlePubrec(pkt *PubrecPacket) {
+	// Per MQTT v5 spec section 4.3.3: "The Sender MUST send a PUBREL message
+	// in response to a PUBREC message". We must always send PUBREL to complete
+	// the exchange, even when PUBREC contains an error reason code.
+	// This prevents strict peers from retransmitting PUBREC indefinitely.
+
+	// Handle error reason code (>= 0x80)
+	if pkt.ReasonCode.IsError() {
+		msg, _ := c.qos2Tracker.Get(pkt.PacketID)
+		if c.qos2Tracker.Remove(pkt.PacketID) {
+			c.serverFlowControl.Release()
+			topic := ""
+			if msg != nil && msg.Message != nil {
+				topic = msg.Message.Topic
+			}
+			c.emit(NewPublishError(topic, pkt.PacketID, pkt.ReasonCode))
+		}
+		// Send PUBREL to complete exchange even on error
+		pubrel := &PubrelPacket{
+			PacketID:   pkt.PacketID,
+			ReasonCode: ReasonSuccess,
+		}
+		c.writePacket(pubrel)
+		c.packetIDMgr.Release(pkt.PacketID)
+		return
+	}
+
 	if _, ok := c.qos2Tracker.HandlePubrec(pkt.PacketID); ok {
 		pubrel := &PubrelPacket{
 			PacketID:   pkt.PacketID,
@@ -765,24 +1079,48 @@ func (c *Client) handlePubrec(pkt *PubrecPacket) {
 // handlePubrel processes a PUBREL packet.
 func (c *Client) handlePubrel(pkt *PubrelPacket) {
 	msg, ok := c.qos2Tracker.HandlePubrel(pkt.PacketID)
-	if ok {
+	if !ok {
+		// Unknown packet ID - respond with PUBCOMP containing PacketIDNotFound
+		// per MQTT v5 spec to prevent sender from retrying indefinitely
 		pubcomp := &PubcompPacket{
 			PacketID:   pkt.PacketID,
-			ReasonCode: ReasonSuccess,
+			ReasonCode: ReasonPacketIDNotFound,
 		}
 		c.writePacket(pubcomp)
+		return
+	}
 
-		// Deliver the QoS 2 message now that the flow is complete
-		if msg != nil && msg.Message != nil {
-			c.deliverMessage(msg.Message, msg.Message.Topic)
-		}
+	pubcomp := &PubcompPacket{
+		PacketID:   pkt.PacketID,
+		ReasonCode: ReasonSuccess,
+	}
+	c.writePacket(pubcomp)
+
+	// Release inbound quota after sending PUBCOMP (QoS 2 flow complete)
+	if c.inboundFlowControl != nil {
+		c.inboundFlowControl.Release()
+	}
+
+	// Deliver the QoS 2 message now that the flow is complete
+	if msg != nil && msg.Message != nil {
+		c.deliverMessage(msg.Message, msg.Message.Topic)
 	}
 }
 
 // handlePubcomp processes a PUBCOMP packet.
 func (c *Client) handlePubcomp(pkt *PubcompPacket) {
-	if _, ok := c.qos2Tracker.HandlePubcomp(pkt.PacketID); ok {
+	msg, ok := c.qos2Tracker.HandlePubcomp(pkt.PacketID)
+	if ok {
 		c.serverFlowControl.Release()
+
+		// Check for error reason code (>= 0x80) per MQTT v5 spec
+		if pkt.ReasonCode.IsError() {
+			topic := ""
+			if msg != nil && msg.Message != nil {
+				topic = msg.Message.Topic
+			}
+			c.emit(NewPublishError(topic, pkt.PacketID, pkt.ReasonCode))
+		}
 	}
 	c.packetIDMgr.Release(pkt.PacketID)
 }
@@ -802,12 +1140,16 @@ func (c *Client) handleSuback(pkt *SubackPacket) {
 	// Release packet ID
 	_ = c.packetIDMgr.Release(pkt.PacketID)
 
+	// Per MQTT v5 spec section 3.9.3, reason code count must match subscription count
+	if len(pkt.ReasonCodes) != len(filters) {
+		c.emit(NewDisconnectError(ReasonProtocolError, nil, true))
+		c.CloseWithCode(ReasonProtocolError)
+		return
+	}
+
 	// Check reason codes and update handlers/session for subscriptions
 	c.subscriptionsMu.Lock()
 	for i, code := range pkt.ReasonCodes {
-		if i >= len(filters) {
-			break
-		}
 		filter := filters[i]
 		// Reason codes >= 0x80 indicate failure
 		if code.IsError() {
@@ -840,12 +1182,16 @@ func (c *Client) handleUnsuback(pkt *UnsubackPacket) {
 	// Release packet ID
 	_ = c.packetIDMgr.Release(pkt.PacketID)
 
+	// Per MQTT v5 spec section 3.11.3, reason code count must match topic filter count
+	if len(pkt.ReasonCodes) != len(filters) {
+		c.emit(NewDisconnectError(ReasonProtocolError, nil, true))
+		c.CloseWithCode(ReasonProtocolError)
+		return
+	}
+
 	// Only remove handlers for successful unsubscribes
 	c.subscriptionsMu.Lock()
 	for i, code := range pkt.ReasonCodes {
-		if i >= len(filters) {
-			break
-		}
 		filter := filters[i]
 		// Only remove handler if unsubscribe was successful
 		if code.IsSuccess() {
@@ -862,11 +1208,93 @@ func (c *Client) handleUnsuback(pkt *UnsubackPacket) {
 // handleDisconnect processes a DISCONNECT packet from the server.
 func (c *Client) handleDisconnect(pkt *DisconnectPacket) {
 	c.connected.Store(false)
+
+	// Cancel context to stop keepAliveLoop and qosRetryLoop
+	if c.cancel != nil {
+		c.cancel()
+	}
+
+	// Close the network connection per MQTT v5 spec
+	// The receiver of DISCONNECT must close the connection
+	if c.conn != nil {
+		c.conn.Close()
+	}
+
 	c.emit(NewDisconnectError(pkt.ReasonCode, pkt.Properties(), true))
 
 	if c.options.autoReconnect && !c.closed.Load() {
 		go c.reconnectLoop()
 	}
+}
+
+// handleAuth processes an AUTH packet from the server (for re-authentication).
+func (c *Client) handleAuth(pkt *AuthPacket) {
+	// Enhanced authentication not configured - disconnect with protocol error
+	if c.options.enhancedAuth == nil {
+		c.emit(NewDisconnectError(ReasonProtocolError, nil, true))
+		c.CloseWithCode(ReasonProtocolError)
+		return
+	}
+
+	// Handle re-authentication request from server
+	if pkt.ReasonCode == ReasonReAuth {
+		// Server is requesting re-authentication
+		authResult, err := c.options.enhancedAuth.AuthStart(c.ctx)
+		if err != nil {
+			c.emit(NewDisconnectError(ReasonNotAuthorized, nil, true))
+			c.CloseWithCode(ReasonNotAuthorized)
+			return
+		}
+		c.enhancedAuthState = authResult.State
+
+		respAuth := &AuthPacket{
+			ReasonCode: ReasonReAuth,
+		}
+		respAuth.Props.Set(PropAuthenticationMethod, c.options.enhancedAuth.AuthMethod())
+		if len(authResult.AuthData) > 0 {
+			respAuth.Props.Set(PropAuthenticationData, authResult.AuthData)
+		}
+		c.writePacket(respAuth)
+		return
+	}
+
+	// Handle continue authentication
+	if pkt.ReasonCode == ReasonContinueAuth {
+		authCtx := &ClientEnhancedAuthContext{
+			AuthMethod: pkt.Props.GetString(PropAuthenticationMethod),
+			AuthData:   pkt.Props.GetBinary(PropAuthenticationData),
+			ReasonCode: pkt.ReasonCode,
+			State:      c.enhancedAuthState,
+		}
+
+		authResult, err := c.options.enhancedAuth.AuthContinue(c.ctx, authCtx)
+		if err != nil {
+			c.emit(NewDisconnectError(ReasonNotAuthorized, nil, true))
+			c.CloseWithCode(ReasonNotAuthorized)
+			return
+		}
+		c.enhancedAuthState = authResult.State
+
+		respAuth := &AuthPacket{
+			ReasonCode: ReasonContinueAuth,
+		}
+		respAuth.Props.Set(PropAuthenticationMethod, c.options.enhancedAuth.AuthMethod())
+		if len(authResult.AuthData) > 0 {
+			respAuth.Props.Set(PropAuthenticationData, authResult.AuthData)
+		}
+		c.writePacket(respAuth)
+		return
+	}
+
+	// Handle success - re-authentication completed
+	if pkt.ReasonCode == ReasonSuccess {
+		c.enhancedAuthState = nil // Clear auth state
+		return
+	}
+
+	// Unknown or error reason code - disconnect
+	c.emit(NewDisconnectError(pkt.ReasonCode, pkt.Properties(), true))
+	c.CloseWithCode(pkt.ReasonCode)
 }
 
 // keepAliveLoop sends PINGREQ packets to keep the connection alive.
@@ -918,7 +1346,7 @@ func (c *Client) qosRetryLoop() {
 				pub := &PublishPacket{}
 				pub.FromMessage(msg.Message)
 				pub.PacketID = msg.PacketID
-				pub.QoS = 1 // Ensure QoS 1 for QoS1Tracker messages
+				pub.QoS = QoS1 // Ensure QoS 1 for QoS1Tracker messages
 				pub.DUP = true
 				c.writePacket(pub)
 			}
@@ -930,7 +1358,7 @@ func (c *Client) qosRetryLoop() {
 					pub := &PublishPacket{}
 					pub.FromMessage(msg.Message)
 					pub.PacketID = msg.PacketID
-					pub.QoS = 2 // Ensure QoS 2 for QoS2Tracker messages
+					pub.QoS = QoS2 // Ensure QoS 2 for QoS2Tracker messages
 					pub.DUP = true
 					c.writePacket(pub)
 				case QoS2AwaitingPubcomp:
@@ -969,7 +1397,7 @@ func (c *Client) resendInflightMessages() {
 		pub := &PublishPacket{}
 		pub.FromMessage(msg.Message)
 		pub.PacketID = msg.PacketID
-		pub.QoS = 1 // Ensure QoS 1 for QoS1Tracker messages
+		pub.QoS = QoS1 // Ensure QoS 1 for QoS1Tracker messages
 		pub.DUP = true
 		c.writePacket(pub)
 	}
@@ -989,7 +1417,7 @@ func (c *Client) resendInflightMessages() {
 			pub := &PublishPacket{}
 			pub.FromMessage(msg.Message)
 			pub.PacketID = msg.PacketID
-			pub.QoS = 2 // Ensure QoS 2 for QoS2Tracker messages
+			pub.QoS = QoS2 // Ensure QoS 2 for QoS2Tracker messages
 			pub.DUP = true
 			c.writePacket(pub)
 		case QoS2AwaitingPubcomp:
@@ -1024,7 +1452,7 @@ func (c *Client) restoreSubscriptions() {
 				// Fallback to QoS 0 if no session info
 				subOptions = append(subOptions, Subscription{
 					TopicFilter: filter,
-					QoS:         0,
+					QoS:         QoS0,
 				})
 			}
 		}
@@ -1033,7 +1461,7 @@ func (c *Client) restoreSubscriptions() {
 		for filter := range subs {
 			subOptions = append(subOptions, Subscription{
 				TopicFilter: filter,
-				QoS:         0,
+				QoS:         QoS0,
 			})
 		}
 	}
@@ -1071,9 +1499,21 @@ func (c *Client) resetInflightState() {
 
 	// Reset server flow control to default (will be updated from next CONNACK)
 	c.serverFlowControl = NewFlowController(65535)
+}
 
-	// Clear pending operations
+// clearPendingOperations releases packet IDs and clears pending subscribe/unsubscribe
+// operations. This must be called on reconnect because ACKs for in-flight operations
+// will never arrive after disconnect.
+func (c *Client) clearPendingOperations() {
 	c.pendingOpsMu.Lock()
+	// Release packet IDs for pending subscribes
+	for packetID := range c.pendingSubscribes {
+		_ = c.packetIDMgr.Release(packetID)
+	}
+	// Release packet IDs for pending unsubscribes
+	for packetID := range c.pendingUnsubscribes {
+		_ = c.packetIDMgr.Release(packetID)
+	}
 	c.pendingSubscribes = make(map[uint16][]string)
 	c.pendingUnsubscribes = make(map[uint16][]string)
 	c.pendingOpsMu.Unlock()
@@ -1089,6 +1529,26 @@ func (c *Client) reconnectLoop() {
 	}
 	defer c.reconnecting.Store(false)
 
+	// Create a channel to allow canceling reconnection attempts
+	c.reconnectMu.Lock()
+	c.reconnectStop = make(chan struct{})
+	stopCh := c.reconnectStop
+	c.reconnectMu.Unlock()
+
+	// Cancel function to stop reconnection
+	cancelReconnect := func() {
+		c.reconnectMu.Lock()
+		defer c.reconnectMu.Unlock()
+		if c.reconnectStop != nil {
+			select {
+			case <-c.reconnectStop:
+				// Already closed
+			default:
+				close(c.reconnectStop)
+			}
+		}
+	}
+
 	attempt := 0
 	backoff := c.options.reconnectBackoff
 
@@ -1103,12 +1563,18 @@ func (c *Client) reconnectLoop() {
 			return
 		}
 
-		c.emit(NewReconnectEvent(attempt, c.options.maxReconnects, backoff, c.cancel))
+		c.emit(NewReconnectEvent(attempt, c.options.maxReconnects, backoff, cancelReconnect))
 
+		// Wait for backoff duration, checking for close or cancel
+		timer := time.NewTimer(backoff)
 		select {
-		case <-c.ctx.Done():
+		case <-c.done:
+			timer.Stop()
 			return
-		case <-time.After(backoff):
+		case <-stopCh:
+			timer.Stop()
+			return
+		case <-timer.C:
 		}
 
 		// Try to reconnect
@@ -1117,6 +1583,11 @@ func (c *Client) reconnectLoop() {
 		connectCancel()
 
 		if err == nil {
+			// Always clear pending subscribe/unsubscribe operations on reconnect.
+			// These operations were in-flight during disconnect and their ACKs will
+			// never arrive. The packet IDs must be released to prevent exhaustion.
+			c.clearPendingOperations()
+
 			// Only restore subscriptions and resend inflight messages if session was NOT
 			// present. If session is present, the server has already stored our subscriptions
 			// and inflight messages, so resending would cause duplicates.
@@ -1141,4 +1612,68 @@ func (c *Client) reconnectLoop() {
 			backoff = c.options.maxBackoff
 		}
 	}
+}
+
+// sendDisconnect sends a DISCONNECT packet with the given reason code.
+// This is a best-effort send used before closing on protocol errors.
+func (c *Client) sendDisconnect(reason ReasonCode) {
+	if c.conn == nil {
+		return
+	}
+	pkt := &DisconnectPacket{ReasonCode: reason}
+	c.writeMu.Lock()
+	WritePacket(c.conn, pkt, c.outboundMaxPacketSize)
+	c.writeMu.Unlock()
+}
+
+// clientErrorToReasonCode maps read/decode errors to MQTT v5 reason codes.
+// Returns ReasonSuccess if the error is a network error (connection closed,
+// timeout, etc.) which doesn't require sending DISCONNECT.
+func clientErrorToReasonCode(err error) ReasonCode {
+	if err == nil {
+		return ReasonSuccess
+	}
+
+	switch {
+	case errors.Is(err, ErrPacketTooLarge):
+		return ReasonPacketTooLarge
+	case errors.Is(err, ErrUnknownPacketType):
+		return ReasonProtocolError
+	case errors.Is(err, ErrProtocolViolation):
+		return ReasonProtocolError
+	case errors.Is(err, ErrInvalidPacketType):
+		return ReasonProtocolError
+	case errors.Is(err, ErrDuplicateProperty):
+		return ReasonProtocolError
+	case errors.Is(err, ErrPropertyNotAllowed):
+		return ReasonProtocolError
+	case errors.Is(err, ErrInvalidReasonCode):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrInvalidPacketFlags):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrInvalidPacketID):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrInvalidQoS):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrPacketIDRequired):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrVarintTooLarge):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrVarintMalformed):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrVarintOverlong):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrInvalidConnackFlags):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrUnknownPropertyID):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrInvalidPropertyType):
+		return ReasonMalformedPacket
+	case errors.Is(err, ErrInvalidUTF8):
+		return ReasonMalformedPacket
+	}
+
+	// For network errors (io.EOF, connection reset, timeout, etc.)
+	// return ReasonSuccess to indicate no DISCONNECT should be sent
+	return ReasonSuccess
 }

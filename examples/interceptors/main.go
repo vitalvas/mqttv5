@@ -215,7 +215,7 @@ func run() error {
 		err = client.Publish(&mqttv5.Message{
 			Topic:   m.topic,
 			Payload: []byte(m.payload),
-			QoS:     1,
+			QoS:     mqttv5.QoS1,
 		})
 		if err != nil {
 			log.Printf("Failed to publish: %v", err)

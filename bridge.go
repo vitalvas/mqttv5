@@ -79,16 +79,17 @@ type bridgeTopicCached struct {
 
 // Bridge connects two MQTT brokers and forwards messages between them.
 type Bridge struct {
-	config       BridgeConfig
-	server       *Server
-	client       *Client
-	id           string
-	bridgeProp   StringPair // cached bridge property for loop detection
-	cachedTopics []bridgeTopicCached
-	running      atomic.Bool
-	mu           sync.Mutex
-	ctx          context.Context
-	cancel       context.CancelFunc
+	config          BridgeConfig
+	server          *Server
+	client          *Client
+	id              string
+	bridgeProp      StringPair // cached bridge property for loop detection
+	cachedTopics    []bridgeTopicCached
+	running         atomic.Bool
+	initialConnDone atomic.Bool // tracks if initial connection is complete
+	mu              sync.Mutex
+	ctx             context.Context
+	cancel          context.CancelFunc
 }
 
 // NewBridge creates a new bridge between a local server and a remote broker.
@@ -145,10 +146,15 @@ func (b *Bridge) Start() error {
 
 	b.ctx, b.cancel = context.WithCancel(context.Background())
 
-	// Build client options
+	// Build client options with auto-reconnect enabled for resilience
 	opts := []Option{
 		WithClientID(b.id),
 		WithCleanStart(b.config.CleanStart),
+		WithAutoReconnect(true),
+		WithMaxReconnects(-1), // Unlimited reconnection attempts
+		OnEvent(func(_ *Client, event error) {
+			b.handleClientEvent(event)
+		}),
 	}
 
 	if b.config.KeepAlive > 0 {
@@ -177,7 +183,32 @@ func (b *Bridge) Start() error {
 	b.setupLocalForwarding()
 
 	b.running.Store(true)
+	b.initialConnDone.Store(true) // Mark initial connection complete
 	return nil
+}
+
+// handleClientEvent handles events from the remote broker client.
+func (b *Bridge) handleClientEvent(event error) {
+	if event == nil {
+		return
+	}
+
+	switch e := event.(type) {
+	case *ConnectedEvent:
+		// Only re-subscribe on reconnection, not initial connect
+		// (Start() already sets up subscriptions for the initial connection)
+		if b.initialConnDone.Load() {
+			log.Printf("bridge %s: reconnected to remote broker", b.id)
+			if err := b.setupSubscriptions(); err != nil {
+				log.Printf("bridge %s: failed to re-subscribe after reconnect: %v", b.id, err)
+			}
+		}
+	case *ConnectionLostError:
+		log.Printf("bridge %s: connection lost: %v", b.id, e.Cause)
+		b.server.Metrics().BridgeError()
+	case *DisconnectError:
+		log.Printf("bridge %s: disconnected: %s", b.id, e.ReasonCode)
+	}
 }
 
 // Stop disconnects from the remote broker and stops forwarding.
@@ -346,11 +377,18 @@ func (b *Bridge) remapTopic(topic, fromPrefix, toPrefix string, direction Bridge
 
 // topicMatchesPrefix checks if a topic matches a prefix pattern.
 // prefix should be pre-cleaned (no trailing wildcards).
+// For MQTT topic semantics, "foo" matches "foo" exactly or "foo/..." but NOT "foobar".
 func (b *Bridge) topicMatchesPrefix(topic, prefix string) bool {
 	if prefix == "" {
 		return true
 	}
-	return strings.HasPrefix(topic, prefix) || topic == prefix
+	// Exact match
+	if topic == prefix {
+		return true
+	}
+	// Prefix match requires the topic to have prefix followed by "/"
+	// e.g., prefix "foo" matches "foo/bar" but not "foobar"
+	return strings.HasPrefix(topic, prefix+"/")
 }
 
 // isFromBridge checks if a message originated from this bridge (loop detection).

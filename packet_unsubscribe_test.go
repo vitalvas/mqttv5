@@ -253,3 +253,13 @@ func FuzzUnsubscribePacketDecode(f *testing.F) {
 		_, _ = p.Decode(bytes.NewReader(remaining), header)
 	})
 }
+
+func TestUnsubscribePacketProperties(t *testing.T) {
+	p := &UnsubscribePacket{}
+	p.Props.Add(PropUserProperty, StringPair{Key: "key", Value: "value"})
+	props := p.Properties()
+	require.NotNil(t, props)
+	ups := props.GetAllStringPairs(PropUserProperty)
+	require.Len(t, ups, 1)
+	assert.Equal(t, "key", ups[0].Key)
+}

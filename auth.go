@@ -154,3 +154,46 @@ type DenyAllAuthenticator struct{}
 func (d *DenyAllAuthenticator) Authenticate(_ context.Context, _ *AuthContext) (*AuthResult, error) {
 	return &AuthResult{Success: false, ReasonCode: ReasonNotAuthorized}, nil
 }
+
+// ClientEnhancedAuthContext contains information for client-side enhanced authentication.
+type ClientEnhancedAuthContext struct {
+	// AuthMethod is the authentication method being used.
+	AuthMethod string
+
+	// AuthData is the authentication data from the AUTH packet.
+	AuthData []byte
+
+	// ReasonCode is the reason code from the AUTH packet.
+	ReasonCode ReasonCode
+
+	// State holds authenticator-specific state between exchanges.
+	State any
+}
+
+// ClientEnhancedAuthResult represents the result of a client enhanced authentication step.
+type ClientEnhancedAuthResult struct {
+	// Done indicates authentication is complete (no more exchanges needed).
+	Done bool
+
+	// AuthData is authentication data to send to the server.
+	AuthData []byte
+
+	// State holds authenticator-specific state for the next exchange.
+	State any
+}
+
+// ClientEnhancedAuthenticator defines the interface for client-side enhanced authentication.
+// Enhanced authentication allows multi-step authentication exchanges using
+// the AUTH packet (MQTT 5.0 feature).
+type ClientEnhancedAuthenticator interface {
+	// AuthMethod returns the authentication method name (e.g., "SCRAM-SHA-256").
+	AuthMethod() string
+
+	// AuthStart begins the enhanced authentication process.
+	// Called when building the CONNECT packet to get initial auth data.
+	AuthStart(ctx context.Context) (*ClientEnhancedAuthResult, error)
+
+	// AuthContinue continues the enhanced authentication process.
+	// Called when an AUTH packet with ContinueAuthentication is received.
+	AuthContinue(ctx context.Context, authCtx *ClientEnhancedAuthContext) (*ClientEnhancedAuthResult, error)
+}

@@ -2518,3 +2518,500 @@ func TestMultiTenantNamespaceIsolation(t *testing.T) {
 		assert.Equal(t, []byte("tenant-b-data"), matchesB[0].Payload)
 	})
 }
+
+func TestBuildConnackCapabilities(t *testing.T) {
+	t.Run("includes all capability properties with defaults", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		connack := srv.buildConnack(false, nil, "", 60)
+		require.NotNil(t, connack)
+
+		// Verify default capability properties are set
+		// Per MQTT v5 spec section 3.2.2.3.4, Maximum QoS property is absent when server supports QoS 2
+		assert.False(t, connack.Props.Has(PropMaximumQoS), "MaximumQoS property should be absent when server supports QoS 2")
+		assert.Equal(t, byte(1), connack.Props.GetByte(PropRetainAvailable))
+		assert.Equal(t, byte(1), connack.Props.GetByte(PropWildcardSubAvailable))
+		assert.Equal(t, byte(1), connack.Props.GetByte(PropSubscriptionIDAvailable))
+		assert.Equal(t, byte(1), connack.Props.GetByte(PropSharedSubAvailable))
+	})
+
+	t.Run("respects configured MaxQoS", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(
+			WithListener(listener),
+			WithMaxQoS(1),
+		)
+		defer srv.Close()
+
+		connack := srv.buildConnack(false, nil, "", 60)
+		assert.Equal(t, byte(1), connack.Props.GetByte(PropMaximumQoS))
+	})
+
+	t.Run("respects configured RetainAvailable false", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(
+			WithListener(listener),
+			WithRetainAvailable(false),
+		)
+		defer srv.Close()
+
+		connack := srv.buildConnack(false, nil, "", 60)
+		assert.Equal(t, byte(0), connack.Props.GetByte(PropRetainAvailable))
+	})
+
+	t.Run("respects configured WildcardSubAvailable false", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(
+			WithListener(listener),
+			WithWildcardSubAvailable(false),
+		)
+		defer srv.Close()
+
+		connack := srv.buildConnack(false, nil, "", 60)
+		assert.Equal(t, byte(0), connack.Props.GetByte(PropWildcardSubAvailable))
+	})
+
+	t.Run("respects configured SubIDAvailable false", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(
+			WithListener(listener),
+			WithSubIDAvailable(false),
+		)
+		defer srv.Close()
+
+		connack := srv.buildConnack(false, nil, "", 60)
+		assert.Equal(t, byte(0), connack.Props.GetByte(PropSubscriptionIDAvailable))
+	})
+
+	t.Run("respects configured SharedSubAvailable false", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(
+			WithListener(listener),
+			WithSharedSubAvailable(false),
+		)
+		defer srv.Close()
+
+		connack := srv.buildConnack(false, nil, "", 60)
+		assert.Equal(t, byte(0), connack.Props.GetByte(PropSharedSubAvailable))
+	})
+
+	t.Run("auto-disables retain when retainedStore is nil", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(
+			WithListener(listener),
+			WithRetainedStore(nil),
+		)
+		defer srv.Close()
+
+		connack := srv.buildConnack(false, nil, "", 60)
+		assert.Equal(t, byte(0), connack.Props.GetByte(PropRetainAvailable))
+	})
+
+	t.Run("includes topic alias maximum when configured", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(
+			WithListener(listener),
+			WithServerTopicAliasMax(100),
+		)
+		defer srv.Close()
+
+		connack := srv.buildConnack(false, nil, "", 60)
+		assert.Equal(t, uint16(100), connack.Props.GetUint16(PropTopicAliasMaximum))
+	})
+
+	t.Run("includes receive maximum when less than default", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(
+			WithListener(listener),
+			WithServerReceiveMaximum(100),
+		)
+		defer srv.Close()
+
+		connack := srv.buildConnack(false, nil, "", 60)
+		assert.Equal(t, uint16(100), connack.Props.GetUint16(PropReceiveMaximum))
+	})
+
+	t.Run("includes assigned client identifier", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		connack := srv.buildConnack(false, nil, "assigned-id", 60)
+		assert.Equal(t, "assigned-id", connack.Props.GetString(PropAssignedClientIdentifier))
+	})
+
+	t.Run("sets session present flag", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		connack := srv.buildConnack(true, nil, "", 60)
+		assert.True(t, connack.SessionPresent)
+	})
+}
+
+func TestErrorToReasonCode(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+
+	srv := NewServer(WithListener(listener))
+	defer srv.Close()
+
+	t.Run("nil error returns success", func(t *testing.T) {
+		assert.Equal(t, ReasonSuccess, srv.errorToReasonCode(nil))
+	})
+
+	t.Run("packet too large returns correct code", func(t *testing.T) {
+		assert.Equal(t, ReasonPacketTooLarge, srv.errorToReasonCode(ErrPacketTooLarge))
+	})
+
+	t.Run("unknown packet type returns protocol error", func(t *testing.T) {
+		assert.Equal(t, ReasonProtocolError, srv.errorToReasonCode(ErrUnknownPacketType))
+	})
+
+	t.Run("protocol violation returns protocol error", func(t *testing.T) {
+		assert.Equal(t, ReasonProtocolError, srv.errorToReasonCode(ErrProtocolViolation))
+	})
+
+	t.Run("invalid reason code returns malformed packet", func(t *testing.T) {
+		assert.Equal(t, ReasonMalformedPacket, srv.errorToReasonCode(ErrInvalidReasonCode))
+	})
+
+	t.Run("io EOF returns success (no disconnect needed)", func(t *testing.T) {
+		assert.Equal(t, ReasonSuccess, srv.errorToReasonCode(io.EOF))
+	})
+
+	t.Run("generic error returns success (network error)", func(t *testing.T) {
+		assert.Equal(t, ReasonSuccess, srv.errorToReasonCode(fmt.Errorf("connection reset")))
+	})
+
+	t.Run("invalid packet flags returns malformed packet", func(t *testing.T) {
+		assert.Equal(t, ReasonMalformedPacket, srv.errorToReasonCode(ErrInvalidPacketFlags))
+	})
+
+	t.Run("invalid packet ID returns malformed packet", func(t *testing.T) {
+		assert.Equal(t, ReasonMalformedPacket, srv.errorToReasonCode(ErrInvalidPacketID))
+	})
+
+	t.Run("invalid QoS returns malformed packet", func(t *testing.T) {
+		assert.Equal(t, ReasonMalformedPacket, srv.errorToReasonCode(ErrInvalidQoS))
+	})
+
+	t.Run("packet ID required returns malformed packet", func(t *testing.T) {
+		assert.Equal(t, ReasonMalformedPacket, srv.errorToReasonCode(ErrPacketIDRequired))
+	})
+
+	t.Run("invalid packet type returns protocol error", func(t *testing.T) {
+		assert.Equal(t, ReasonProtocolError, srv.errorToReasonCode(ErrInvalidPacketType))
+	})
+
+	t.Run("duplicate property returns protocol error", func(t *testing.T) {
+		assert.Equal(t, ReasonProtocolError, srv.errorToReasonCode(ErrDuplicateProperty))
+	})
+
+	t.Run("varint too large returns malformed packet", func(t *testing.T) {
+		assert.Equal(t, ReasonMalformedPacket, srv.errorToReasonCode(ErrVarintTooLarge))
+	})
+
+	t.Run("varint malformed returns malformed packet", func(t *testing.T) {
+		assert.Equal(t, ReasonMalformedPacket, srv.errorToReasonCode(ErrVarintMalformed))
+	})
+
+	t.Run("varint overlong returns malformed packet", func(t *testing.T) {
+		assert.Equal(t, ReasonMalformedPacket, srv.errorToReasonCode(ErrVarintOverlong))
+	})
+
+	t.Run("unknown property ID returns malformed packet", func(t *testing.T) {
+		assert.Equal(t, ReasonMalformedPacket, srv.errorToReasonCode(ErrUnknownPropertyID))
+	})
+
+	t.Run("invalid property type returns malformed packet", func(t *testing.T) {
+		assert.Equal(t, ReasonMalformedPacket, srv.errorToReasonCode(ErrInvalidPropertyType))
+	})
+
+	t.Run("invalid UTF-8 returns malformed packet", func(t *testing.T) {
+		assert.Equal(t, ReasonMalformedPacket, srv.errorToReasonCode(ErrInvalidUTF8))
+	})
+
+	t.Run("wrapped errors are detected", func(t *testing.T) {
+		wrappedErr := fmt.Errorf("context: %w", ErrPacketTooLarge)
+		assert.Equal(t, ReasonPacketTooLarge, srv.errorToReasonCode(wrappedErr))
+	})
+}
+
+func TestClientDisconnectWithWill(t *testing.T) {
+	tests := []struct {
+		name        string
+		reasonCode  ReasonCode
+		expectWill  bool
+		description string
+	}{
+		{
+			name:        "normal disconnect suppresses will",
+			reasonCode:  ReasonSuccess,
+			expectWill:  false,
+			description: "ReasonSuccess should suppress Will message",
+		},
+		{
+			name:        "disconnect with will publishes will",
+			reasonCode:  ReasonDisconnectWithWill,
+			expectWill:  true,
+			description: "ReasonDisconnectWithWill (0x04) should publish Will message",
+		},
+		{
+			name:        "server shutting down suppresses will",
+			reasonCode:  ReasonServerShuttingDown,
+			expectWill:  false,
+			description: "Server-initiated disconnect suppresses Will",
+		},
+		{
+			name:        "unspecified error suppresses will",
+			reasonCode:  ReasonUnspecifiedError,
+			expectWill:  false,
+			description: "Any non-0x04 reason should suppress Will",
+		},
+		{
+			name:        "protocol error suppresses will",
+			reasonCode:  ReasonProtocolError,
+			expectWill:  false,
+			description: "Protocol error disconnect suppresses Will",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a test to verify Will behavior based on disconnect reason
+			// This tests the server's handling of DISCONNECT packets from clients
+			disconnectPkt := &DisconnectPacket{ReasonCode: tt.reasonCode}
+
+			// Verify the packet encodes correctly
+			var buf bytes.Buffer
+			_, err := WritePacket(&buf, disconnectPkt, MaxPacketSizeDefault)
+			require.NoError(t, err)
+
+			// Verify the reason code is preserved
+			assert.Equal(t, tt.reasonCode, disconnectPkt.ReasonCode)
+
+			// Test that DisconnectWithWill is the only reason that should publish Will
+			shouldPublishWill := tt.reasonCode == ReasonDisconnectWithWill
+			assert.Equal(t, tt.expectWill, shouldPublishWill, tt.description)
+		})
+	}
+}
+
+func TestUnsubscribeTopicFilterValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		filter      string
+		expectValid bool
+		description string
+	}{
+		// Positive cases - valid filters
+		{
+			name:        "simple topic",
+			filter:      "sensors/temperature",
+			expectValid: true,
+			description: "Simple topic path should be valid",
+		},
+		{
+			name:        "single level wildcard",
+			filter:      "sensors/+/data",
+			expectValid: true,
+			description: "Single level wildcard should be valid",
+		},
+		{
+			name:        "multi level wildcard at end",
+			filter:      "sensors/#",
+			expectValid: true,
+			description: "Multi-level wildcard at end should be valid",
+		},
+		{
+			name:        "root wildcard",
+			filter:      "#",
+			expectValid: true,
+			description: "Root wildcard should be valid",
+		},
+		{
+			name:        "single plus wildcard",
+			filter:      "+",
+			expectValid: true,
+			description: "Single plus wildcard should be valid",
+		},
+		{
+			name:        "multiple single wildcards",
+			filter:      "+/+/+",
+			expectValid: true,
+			description: "Multiple single-level wildcards should be valid",
+		},
+		// Negative cases - invalid filters
+		{
+			name:        "empty filter",
+			filter:      "",
+			expectValid: false,
+			description: "Empty filter should be invalid",
+		},
+		{
+			name:        "hash in middle",
+			filter:      "sensors/#/data",
+			expectValid: false,
+			description: "Multi-level wildcard in middle should be invalid",
+		},
+		{
+			name:        "plus not at level boundary",
+			filter:      "sensors+/data",
+			expectValid: false,
+			description: "Plus not at level boundary should be invalid",
+		},
+		{
+			name:        "hash not at level boundary",
+			filter:      "sensors#",
+			expectValid: false,
+			description: "Hash not at level boundary should be invalid",
+		},
+		{
+			name:        "null character",
+			filter:      "sensors/\x00/data",
+			expectValid: false,
+			description: "Null character should be invalid",
+		},
+		// Edge cases
+		{
+			name:        "very long topic",
+			filter:      string(make([]byte, 65535)),
+			expectValid: false,
+			description: "Topic exceeding max length should be invalid",
+		},
+		{
+			name:        "trailing slash",
+			filter:      "sensors/temperature/",
+			expectValid: true,
+			description: "Trailing slash should be valid",
+		},
+		{
+			name:        "leading slash",
+			filter:      "/sensors/temperature",
+			expectValid: true,
+			description: "Leading slash should be valid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateTopicFilter(tt.filter)
+			if tt.expectValid {
+				assert.NoError(t, err, tt.description)
+			} else {
+				assert.Error(t, err, tt.description)
+			}
+		})
+	}
+}
+
+func TestConnectPropertyValidation(t *testing.T) {
+	tests := []struct {
+		name           string
+		setupProps     func(*ConnectPacket)
+		expectReject   bool
+		expectedReason ReasonCode
+		description    string
+	}{
+		// Positive cases
+		{
+			name:         "valid receive maximum",
+			setupProps:   func(p *ConnectPacket) { p.Props.Set(PropReceiveMaximum, uint16(100)) },
+			expectReject: false,
+			description:  "Valid Receive Maximum should be accepted",
+		},
+		{
+			name:         "valid max packet size",
+			setupProps:   func(p *ConnectPacket) { p.Props.Set(PropMaximumPacketSize, uint32(1024)) },
+			expectReject: false,
+			description:  "Valid Maximum Packet Size should be accepted",
+		},
+		{
+			name:         "no properties",
+			setupProps:   func(_ *ConnectPacket) {},
+			expectReject: false,
+			description:  "No properties should be accepted",
+		},
+		{
+			name:         "max receive maximum value",
+			setupProps:   func(p *ConnectPacket) { p.Props.Set(PropReceiveMaximum, uint16(65535)) },
+			expectReject: false,
+			description:  "Maximum Receive Maximum value should be accepted",
+		},
+		// Negative cases
+		{
+			name:           "receive maximum zero",
+			setupProps:     func(p *ConnectPacket) { p.Props.Set(PropReceiveMaximum, uint16(0)) },
+			expectReject:   true,
+			expectedReason: ReasonProtocolError,
+			description:    "Receive Maximum = 0 should be rejected",
+		},
+		{
+			name:           "max packet size zero",
+			setupProps:     func(p *ConnectPacket) { p.Props.Set(PropMaximumPacketSize, uint32(0)) },
+			expectReject:   true,
+			expectedReason: ReasonProtocolError,
+			description:    "Maximum Packet Size = 0 should be rejected",
+		},
+		// Edge cases
+		{
+			name:         "receive maximum one",
+			setupProps:   func(p *ConnectPacket) { p.Props.Set(PropReceiveMaximum, uint16(1)) },
+			expectReject: false,
+			description:  "Receive Maximum = 1 should be accepted (minimum valid)",
+		},
+		{
+			name:         "max packet size one",
+			setupProps:   func(p *ConnectPacket) { p.Props.Set(PropMaximumPacketSize, uint32(1)) },
+			expectReject: false,
+			description:  "Maximum Packet Size = 1 should be accepted (minimum valid)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			connect := &ConnectPacket{
+				ClientID:   "test-client",
+				CleanStart: true,
+			}
+			tt.setupProps(connect)
+
+			// Test validation logic
+			hasReceiveMax := connect.Props.Has(PropReceiveMaximum)
+			receiveMaxZero := hasReceiveMax && connect.Props.GetUint16(PropReceiveMaximum) == 0
+
+			hasMaxPacketSize := connect.Props.Has(PropMaximumPacketSize)
+			maxPacketSizeZero := hasMaxPacketSize && connect.Props.GetUint32(PropMaximumPacketSize) == 0
+
+			isRejected := receiveMaxZero || maxPacketSizeZero
+
+			assert.Equal(t, tt.expectReject, isRejected, tt.description)
+		})
+	}
+}

@@ -74,6 +74,25 @@ func TestPacketIDManager(t *testing.T) {
 		m.Release(1)
 		assert.Equal(t, 1, m.InUse())
 	})
+
+	t.Run("exhausted with limited max", func(t *testing.T) {
+		m := &PacketIDManager{
+			maxIDs: 3,
+			next:   1,
+			used:   make(map[uint16]struct{}),
+		}
+
+		_, err := m.Allocate()
+		require.NoError(t, err)
+		_, err = m.Allocate()
+		require.NoError(t, err)
+		_, err = m.Allocate()
+		require.NoError(t, err)
+
+		// Fourth allocation should fail
+		_, err = m.Allocate()
+		assert.ErrorIs(t, err, ErrPacketIDExhausted)
+	})
 }
 
 func TestPacketIDManagerConcurrency(t *testing.T) {

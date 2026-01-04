@@ -78,6 +78,40 @@ func TestWSConnAddresses(t *testing.T) {
 	conn.Close()
 }
 
+func TestWSConnUnderlyingConn(t *testing.T) {
+	serverConnCh := make(chan *WSConn, 1)
+
+	handler := NewWSHandler(func(conn Conn) {
+		wsConn := conn.(*WSConn)
+		serverConnCh <- wsConn
+		time.Sleep(100 * time.Millisecond)
+		conn.Close()
+	})
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	dialer := NewWSDialer()
+	conn, err := dialer.Dial(context.Background(), wsURL)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Test client side
+	wsConn := conn.(*WSConn)
+	underlying := wsConn.UnderlyingConn()
+	assert.NotNil(t, underlying)
+
+	// Test server side
+	select {
+	case serverConn := <-serverConnCh:
+		underlying := serverConn.UnderlyingConn()
+		assert.NotNil(t, underlying)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for server connection")
+	}
+}
+
 func TestWSConnDeadlines(t *testing.T) {
 	handler := NewWSHandler(func(conn Conn) {
 		time.Sleep(100 * time.Millisecond)

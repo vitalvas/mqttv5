@@ -68,7 +68,7 @@ func TestAckPacketEncodeDecode(t *testing.T) {
 			assert.Equal(t, tt.flags, header.Flags)
 
 			var decoded ackPacket
-			_, err = decodeAck(&buf, header, &decoded)
+			_, err = decodeAck(&buf, header, &decoded, PropCtxPUBACK)
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.ack.PacketID, decoded.PacketID)
@@ -95,7 +95,7 @@ func TestAckPacketWithProperties(t *testing.T) {
 	require.NoError(t, err)
 
 	var decoded ackPacket
-	_, err = decodeAck(&buf, header, &decoded)
+	_, err = decodeAck(&buf, header, &decoded, PropCtxPUBACK)
 	require.NoError(t, err)
 
 	assert.Equal(t, ack.PacketID, decoded.PacketID)
@@ -117,7 +117,7 @@ func TestAckPacketDecodeMinimal(t *testing.T) {
 	}
 
 	var ack ackPacket
-	n, err := decodeAck(bytes.NewReader(data), header, &ack)
+	n, err := decodeAck(bytes.NewReader(data), header, &ack, PropCtxPUBACK)
 	require.NoError(t, err)
 	assert.Equal(t, 2, n)
 	assert.Equal(t, uint16(1), ack.PacketID)
@@ -134,7 +134,7 @@ func TestAckPacketDecodeWithReasonCode(t *testing.T) {
 	}
 
 	var ack ackPacket
-	n, err := decodeAck(bytes.NewReader(data), header, &ack)
+	n, err := decodeAck(bytes.NewReader(data), header, &ack, PropCtxPUBACK)
 	require.NoError(t, err)
 	assert.Equal(t, 3, n)
 	assert.Equal(t, uint16(1), ack.PacketID)
@@ -151,7 +151,7 @@ func TestAckPacketDecodeWithEmptyProperties(t *testing.T) {
 	}
 
 	var ack ackPacket
-	n, err := decodeAck(bytes.NewReader(data), header, &ack)
+	n, err := decodeAck(bytes.NewReader(data), header, &ack, PropCtxPUBACK)
 	require.NoError(t, err)
 	assert.Equal(t, 4, n)
 	assert.Equal(t, uint16(1), ack.PacketID)
@@ -167,7 +167,7 @@ func TestAckPacketDecodeReadError(t *testing.T) {
 	}
 
 	var ack ackPacket
-	_, err := decodeAck(bytes.NewReader([]byte{}), header, &ack)
+	_, err := decodeAck(bytes.NewReader([]byte{}), header, &ack, PropCtxPUBACK)
 	assert.Error(t, err)
 }
 
@@ -180,7 +180,7 @@ func TestAckPacketDecodePartialPacketID(t *testing.T) {
 	}
 
 	var ack ackPacket
-	_, err := decodeAck(bytes.NewReader([]byte{0x00}), header, &ack)
+	_, err := decodeAck(bytes.NewReader([]byte{0x00}), header, &ack, PropCtxPUBACK)
 	assert.Error(t, err)
 }
 
@@ -229,7 +229,7 @@ func BenchmarkAckPacketDecode(b *testing.B) {
 		var header FixedHeader
 		_, _ = header.Decode(r)
 		var p ackPacket
-		_, _ = decodeAck(r, header, &p)
+		_, _ = decodeAck(r, header, &p, PropCtxPUBACK)
 	}
 }
 
@@ -270,6 +270,6 @@ func FuzzAckPacketDecode(f *testing.F) {
 		}
 
 		var ack ackPacket
-		_, _ = decodeAck(bytes.NewReader(remaining), header, &ack)
+		_, _ = decodeAck(bytes.NewReader(remaining), header, &ack, PropCtxPUBACK)
 	})
 }

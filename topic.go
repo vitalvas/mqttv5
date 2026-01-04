@@ -202,6 +202,18 @@ func ParseSharedSubscription(filter string) (*SharedSubscription, error) {
 	}, nil
 }
 
+// isSharedSubscription returns true if the filter is a shared subscription.
+// Shared subscriptions start with "$share/".
+func isSharedSubscription(filter string) bool {
+	return strings.HasPrefix(filter, "$share/")
+}
+
+// containsWildcard returns true if the filter contains wildcard characters.
+// MQTT wildcards are # (multi-level) and + (single-level).
+func containsWildcard(filter string) bool {
+	return strings.ContainsAny(filter, "#+")
+}
+
 // TopicMatcher provides efficient topic matching with multiple subscriptions.
 type TopicMatcher struct {
 	root *topicNode

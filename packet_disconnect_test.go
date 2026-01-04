@@ -137,6 +137,14 @@ func TestDisconnectPacketValidation(t *testing.T) {
 	assert.ErrorIs(t, invalid.Validate(), ErrInvalidReasonCode)
 }
 
+func TestDisconnectPacketProperties(t *testing.T) {
+	p := &DisconnectPacket{}
+	p.Props.Set(PropReasonString, "test reason")
+	props := p.Properties()
+	require.NotNil(t, props)
+	assert.Equal(t, "test reason", props.GetString(PropReasonString))
+}
+
 func BenchmarkDisconnectPacketEncode(b *testing.B) {
 	packet := DisconnectPacket{ReasonCode: ReasonSuccess}
 	var buf bytes.Buffer

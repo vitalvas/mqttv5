@@ -518,3 +518,11 @@ func FuzzSubscribePacketDecode(f *testing.F) {
 		_, _ = p.Decode(bytes.NewReader(remaining), header)
 	})
 }
+
+func TestSubscribePacketProperties(t *testing.T) {
+	p := &SubscribePacket{}
+	p.Props.Set(PropSubscriptionIdentifier, uint32(12345))
+	props := p.Properties()
+	require.NotNil(t, props)
+	assert.Equal(t, uint32(12345), props.GetUint32(PropSubscriptionIdentifier))
+}

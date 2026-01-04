@@ -456,3 +456,38 @@ func TestServerClientConcurrentWrites(t *testing.T) {
 		assert.True(t, true)
 	})
 }
+
+func TestServerClientDisconnectWillHandling(t *testing.T) {
+	t.Run("server-initiated disconnect always suppresses Will", func(t *testing.T) {
+		// When the server sends a DISCONNECT packet (for any reason), it's a
+		// controlled termination and Will should NOT be published. Will is meant
+		// for unexpected disconnections where the client can't notify others.
+		reasons := []ReasonCode{
+			ReasonSuccess,
+			ReasonServerShuttingDown,
+			ReasonSessionTakenOver,
+			ReasonProtocolError,
+			ReasonNotAuthorized,
+			ReasonTopicNameInvalid,
+			ReasonQoSNotSupported,
+		}
+
+		for _, reason := range reasons {
+			t.Run(reason.String(), func(t *testing.T) {
+				client := &ServerClient{
+					conn:          &mockConn{},
+					maxPacketSize: MaxPacketSizeDefault,
+				}
+				client.connected.Store(true)
+
+				// Server-initiated disconnect
+				err := client.Disconnect(reason)
+				require.NoError(t, err)
+
+				// Should always be marked as clean disconnect (Will suppressed)
+				assert.True(t, client.IsCleanDisconnect(),
+					"server-initiated disconnect with %s should suppress Will", reason)
+			})
+		}
+	})
+}

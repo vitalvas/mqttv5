@@ -60,7 +60,7 @@ func run() error {
 	err = client.Publish(&mqttv5.Message{
 		Topic:   "unix/messages",
 		Payload: []byte("Hello from Unix socket client!"),
-		QoS:     1,
+		QoS:     mqttv5.QoS1,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to publish: %w", err)

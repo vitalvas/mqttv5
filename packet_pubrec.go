@@ -28,6 +28,9 @@ func (p *PubrecPacket) Encode(w io.Writer) (int, error) {
 	if err := p.Validate(); err != nil {
 		return 0, err
 	}
+	if err := p.Props.ValidateFor(PropCtxPUBREC); err != nil {
+		return 0, err
+	}
 	return encodeAck(w, PacketPUBREC, 0x00, &ackPacket{
 		PacketID:   p.PacketID,
 		ReasonCode: p.ReasonCode,
@@ -41,7 +44,7 @@ func (p *PubrecPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 		return 0, ErrInvalidPacketType
 	}
 	var ack ackPacket
-	n, err := decodeAck(r, header, &ack)
+	n, err := decodeAck(r, header, &ack, PropCtxPUBREC)
 	p.PacketID = ack.PacketID
 	p.ReasonCode = ack.ReasonCode
 	p.Props = ack.Props

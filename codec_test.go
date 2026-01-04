@@ -350,6 +350,36 @@ func TestMaxPacketSizeBoundaries(t *testing.T) {
 		pub := decoded.(*PublishPacket)
 		assert.Len(t, pub.Payload, 1024*1024)
 	})
+
+	t.Run("total packet size includes fixed header", func(t *testing.T) {
+		// This test verifies that max packet size check includes the fixed header,
+		// not just the remaining length. A packet with remaining length = 10 and
+		// 2-byte fixed header has total size = 12.
+		packet := &PublishPacket{
+			Topic:   "t",
+			Payload: []byte("hello"),
+			QoS:     0,
+		}
+
+		var buf bytes.Buffer
+		totalSize, err := WritePacket(&buf, packet, 0)
+		require.NoError(t, err)
+
+		// Total size should fail when limit equals remaining length (excludes header)
+		// Fixed header is 2 bytes (1 byte type+flags, 1 byte remaining length)
+		remainingLength := totalSize - 2
+
+		// Should fail when maxSize = remainingLength (total > maxSize)
+		_, _, err = ReadPacket(bytes.NewReader(buf.Bytes()), uint32(remainingLength))
+		assert.ErrorIs(t, err, ErrPacketTooLarge, "should fail when max size excludes fixed header bytes")
+
+		// Should succeed when maxSize = totalSize
+		decoded, rn, err := ReadPacket(bytes.NewReader(buf.Bytes()), uint32(totalSize))
+		require.NoError(t, err)
+		assert.Equal(t, totalSize, rn)
+		pub := decoded.(*PublishPacket)
+		assert.Equal(t, "hello", string(pub.Payload))
+	})
 }
 
 func TestReadPacketUnknownType(t *testing.T) {

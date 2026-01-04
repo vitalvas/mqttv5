@@ -49,15 +49,15 @@ type Authz struct{}
 func (a *Authz) Authorize(_ context.Context, ctx *mqttv5.AuthzContext) (*mqttv5.AuthzResult, error) {
 	// Admin has full access
 	if ctx.Username == "admin" {
-		return &mqttv5.AuthzResult{Allowed: true, MaxQoS: 2}, nil
+		return &mqttv5.AuthzResult{Allowed: true, MaxQoS: mqttv5.QoS2}, nil
 	}
 	// Users have RW access to their own topics
 	if strings.HasPrefix(ctx.Topic, path.Join("users", ctx.Username)+"/") {
-		return &mqttv5.AuthzResult{Allowed: true, MaxQoS: 1}, nil
+		return &mqttv5.AuthzResult{Allowed: true, MaxQoS: mqttv5.QoS1}, nil
 	}
 	// Users have RO access to public topics
 	if ctx.Action == mqttv5.AuthzActionSubscribe && strings.HasPrefix(ctx.Topic, "public/") {
-		return &mqttv5.AuthzResult{Allowed: true, MaxQoS: 1}, nil
+		return &mqttv5.AuthzResult{Allowed: true, MaxQoS: mqttv5.QoS1}, nil
 	}
 	return &mqttv5.AuthzResult{Allowed: false, ReasonCode: mqttv5.ReasonNotAuthorized}, nil
 }
