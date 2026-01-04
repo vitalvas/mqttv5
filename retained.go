@@ -48,6 +48,9 @@ type RetainedStore interface {
 	// Get retrieves a retained message by exact topic.
 	Get(namespace, topic string) (*RetainedMessage, bool)
 
+	// Exists checks if a retained message exists by exact topic.
+	Exists(namespace, topic string) bool
+
 	// Delete removes a retained message by topic.
 	Delete(namespace, topic string) bool
 

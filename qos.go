@@ -487,6 +487,9 @@ type MessageStore interface {
 	// Get retrieves a message by ID.
 	Get(id string) (*Message, bool)
 
+	// Exists checks if a message exists by ID.
+	Exists(id string) bool
+
 	// Delete deletes a message by ID.
 	Delete(id string) bool
 

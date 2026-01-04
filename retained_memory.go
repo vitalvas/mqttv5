@@ -49,6 +49,12 @@ func (s *MemoryRetainedStore) Get(namespace, topic string) (*RetainedMessage, bo
 	return msg, ok
 }
 
+// Exists checks if a retained message exists by exact topic.
+func (s *MemoryRetainedStore) Exists(namespace, topic string) bool {
+	_, ok := s.Get(namespace, topic)
+	return ok
+}
+
 // Delete removes a retained message by topic.
 func (s *MemoryRetainedStore) Delete(namespace, topic string) bool {
 	s.mu.Lock()

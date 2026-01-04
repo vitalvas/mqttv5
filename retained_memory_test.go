@@ -35,7 +35,7 @@ func TestMemoryRetainedStore(t *testing.T) {
 	t.Run("get not found", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		_, ok := store.Get(testNS, "nonexistent")
+		ok := store.Exists(testNS, "nonexistent")
 		assert.False(t, ok)
 	})
 
@@ -52,7 +52,7 @@ func TestMemoryRetainedStore(t *testing.T) {
 			Payload: []byte{},
 		})
 
-		_, ok := store.Get(testNS, "test/topic")
+		ok := store.Exists(testNS, "test/topic")
 		assert.False(t, ok)
 	})
 
@@ -69,7 +69,7 @@ func TestMemoryRetainedStore(t *testing.T) {
 			Payload: nil,
 		})
 
-		_, ok := store.Get(testNS, "test/topic")
+		ok := store.Exists(testNS, "test/topic")
 		assert.False(t, ok)
 	})
 
@@ -458,7 +458,7 @@ func TestRetainedStoreNamespaceIsolation(t *testing.T) {
 		assert.True(t, deleted)
 
 		// tenant-a message should be gone
-		_, ok := store.Get("tenant-a", "topic")
+		ok := store.Exists("tenant-a", "topic")
 		assert.False(t, ok)
 
 		// tenant-b message should still exist

@@ -25,7 +25,7 @@ func TestMemoryMessageStore(t *testing.T) {
 	t.Run("get not found", func(t *testing.T) {
 		store := NewMemoryMessageStore()
 
-		_, ok := store.Get("nonexistent")
+		ok := store.Exists("nonexistent")
 		assert.False(t, ok)
 	})
 
@@ -46,12 +46,12 @@ func TestMemoryMessageStore(t *testing.T) {
 
 		store.Store("msg-1", &Message{}, 10*time.Millisecond)
 
-		_, ok := store.Get("msg-1")
+		ok := store.Exists("msg-1")
 		assert.True(t, ok)
 
 		time.Sleep(20 * time.Millisecond)
 
-		_, ok = store.Get("msg-1")
+		ok = store.Exists("msg-1")
 		assert.False(t, ok)
 	})
 

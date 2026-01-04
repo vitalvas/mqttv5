@@ -49,6 +49,12 @@ func (s *MemoryMessageStore) Get(id string) (*Message, bool) {
 	return stored.Message, true
 }
 
+// Exists checks if a message exists by ID.
+func (s *MemoryMessageStore) Exists(id string) bool {
+	_, ok := s.Get(id)
+	return ok
+}
+
 // Delete deletes a message by ID.
 func (s *MemoryMessageStore) Delete(id string) bool {
 	s.mu.Lock()
