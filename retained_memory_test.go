@@ -177,26 +177,26 @@ func TestMemoryRetainedStore(t *testing.T) {
 		store.Set(testNS, &RetainedMessage{Topic: "b", Payload: []byte("2")})
 		store.Set(testNS, &RetainedMessage{Topic: "c", Payload: []byte("3")})
 
-		assert.Equal(t, 3, store.Count())
+		assert.Equal(t, 3, store.Count(testNS))
 
-		store.Clear()
+		store.Clear(testNS)
 
-		assert.Equal(t, 0, store.Count())
+		assert.Equal(t, 0, store.Count(testNS))
 	})
 
 	t.Run("count", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 
-		assert.Equal(t, 0, store.Count())
+		assert.Equal(t, 0, store.Count(testNS))
 
 		store.Set(testNS, &RetainedMessage{Topic: "a", Payload: []byte("1")})
-		assert.Equal(t, 1, store.Count())
+		assert.Equal(t, 1, store.Count(testNS))
 
 		store.Set(testNS, &RetainedMessage{Topic: "b", Payload: []byte("2")})
-		assert.Equal(t, 2, store.Count())
+		assert.Equal(t, 2, store.Count(testNS))
 
 		store.Delete(testNS, "a")
-		assert.Equal(t, 1, store.Count())
+		assert.Equal(t, 1, store.Count(testNS))
 	})
 
 	t.Run("topics returns namespace keys", func(t *testing.T) {
@@ -206,7 +206,7 @@ func TestMemoryRetainedStore(t *testing.T) {
 		store.Set(testNS, &RetainedMessage{Topic: "c/d", Payload: []byte("2")})
 		store.Set("other", &RetainedMessage{Topic: "a/b", Payload: []byte("3")}) // Same topic, different namespace
 
-		keys := store.Topics()
+		keys := store.Topics("")
 		assert.Len(t, keys, 3)
 		// Keys should be in namespace||topic format
 		assert.Contains(t, keys, NamespaceKey(testNS, "a/b"))
@@ -289,12 +289,12 @@ func TestMemoryRetainedStore(t *testing.T) {
 		store.Set(testNS, msg)
 
 		// Initial count should be 1
-		assert.Equal(t, 1, store.Count())
+		assert.Equal(t, 1, store.Count(testNS))
 
 		// Match should exclude and purge expired messages
 		matched := store.Match(testNS, "test/#")
 		assert.Empty(t, matched, "expired messages should not be matched")
-		assert.Equal(t, 0, store.Count(), "expired messages should be purged")
+		assert.Equal(t, 0, store.Count(testNS), "expired messages should be purged")
 	})
 
 	t.Run("topics purges expired messages", func(t *testing.T) {
@@ -310,9 +310,9 @@ func TestMemoryRetainedStore(t *testing.T) {
 		})
 
 		// Topics should exclude and purge expired messages
-		topics := store.Topics()
+		topics := store.Topics(testNS)
 		assert.Empty(t, topics, "expired messages should not be in topics")
-		assert.Equal(t, 0, store.Count(), "expired messages should be purged")
+		assert.Equal(t, 0, store.Count(testNS), "expired messages should be purged")
 	})
 
 	t.Run("cleanup removes expired messages", func(t *testing.T) {
@@ -330,9 +330,38 @@ func TestMemoryRetainedStore(t *testing.T) {
 			Payload: []byte("data"),
 		})
 
-		removed := store.Cleanup()
+		removed := store.Cleanup(testNS)
 		assert.Equal(t, 1, removed, "should remove 1 expired message")
-		assert.Equal(t, 1, store.Count(), "should have 1 active message")
+		assert.Equal(t, 1, store.Count(testNS), "should have 1 active message")
+	})
+
+	t.Run("cleanup per namespace", func(t *testing.T) {
+		store := NewMemoryRetainedStore()
+
+		// Add expired messages in different namespaces
+		store.Set("tenant-a", &RetainedMessage{
+			Topic:         "test/expired",
+			Payload:       []byte("data"),
+			MessageExpiry: 1,
+			PublishedAt:   time.Now().Add(-2 * time.Second),
+		})
+		store.Set("tenant-b", &RetainedMessage{
+			Topic:         "test/expired",
+			Payload:       []byte("data"),
+			MessageExpiry: 1,
+			PublishedAt:   time.Now().Add(-2 * time.Second),
+		})
+
+		// Cleanup only tenant-a
+		removed := store.Cleanup("tenant-a")
+		assert.Equal(t, 1, removed)
+		assert.Equal(t, 0, store.Count("tenant-a"))
+		assert.Equal(t, 1, store.Count("tenant-b")) // tenant-b still has expired message
+
+		// Cleanup all namespaces
+		removed = store.Cleanup("")
+		assert.Equal(t, 1, removed)
+		assert.Equal(t, 0, store.Count("tenant-b"))
 	})
 }
 

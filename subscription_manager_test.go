@@ -14,7 +14,7 @@ func TestSubscriptionManager(t *testing.T) {
 		err := m.Subscribe("client1", testNS, Subscription{TopicFilter: "sensors/+/temp", QoS: 1})
 		require.NoError(t, err)
 
-		matches := m.Match("sensors/room1/temp")
+		matches := m.MatchForDelivery("sensors/room1/temp", "", testNS)
 		require.Len(t, matches, 1)
 		assert.Equal(t, "client1", matches[0].ClientID)
 		assert.Equal(t, byte(1), matches[0].Subscription.QoS)
@@ -26,7 +26,7 @@ func TestSubscriptionManager(t *testing.T) {
 		m.Subscribe("client1", testNS, Subscription{TopicFilter: "test/#", QoS: 0})
 		m.Subscribe("client2", testNS, Subscription{TopicFilter: "test/#", QoS: 1})
 
-		matches := m.Match("test/topic")
+		matches := m.MatchForDelivery("test/topic", "", testNS)
 		assert.Len(t, matches, 2)
 	})
 
@@ -39,10 +39,10 @@ func TestSubscriptionManager(t *testing.T) {
 		removed := m.Unsubscribe("client1", testNS, "topic/a")
 		assert.True(t, removed)
 
-		matches := m.Match("topic/a")
+		matches := m.MatchForDelivery("topic/a", "", testNS)
 		assert.Len(t, matches, 0)
 
-		matches = m.Match("topic/b")
+		matches = m.MatchForDelivery("topic/b", "", testNS)
 		assert.Len(t, matches, 1)
 	})
 
@@ -251,7 +251,7 @@ func TestSharedSubscriptions(t *testing.T) {
 		require.NoError(t, err)
 
 		// Messages to the actual topic should match
-		matches := m.Match("sensors/room1")
+		matches := m.MatchForDelivery("sensors/room1", "", testNS)
 		require.Len(t, matches, 1)
 		assert.Equal(t, "client1", matches[0].ClientID)
 		assert.Equal(t, "group1", matches[0].ShareGroup)

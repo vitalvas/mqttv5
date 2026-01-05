@@ -54,6 +54,11 @@ type BridgeConfig struct {
 	RemoteAddr string
 	// ClientID is the client ID used when connecting to the remote broker.
 	ClientID string
+	// Namespace is the target namespace for bridged messages.
+	// Messages forwarded from remote to local will be published to this namespace.
+	// Messages forwarded from local to remote will only include messages from this namespace.
+	// If empty, defaults to DefaultNamespace.
+	Namespace string
 	// Topics defines the topic mappings for the bridge.
 	Topics []BridgeTopic
 	// TopicRemapper is an optional function for custom topic remapping.
@@ -83,6 +88,7 @@ type Bridge struct {
 	server          *Server
 	client          *Client
 	id              string
+	namespace       string     // effective namespace for message isolation
 	bridgeProp      StringPair // cached bridge property for loop detection
 	cachedTopics    []bridgeTopicCached
 	running         atomic.Bool
@@ -103,6 +109,12 @@ func NewBridge(server *Server, config BridgeConfig) (*Bridge, error) {
 		id = "bridge-" + generateClientID()
 	}
 
+	// Default namespace to DefaultNamespace if not specified
+	namespace := config.Namespace
+	if namespace == "" {
+		namespace = DefaultNamespace
+	}
+
 	// Pre-cache cleaned topic prefixes
 	cached := make([]bridgeTopicCached, len(config.Topics))
 	for i, t := range config.Topics {
@@ -118,6 +130,7 @@ func NewBridge(server *Server, config BridgeConfig) (*Bridge, error) {
 		config:       config,
 		server:       server,
 		id:           id,
+		namespace:    namespace,
 		bridgeProp:   StringPair{Key: bridgePropertyKey, Value: id},
 		cachedTopics: cached,
 	}, nil
@@ -133,6 +146,11 @@ func cleanPrefix(prefix string) string {
 // ID returns the bridge identifier.
 func (b *Bridge) ID() string {
 	return b.id
+}
+
+// Namespace returns the namespace this bridge operates in.
+func (b *Bridge) Namespace() string {
+	return b.namespace
 }
 
 // Start connects to the remote broker and begins forwarding messages.
@@ -283,7 +301,7 @@ func (b *Bridge) forwardToLocal(msg *Message, remotePrefix, localPrefix string) 
 	// Remap topic
 	newTopic := b.remapTopic(msg.Topic, remotePrefix, localPrefix, BridgeDirectionIn)
 
-	// Create forwarded message
+	// Create forwarded message with namespace isolation
 	fwdMsg := &Message{
 		Topic:           newTopic,
 		Payload:         msg.Payload,
@@ -295,6 +313,7 @@ func (b *Bridge) forwardToLocal(msg *Message, remotePrefix, localPrefix string) 
 		ResponseTopic:   msg.ResponseTopic,
 		CorrelationData: msg.CorrelationData,
 		UserProperties:  b.addBridgeProperty(msg.UserProperties),
+		Namespace:       b.namespace, // Namespace isolation for bridged messages
 	}
 
 	// Publish to local server
@@ -308,9 +327,19 @@ func (b *Bridge) forwardToLocal(msg *Message, remotePrefix, localPrefix string) 
 
 // ForwardToRemote forwards a message from local server to remote broker.
 // This should be called from server's OnMessage callback.
+// Only messages from the bridge's configured namespace are forwarded.
 func (b *Bridge) ForwardToRemote(msg *Message) {
 	if !b.running.Load() || b.client == nil {
 		return
+	}
+
+	// Namespace isolation: only forward messages from the bridge's namespace
+	msgNamespace := msg.Namespace
+	if msgNamespace == "" {
+		msgNamespace = DefaultNamespace
+	}
+	if msgNamespace != b.namespace {
+		return // Message is from a different namespace, skip
 	}
 
 	// Check for bridge loop

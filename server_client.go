@@ -272,7 +272,7 @@ func (c *ServerClient) Send(msg *Message) error {
 		pub.Props.Add(PropUserProperty, up)
 	}
 	for _, subID := range msg.SubscriptionIdentifiers {
-		pub.Props.Set(PropSubscriptionIdentifier, subID)
+		pub.Props.Add(PropSubscriptionIdentifier, subID)
 	}
 
 	c.writeMu.Lock()

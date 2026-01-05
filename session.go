@@ -91,7 +91,7 @@ type Session interface {
 	InflightQoS2() map[uint16]*QoS2Message
 }
 
-// SessionStore defines the interface for session persistence.
+// SessionStore defines the interface for session persistence with namespace isolation.
 type SessionStore interface {
 	// Create creates a new session.
 	Create(namespace string, session Session) error
@@ -105,11 +105,14 @@ type SessionStore interface {
 	// Delete deletes a session by namespace and client ID.
 	Delete(namespace, clientID string) error
 
-	// List returns all sessions.
-	List() []Session
+	// List returns all sessions in the specified namespace.
+	// If namespace is empty, returns all sessions across all namespaces.
+	List(namespace string) []Session
 
-	// Cleanup removes expired sessions.
-	Cleanup() int
+	// Cleanup removes expired sessions from the specified namespace.
+	// If namespace is empty, cleans up all namespaces.
+	// Returns the number of sessions removed.
+	Cleanup(namespace string) int
 }
 
 // SessionExpiryHandler is called when a session expires.

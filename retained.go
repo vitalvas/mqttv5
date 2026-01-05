@@ -39,7 +39,7 @@ func (m *RetainedMessage) RemainingExpiry() uint32 {
 	return uint32(remaining.Seconds())
 }
 
-// RetainedStore defines the interface for retained message storage.
+// RetainedStore defines the interface for retained message storage with namespace isolation.
 type RetainedStore interface {
 	// Set stores or updates a retained message.
 	// If the payload is empty, the retained message is deleted.
@@ -57,13 +57,21 @@ type RetainedStore interface {
 	// Match returns all retained messages matching a topic filter.
 	Match(namespace, filter string) []*RetainedMessage
 
-	// Clear removes all retained messages.
-	Clear()
+	// Clear removes all retained messages in the specified namespace.
+	// If namespace is empty, removes all retained messages across all namespaces.
+	Clear(namespace string)
 
-	// Count returns the number of retained messages.
-	Count() int
+	// Count returns the number of retained messages in the specified namespace.
+	// If namespace is empty, returns total count across all namespaces.
+	Count(namespace string) int
 
-	// Topics returns all topics with retained messages as namespace||topic keys.
-	// Use ParseNamespaceKey to extract namespace and topic from each key.
-	Topics() []string
+	// Topics returns all topics with retained messages in the specified namespace.
+	// If namespace is empty, returns topics across all namespaces.
+	// Returns namespace||topic keys - use ParseNamespaceKey to extract namespace and topic.
+	Topics(namespace string) []string
+
+	// Cleanup removes expired retained messages from the specified namespace.
+	// If namespace is empty, cleans up all namespaces.
+	// Returns the number of messages removed.
+	Cleanup(namespace string) int
 }

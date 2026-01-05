@@ -100,35 +100,68 @@ func (s *MemoryRetainedStore) Match(namespace, filter string) []*RetainedMessage
 	return matched
 }
 
-// Clear removes all retained messages.
-func (s *MemoryRetainedStore) Clear() {
+// Clear removes all retained messages in the specified namespace.
+// If namespace is empty, removes all retained messages across all namespaces.
+func (s *MemoryRetainedStore) Clear(namespace string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.messages = make(map[string]*RetainedMessage)
+
+	if namespace == "" {
+		s.messages = make(map[string]*RetainedMessage)
+		return
+	}
+
+	prefix := namespace + namespaceDelimiter
+	for key := range s.messages {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.messages, key)
+		}
+	}
 }
 
-// Count returns the number of retained messages.
-func (s *MemoryRetainedStore) Count() int {
+// Count returns the number of retained messages in the specified namespace.
+// If namespace is empty, returns total count across all namespaces.
+func (s *MemoryRetainedStore) Count(namespace string) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.messages)
+
+	if namespace == "" {
+		return len(s.messages)
+	}
+
+	prefix := namespace + namespaceDelimiter
+	count := 0
+	for key := range s.messages {
+		if strings.HasPrefix(key, prefix) {
+			count++
+		}
+	}
+	return count
 }
 
-// Topics returns all topics with retained messages as namespace||topic keys.
-// Use ParseNamespaceKey to extract namespace and topic from each key.
+// Topics returns all topics with retained messages in the specified namespace.
+// If namespace is empty, returns topics across all namespaces.
+// Returns namespace||topic keys - use ParseNamespaceKey to extract namespace and topic.
 // Expired messages are excluded and purged.
-func (s *MemoryRetainedStore) Topics() []string {
+func (s *MemoryRetainedStore) Topics(namespace string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	prefix := ""
+	if namespace != "" {
+		prefix = namespace + namespaceDelimiter
+	}
 
 	keys := make([]string, 0, len(s.messages))
 	var expired []string
 	for key, msg := range s.messages {
+		if namespace != "" && !strings.HasPrefix(key, prefix) {
+			continue
+		}
 		if msg.IsExpired() {
 			expired = append(expired, key)
 			continue
 		}
-		// Return the key (namespace||topic) for namespace awareness
 		keys = append(keys, key)
 	}
 
@@ -140,21 +173,28 @@ func (s *MemoryRetainedStore) Topics() []string {
 	return keys
 }
 
-// Cleanup removes all expired retained messages.
+// Cleanup removes expired retained messages from the specified namespace.
+// If namespace is empty, cleans up all namespaces.
 // Returns the number of messages removed.
-func (s *MemoryRetainedStore) Cleanup() int {
+func (s *MemoryRetainedStore) Cleanup(namespace string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var expired []string
-	for topic, msg := range s.messages {
+	for key, msg := range s.messages {
+		if namespace != "" {
+			ns, _ := ParseNamespaceKey(key)
+			if ns != namespace {
+				continue
+			}
+		}
 		if msg.IsExpired() {
-			expired = append(expired, topic)
+			expired = append(expired, key)
 		}
 	}
 
-	for _, topic := range expired {
-		delete(s.messages, topic)
+	for _, key := range expired {
+		delete(s.messages, key)
 	}
 
 	return len(expired)

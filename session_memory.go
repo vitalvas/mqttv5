@@ -337,23 +337,33 @@ func (s *MemorySessionStore) Delete(namespace, clientID string) error {
 	return nil
 }
 
-func (s *MemorySessionStore) List() []Session {
+// List returns all sessions in the specified namespace.
+// If namespace is empty, returns all sessions across all namespaces.
+func (s *MemorySessionStore) List(namespace string) []Session {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	sessions := make([]Session, 0, len(s.sessions))
 	for _, session := range s.sessions {
+		if namespace != "" && session.Namespace() != namespace {
+			continue
+		}
 		sessions = append(sessions, session)
 	}
 	return sessions
 }
 
-func (s *MemorySessionStore) Cleanup() int {
+// Cleanup removes expired sessions from the specified namespace.
+// If namespace is empty, cleans up all namespaces.
+func (s *MemorySessionStore) Cleanup(namespace string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var expired []Session
 	for _, session := range s.sessions {
+		if namespace != "" && session.Namespace() != namespace {
+			continue
+		}
 		if session.IsExpired() {
 			expired = append(expired, session)
 		}

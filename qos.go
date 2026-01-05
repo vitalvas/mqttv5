@@ -479,23 +479,25 @@ func (m *StoredMessage) IsExpired() bool {
 	return time.Now().After(m.ExpiresAt)
 }
 
-// MessageStore defines the interface for message storage.
+// MessageStore defines the interface for message storage with namespace isolation.
 type MessageStore interface {
-	// Store stores a message with optional expiry.
-	Store(id string, msg *Message, expiry time.Duration) error
+	// Store stores a message with optional expiry in the specified namespace.
+	Store(namespace, id string, msg *Message, expiry time.Duration) error
 
-	// Get retrieves a message by ID.
-	Get(id string) (*Message, bool)
+	// Get retrieves a message by namespace and ID.
+	Get(namespace, id string) (*Message, bool)
 
-	// Exists checks if a message exists by ID.
-	Exists(id string) bool
+	// Exists checks if a message exists by namespace and ID.
+	Exists(namespace, id string) bool
 
-	// Delete deletes a message by ID.
-	Delete(id string) bool
+	// Delete deletes a message by namespace and ID.
+	Delete(namespace, id string) bool
 
-	// Cleanup removes expired messages.
-	Cleanup() int
+	// Cleanup removes expired messages from the specified namespace.
+	// If namespace is empty, cleans up all namespaces.
+	Cleanup(namespace string) int
 
-	// Count returns the number of stored messages.
-	Count() int
+	// Count returns the number of stored messages in the specified namespace.
+	// If namespace is empty, returns total count across all namespaces.
+	Count(namespace string) int
 }

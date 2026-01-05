@@ -212,8 +212,9 @@ func (m *SubscriptionManager) GetSubscriptions(clientID, namespace string) []Sub
 	return subs
 }
 
-// Match returns all matching subscriptions for a topic.
-func (m *SubscriptionManager) Match(topic string) []SubscriptionEntry {
+// match returns all matching subscriptions for a topic (internal use only).
+// This method does NOT filter by namespace - use MatchForDelivery for namespace-isolated matching.
+func (m *SubscriptionManager) match(topic string) []SubscriptionEntry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -247,7 +248,7 @@ type sharedGroupState struct {
 // - Apply RetainAsPublished if any matching subscription has it set
 // - For shared subscriptions, deliver to only one subscriber per share group (round-robin)
 func (m *SubscriptionManager) MatchForDelivery(topic, publisherID, publisherNamespace string) []SubscriptionEntry {
-	matches := m.Match(topic)
+	matches := m.match(topic)
 
 	// Separate shared and non-shared subscriptions
 	var regularMatches []SubscriptionEntry

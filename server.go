@@ -1851,7 +1851,7 @@ func (s *Server) sessionExpiryLoop() {
 		case <-s.done:
 			return
 		case <-ticker.C:
-			s.config.sessionStore.Cleanup()
+			s.config.sessionStore.Cleanup("") // Cleanup all namespaces
 		}
 	}
 }

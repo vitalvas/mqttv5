@@ -354,7 +354,7 @@ func TestMemorySessionStore(t *testing.T) {
 		_ = store.Create(testNS, NewMemorySession("client-2", testNS))
 		_ = store.Create(testNS, NewMemorySession("client-3", testNS))
 
-		sessions := store.List()
+		sessions := store.List(testNS)
 		assert.Len(t, sessions, 3)
 	})
 
@@ -373,10 +373,10 @@ func TestMemorySessionStore(t *testing.T) {
 		_ = store.Create(testNS, s2)
 		_ = store.Create(testNS, s3)
 
-		count := store.Cleanup()
+		count := store.Cleanup(testNS)
 		assert.Equal(t, 1, count)
 
-		sessions := store.List()
+		sessions := store.List(testNS)
 		assert.Len(t, sessions, 2)
 
 		_, err := store.Get(testNS, "client-1")
@@ -395,7 +395,7 @@ func TestMemorySessionStore(t *testing.T) {
 		s1.SetExpiryTime(time.Now().Add(-time.Hour))
 
 		_ = store.Create(testNS, s1)
-		_ = store.Cleanup()
+		_ = store.Cleanup(testNS)
 
 		assert.Contains(t, expiredIDs, "client-1")
 	})
@@ -486,7 +486,7 @@ func TestMemorySessionStoreNamespaceIsolation(t *testing.T) {
 		err = store.Create("tenant-b", NewMemorySession("client-1", "tenant-b"))
 		require.NoError(t, err)
 
-		sessions := store.List()
+		sessions := store.List("") // List all namespaces
 		assert.Len(t, sessions, 3)
 
 		// Verify we have sessions from both namespaces
@@ -513,7 +513,7 @@ func TestMemorySessionStoreNamespaceIsolation(t *testing.T) {
 		err = store.Create("tenant-b", validB)
 		require.NoError(t, err)
 
-		count := store.Cleanup()
+		count := store.Cleanup("") // Cleanup all namespaces
 		assert.Equal(t, 1, count)
 
 		// tenant-a session should be cleaned up
@@ -580,7 +580,7 @@ func TestMemorySessionStoreConcurrency(_ *testing.T) {
 			_ = store.Create(testNS, session)
 			_, _ = store.Get(testNS, session.ClientID())
 			_ = store.Update(testNS, session)
-			_ = store.List()
+			_ = store.List(testNS)
 			_ = store.Delete(testNS, session.ClientID())
 		}(i)
 	}
