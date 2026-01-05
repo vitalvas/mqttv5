@@ -1,6 +1,7 @@
 package mqttv5
 
 import (
+	"context"
 	"crypto/tls"
 	"testing"
 	"time"
@@ -250,5 +251,54 @@ func TestWithClientSessionFactory(t *testing.T) {
 
 		session := opts.sessionFactory("test-client", "")
 		assert.Equal(t, "test-client", session.ClientID())
+	})
+}
+
+func TestWithServers(t *testing.T) {
+	t.Run("single server", func(t *testing.T) {
+		opts := applyOptions(WithServers("tcp://server1:1883"))
+		assert.Equal(t, []string{"tcp://server1:1883"}, opts.servers)
+	})
+
+	t.Run("multiple servers", func(t *testing.T) {
+		opts := applyOptions(WithServers("tcp://server1:1883", "tcp://server2:1883"))
+		assert.Equal(t, []string{"tcp://server1:1883", "tcp://server2:1883"}, opts.servers)
+	})
+
+	t.Run("append to existing", func(t *testing.T) {
+		opts := applyOptions(
+			WithServers("tcp://server1:1883"),
+			WithServers("tcp://server2:1883"),
+		)
+		assert.Equal(t, []string{"tcp://server1:1883", "tcp://server2:1883"}, opts.servers)
+	})
+
+	t.Run("default is nil", func(t *testing.T) {
+		opts := defaultOptions()
+		assert.Nil(t, opts.servers)
+	})
+}
+
+func TestWithServerResolver(t *testing.T) {
+	t.Run("sets resolver", func(t *testing.T) {
+		resolver := func(_ context.Context) ([]string, error) {
+			return []string{"tcp://resolved:1883"}, nil
+		}
+		opts := applyOptions(WithServerResolver(resolver))
+		assert.NotNil(t, opts.serverResolver)
+
+		servers, err := opts.serverResolver(context.Background())
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"tcp://resolved:1883"}, servers)
+	})
+
+	t.Run("nil resolver", func(t *testing.T) {
+		opts := applyOptions(WithServerResolver(nil))
+		assert.Nil(t, opts.serverResolver)
+	})
+
+	t.Run("default is nil", func(t *testing.T) {
+		opts := defaultOptions()
+		assert.Nil(t, opts.serverResolver)
 	})
 }

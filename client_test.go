@@ -121,7 +121,7 @@ func TestDialSuccess(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+	client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 	require.NoError(t, err)
 	require.NotNil(t, client)
 	defer client.Close()
@@ -141,7 +141,7 @@ func TestDialWithCredentials(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := Dial("tcp://"+addr,
+	client, err := Dial(WithServers("tcp://"+addr),
 		WithClientID("test-client"),
 		WithCredentials("user", "pass"),
 	)
@@ -161,7 +161,7 @@ func TestDialConnectionRefused(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+	client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 	assert.Error(t, err)
 	assert.Nil(t, client)
 }
@@ -179,7 +179,7 @@ func TestDialContext(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		client, err := DialContext(ctx, "tcp://"+addr, WithClientID("ctx-client"))
+		client, err := DialContext(ctx, WithServers("tcp://"+addr), WithClientID("ctx-client"))
 		require.NoError(t, err)
 		require.NotNil(t, client)
 		defer client.Close()
@@ -191,7 +191,7 @@ func TestDialContext(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // Cancel immediately
 
-		client, err := DialContext(ctx, "tcp://127.0.0.1:65534")
+		client, err := DialContext(ctx, WithServers("tcp://127.0.0.1:65534"))
 		assert.Error(t, err)
 		assert.Nil(t, client)
 	})
@@ -216,7 +216,7 @@ func TestClose(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+	client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 	require.NoError(t, err)
 
 	err = client.Close()
@@ -236,7 +236,7 @@ func TestCloseIdempotent(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+	client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 	require.NoError(t, err)
 
 	err = client.Close()
@@ -265,7 +265,7 @@ func TestPublish(t *testing.T) {
 		})
 		defer cleanup()
 
-		client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+		client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -306,7 +306,7 @@ func TestPublish(t *testing.T) {
 		})
 		defer cleanup()
 
-		client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+		client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -327,7 +327,7 @@ func TestPublish(t *testing.T) {
 		})
 		defer cleanup()
 
-		client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+		client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 		require.NoError(t, err)
 
 		err = client.Close()
@@ -346,7 +346,7 @@ func TestPublish(t *testing.T) {
 		})
 		defer cleanup()
 
-		client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+		client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -382,7 +382,7 @@ func TestSubscribe(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+	client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 	require.NoError(t, err)
 	defer client.Close()
 
@@ -424,7 +424,7 @@ func TestUnsubscribe(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+	client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 	require.NoError(t, err)
 	defer client.Close()
 
@@ -449,7 +449,7 @@ func TestClientEventHandler(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := Dial("tcp://"+addr,
+	client, err := Dial(WithServers("tcp://"+addr),
 		WithClientID("test-client"),
 		OnEvent(func(_ *Client, ev error) {
 			mu.Lock()
@@ -488,7 +488,7 @@ func TestIsConnected(t *testing.T) {
 	})
 	defer cleanup()
 
-	client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+	client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 	require.NoError(t, err)
 
 	assert.True(t, client.IsConnected())
@@ -526,7 +526,7 @@ func TestMaxSubscriptions(t *testing.T) {
 		})
 		defer cleanup()
 
-		client, err := Dial("tcp://"+addr,
+		client, err := Dial(WithServers("tcp://"+addr),
 			WithClientID("test-client"),
 			WithMaxSubscriptions(2),
 		)
@@ -573,7 +573,7 @@ func TestMaxSubscriptions(t *testing.T) {
 		})
 		defer cleanup()
 
-		client, err := Dial("tcp://"+addr,
+		client, err := Dial(WithServers("tcp://"+addr),
 			WithClientID("test-client"),
 			WithMaxSubscriptions(1),
 		)
@@ -617,7 +617,7 @@ func TestMaxSubscriptions(t *testing.T) {
 		defer cleanup()
 
 		// WithMaxSubscriptions(0) means unlimited (default)
-		client, err := Dial("tcp://"+addr,
+		client, err := Dial(WithServers("tcp://"+addr),
 			WithClientID("test-client"),
 			WithMaxSubscriptions(0),
 		)
@@ -725,7 +725,7 @@ func TestClientGoroutineCleanupOnReconnect(t *testing.T) {
 		})
 		defer cleanup()
 
-		client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+		client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 		require.NoError(t, err)
 
 		// Verify initial context exists
@@ -760,7 +760,7 @@ func TestClientParentContextPropagation(t *testing.T) {
 
 		parentCtx, parentCancel := context.WithCancel(context.Background())
 
-		client, err := DialContext(parentCtx, "tcp://"+addr, WithClientID("test-client"))
+		client, err := DialContext(parentCtx, WithServers("tcp://"+addr), WithClientID("test-client"))
 		require.NoError(t, err)
 
 		assert.True(t, client.IsConnected())
@@ -790,7 +790,7 @@ func TestClientParentContextPropagation(t *testing.T) {
 		parentCtx, parentCancel := context.WithCancel(context.Background())
 		defer parentCancel()
 
-		client, err := DialContext(parentCtx, "tcp://"+addr, WithClientID("test-client"))
+		client, err := DialContext(parentCtx, WithServers("tcp://"+addr), WithClientID("test-client"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -802,7 +802,7 @@ func TestClientParentContextPropagation(t *testing.T) {
 func TestClientCancelOnDialErrors(t *testing.T) {
 	t.Run("cancel called on connection refused", func(t *testing.T) {
 		// Try to connect to a port that's not listening
-		_, err := Dial("tcp://127.0.0.1:59999",
+		_, err := Dial(WithServers("tcp://127.0.0.1:59999"),
 			WithClientID("test-client"),
 			WithConnectTimeout(100*time.Millisecond),
 		)
@@ -818,7 +818,7 @@ func TestClientCancelOnDialErrors(t *testing.T) {
 		})
 		defer cleanup()
 
-		_, err := Dial("tcp://"+addr, WithClientID("test-client"))
+		_, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 		assert.Error(t, err)
 		// Context should be canceled, no resource leaks
 	})
@@ -831,7 +831,7 @@ func TestClientCancelOnDialErrors(t *testing.T) {
 		})
 		defer cleanup()
 
-		_, err := Dial("tcp://"+addr,
+		_, err := Dial(WithServers("tcp://"+addr),
 			WithClientID("test-client"),
 			WithConnectTimeout(100*time.Millisecond),
 		)
@@ -873,7 +873,7 @@ func TestDeliverMessageNoDeadlock(t *testing.T) {
 		})
 		defer cleanup()
 
-		client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+		client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -953,7 +953,7 @@ func TestDeliverMessageNoDeadlock(t *testing.T) {
 		})
 		defer cleanup()
 
-		client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+		client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -1030,7 +1030,7 @@ func TestSubscriptionHandlerTiming(t *testing.T) {
 		})
 		defer cleanup()
 
-		client, err := Dial("tcp://"+addr, WithClientID("test-client"))
+		client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -1352,7 +1352,7 @@ func TestClientQoS2PubrecErrorHandling(t *testing.T) {
 		})
 		defer cleanup()
 
-		client, err := Dial("tcp://"+addr, WithClientID("test"))
+		client, err := Dial(WithServers("tcp://"+addr), WithClientID("test"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -1405,7 +1405,7 @@ func TestClientEnhancedAuthentication(t *testing.T) {
 			authData: []byte("client-first"),
 		}
 
-		client, err := Dial("tcp://"+addr,
+		client, err := Dial(WithServers("tcp://"+addr),
 			WithClientID("test"),
 			WithEnhancedAuthentication(auth),
 		)
@@ -1465,7 +1465,7 @@ func TestClientEnhancedAuthentication(t *testing.T) {
 			continueData: []byte("client-response"),
 		}
 
-		client, err := Dial("tcp://"+addr,
+		client, err := Dial(WithServers("tcp://"+addr),
 			WithClientID("test"),
 			WithEnhancedAuthentication(auth),
 		)
@@ -2771,4 +2771,140 @@ func TestHandlePublish(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDialValidation(t *testing.T) {
+	t.Run("no servers returns error", func(t *testing.T) {
+		_, err := Dial(WithClientID("test"))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no servers configured")
+	})
+
+	t.Run("with servers succeeds validation", func(t *testing.T) {
+		addr, cleanup := mockServer(t, func(conn net.Conn) {
+			_ = readConnect(t, conn)
+			_ = sendConnack(conn, false, ReasonSuccess)
+			time.Sleep(100 * time.Millisecond)
+		})
+		defer cleanup()
+
+		client, err := Dial(WithServers("tcp://" + addr))
+		require.NoError(t, err)
+		defer client.Close()
+		assert.True(t, client.IsConnected())
+	})
+
+	t.Run("with server resolver succeeds validation", func(t *testing.T) {
+		addr, cleanup := mockServer(t, func(conn net.Conn) {
+			_ = readConnect(t, conn)
+			_ = sendConnack(conn, false, ReasonSuccess)
+			time.Sleep(100 * time.Millisecond)
+		})
+		defer cleanup()
+
+		resolver := func(_ context.Context) ([]string, error) {
+			return []string{"tcp://" + addr}, nil
+		}
+
+		client, err := Dial(WithServerResolver(resolver))
+		require.NoError(t, err)
+		defer client.Close()
+		assert.True(t, client.IsConnected())
+	})
+}
+
+func TestNextServer(t *testing.T) {
+	t.Run("round-robin with static servers", func(t *testing.T) {
+		c := &Client{
+			options: &clientOptions{
+				servers: []string{"tcp://server1:1883", "tcp://server2:1883", "tcp://server3:1883"},
+			},
+		}
+
+		ctx := context.Background()
+
+		// First three calls should return servers in order
+		server, err := c.nextServer(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, "tcp://server1:1883", server)
+
+		server, err = c.nextServer(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, "tcp://server2:1883", server)
+
+		server, err = c.nextServer(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, "tcp://server3:1883", server)
+
+		// Fourth call wraps around
+		server, err = c.nextServer(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, "tcp://server1:1883", server)
+	})
+
+	t.Run("resolver called each time", func(t *testing.T) {
+		callCount := 0
+		c := &Client{
+			options: &clientOptions{
+				serverResolver: func(_ context.Context) ([]string, error) {
+					callCount++
+					return []string{fmt.Sprintf("tcp://resolved%d:1883", callCount)}, nil
+				},
+			},
+		}
+
+		ctx := context.Background()
+
+		server, _ := c.nextServer(ctx)
+		assert.Equal(t, "tcp://resolved1:1883", server)
+		assert.Equal(t, 1, callCount)
+
+		server, _ = c.nextServer(ctx)
+		assert.Equal(t, "tcp://resolved2:1883", server)
+		assert.Equal(t, 2, callCount)
+	})
+
+	t.Run("fallback to static on resolver error", func(t *testing.T) {
+		c := &Client{
+			options: &clientOptions{
+				servers: []string{"tcp://fallback:1883"},
+				serverResolver: func(_ context.Context) ([]string, error) {
+					return nil, errors.New("resolver failed")
+				},
+			},
+		}
+
+		ctx := context.Background()
+
+		server, err := c.nextServer(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, "tcp://fallback:1883", server)
+	})
+
+	t.Run("fallback to static on empty resolver result", func(t *testing.T) {
+		c := &Client{
+			options: &clientOptions{
+				servers: []string{"tcp://static:1883"},
+				serverResolver: func(_ context.Context) ([]string, error) {
+					return []string{}, nil
+				},
+			},
+		}
+
+		ctx := context.Background()
+
+		server, err := c.nextServer(ctx)
+		assert.NoError(t, err)
+		assert.Equal(t, "tcp://static:1883", server)
+	})
+
+	t.Run("error when no servers available", func(t *testing.T) {
+		c := &Client{
+			options: &clientOptions{},
+		}
+
+		_, err := c.nextServer(context.Background())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no servers available")
+	})
 }

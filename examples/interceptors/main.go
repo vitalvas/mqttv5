@@ -163,7 +163,8 @@ func run() error {
 	filter := &FilterInterceptor{blockedTopics: []string{"blocked/"}}
 
 	// Connect client with interceptors
-	client, err := mqttv5.Dial("tcp://localhost:1883",
+	client, err := mqttv5.Dial(
+		mqttv5.WithServers("tcp://localhost:1883"),
 		mqttv5.WithClientID("interceptor-demo"),
 		// Producer interceptors: process messages before publishing
 		mqttv5.WithProducerInterceptors(

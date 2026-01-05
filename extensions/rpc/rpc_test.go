@@ -38,7 +38,7 @@ func TestNewHandler(t *testing.T) {
 		addr, cleanup := setupTestServer(t)
 		defer cleanup()
 
-		client, err := mqttv5.Dial("tcp://"+addr, mqttv5.WithClientID("test-client"))
+		client, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("test-client"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -53,7 +53,7 @@ func TestNewHandler(t *testing.T) {
 		addr, cleanup := setupTestServer(t)
 		defer cleanup()
 
-		client, err := mqttv5.Dial("tcp://"+addr, mqttv5.WithClientID("test-client"))
+		client, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("test-client"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -74,12 +74,12 @@ func TestRequestResponse(t *testing.T) {
 		defer cleanup()
 
 		// Create requester client
-		requester, err := mqttv5.Dial("tcp://"+addr, mqttv5.WithClientID("requester"))
+		requester, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("requester"))
 		require.NoError(t, err)
 		defer requester.Close()
 
 		// Create responder client
-		responder, err := mqttv5.Dial("tcp://"+addr, mqttv5.WithClientID("responder"))
+		responder, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("responder"))
 		require.NoError(t, err)
 		defer responder.Close()
 
@@ -118,7 +118,7 @@ func TestRequestResponse(t *testing.T) {
 		addr, cleanup := setupTestServer(t)
 		defer cleanup()
 
-		client, err := mqttv5.Dial("tcp://"+addr, mqttv5.WithClientID("timeout-test"))
+		client, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("timeout-test"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -136,7 +136,7 @@ func TestRequestResponse(t *testing.T) {
 		addr, cleanup := setupTestServer(t)
 		defer cleanup()
 
-		client, err := mqttv5.Dial("tcp://"+addr, mqttv5.WithClientID("cancel-test"))
+		client, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("cancel-test"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -163,12 +163,12 @@ func TestMultipleSequentialRequests(t *testing.T) {
 	defer cleanup()
 
 	// Create requester client
-	requester, err := mqttv5.Dial("tcp://"+addr, mqttv5.WithClientID("sequential-requester"))
+	requester, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("sequential-requester"))
 	require.NoError(t, err)
 	defer requester.Close()
 
 	// Create responder client
-	responder, err := mqttv5.Dial("tcp://"+addr, mqttv5.WithClientID("sequential-responder"))
+	responder, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("sequential-responder"))
 	require.NoError(t, err)
 	defer responder.Close()
 
@@ -210,12 +210,12 @@ func TestCallWithHeaders(t *testing.T) {
 	defer cleanup()
 
 	// Create requester client
-	requester, err := mqttv5.Dial("tcp://"+addr, mqttv5.WithClientID("headers-requester"))
+	requester, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("headers-requester"))
 	require.NoError(t, err)
 	defer requester.Close()
 
 	// Create responder client
-	responder, err := mqttv5.Dial("tcp://"+addr, mqttv5.WithClientID("headers-responder"))
+	responder, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("headers-responder"))
 	require.NoError(t, err)
 	defer responder.Close()
 
@@ -280,7 +280,7 @@ func TestCallWithTimeout(t *testing.T) {
 	addr, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	client, err := mqttv5.Dial("tcp://"+addr, mqttv5.WithClientID("call-timeout-test"))
+	client, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("call-timeout-test"))
 	require.NoError(t, err)
 	defer client.Close()
 
@@ -301,7 +301,7 @@ func TestHandlerClose(t *testing.T) {
 	addr, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	client, err := mqttv5.Dial("tcp://"+addr, mqttv5.WithClientID("close-test"))
+	client, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("close-test"))
 	require.NoError(t, err)
 	defer client.Close()
 

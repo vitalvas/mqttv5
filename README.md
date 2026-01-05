@@ -22,6 +22,8 @@ Implements the [MQTT Version 5.0 OASIS Standard](https://docs.oasis-open.org/mqt
 - Keep-alive management
 - Flow control per MQTT v5.0 spec
 - Metrics collection
+- Multi-server support with round-robin selection
+- Dynamic service discovery (DNS SRV, registries)
 
 ## Installation
 
@@ -42,7 +44,8 @@ import (
 )
 
 func main() {
-    client, err := mqttv5.Dial("tcp://localhost:1883",
+    client, err := mqttv5.Dial(
+        mqttv5.WithServers("tcp://localhost:1883"),
         mqttv5.WithClientID("my-client"),
         mqttv5.WithKeepAlive(60),
     )
@@ -98,7 +101,8 @@ func main() {
 ### TLS
 
 ```go
-client, _ := mqttv5.Dial("tls://localhost:8883",
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("tls://localhost:8883"),
     mqttv5.WithTLS(&tls.Config{
         InsecureSkipVerify: true,
     }),
@@ -108,19 +112,83 @@ client, _ := mqttv5.Dial("tls://localhost:8883",
 ### WebSocket
 
 ```go
-client, _ := mqttv5.Dial("ws://localhost:8080/mqtt")
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("ws://localhost:8080/mqtt"),
+)
 ```
 
 ### Unix Socket
 
 ```go
-client, _ := mqttv5.Dial("unix:///var/run/mqtt.sock")
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("unix:///var/run/mqtt.sock"),
+)
 ```
 
 ### QUIC
 
 ```go
-client, _ := mqttv5.DialQUIC("localhost:8883", &tls.Config{}, nil)
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("quic://localhost:8883"),
+    mqttv5.WithTLS(&tls.Config{NextProtos: []string{"mqtt"}}),
+)
+```
+
+## Multi-Server and Service Discovery
+
+### Multiple Servers (Round-Robin)
+
+Connect to multiple servers with automatic failover:
+
+```go
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers(
+        "tcp://broker1:1883",
+        "tcp://broker2:1883",
+        "tcp://broker3:1883",
+    ),
+    mqttv5.WithAutoReconnect(true),
+)
+```
+
+Servers are tried in round-robin order on each connection/reconnection attempt.
+
+### Dynamic Service Discovery
+
+Use a resolver function for dynamic server discovery (DNS SRV, Consul, etc.):
+
+```go
+resolver := func(ctx context.Context) ([]string, error) {
+    // Example: DNS SRV lookup
+    _, addrs, err := net.DefaultResolver.LookupSRV(ctx, "mqtt", "tcp", "example.com")
+    if err != nil {
+        return nil, err
+    }
+
+    servers := make([]string, len(addrs))
+    for i, addr := range addrs {
+        servers[i] = fmt.Sprintf("tcp://%s:%d", addr.Target, addr.Port)
+    }
+    return servers, nil
+}
+
+client, _ := mqttv5.Dial(
+    mqttv5.WithServerResolver(resolver),
+    mqttv5.WithAutoReconnect(true),
+)
+```
+
+The resolver is called before each connection attempt, enabling dynamic discovery.
+
+### Combining Static and Dynamic
+
+Use both for fallback behavior:
+
+```go
+client, _ := mqttv5.Dial(
+    mqttv5.WithServerResolver(dynamicResolver),  // Tried first
+    mqttv5.WithServers("tcp://fallback:1883"),   // Fallback if resolver fails
+)
 ```
 
 ## Authentication
@@ -215,7 +283,8 @@ func (i *LoggingInterceptor) OnConsume(msg *mqttv5.Message) *mqttv5.Message {
     return msg
 }
 
-client, _ := mqttv5.Dial("tcp://localhost:1883",
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("tcp://localhost:1883"),
     mqttv5.WithProducerInterceptors(&LoggingInterceptor{}),
     mqttv5.WithConsumerInterceptors(&LoggingInterceptor{}),
 )

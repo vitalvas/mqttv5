@@ -21,7 +21,8 @@ func main() {
 
 func run() error {
 	// Connect to MQTT broker over WebSocket
-	client, err := mqttv5.Dial("ws://localhost:8080/mqtt",
+	client, err := mqttv5.Dial(
+		mqttv5.WithServers("ws://localhost:8080/mqtt"),
 		mqttv5.WithClientID("websocket-client-example"),
 		mqttv5.WithKeepAlive(60),
 		mqttv5.OnEvent(func(_ *mqttv5.Client, ev error) {

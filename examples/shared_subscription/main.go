@@ -83,7 +83,8 @@ func main() {
 func runSubscriber(ctx context.Context, id int, sharedFilter string, onMessage func()) {
 	clientID := fmt.Sprintf("shared-sub-%d", id)
 
-	client, err := mqttv5.Dial(brokerAddr,
+	client, err := mqttv5.Dial(
+		mqttv5.WithServers(brokerAddr),
 		mqttv5.WithClientID(clientID),
 		mqttv5.WithKeepAlive(60),
 		mqttv5.OnEvent(func(_ *mqttv5.Client, ev error) {
@@ -117,7 +118,8 @@ func runSubscriber(ctx context.Context, id int, sharedFilter string, onMessage f
 func runPublisher(ctx context.Context, topic string) {
 	clientID := "publisher"
 
-	client, err := mqttv5.Dial(brokerAddr,
+	client, err := mqttv5.Dial(
+		mqttv5.WithServers(brokerAddr),
 		mqttv5.WithClientID(clientID),
 		mqttv5.WithKeepAlive(60),
 		mqttv5.OnEvent(func(_ *mqttv5.Client, ev error) {

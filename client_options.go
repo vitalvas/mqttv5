@@ -1,6 +1,7 @@
 package mqttv5
 
 import (
+	"context"
 	"crypto/tls"
 	"time"
 )
@@ -11,6 +12,11 @@ import (
 // Return the duration to wait before the next attempt.
 // This allows implementing jitter, server hints, or custom strategies.
 type BackoffStrategy func(attempt int, currentBackoff time.Duration, err error) time.Duration
+
+// ServerResolver is a function that returns a list of server addresses.
+// It is called before each connection attempt to enable dynamic service discovery.
+// The addresses should be in URI format: scheme://host:port (e.g., "tcp://broker:1883").
+type ServerResolver func(ctx context.Context) ([]string, error)
 
 // clientOptions holds configuration for a Client.
 type clientOptions struct {
@@ -65,6 +71,10 @@ type clientOptions struct {
 
 	// Enhanced authentication
 	enhancedAuth ClientEnhancedAuthenticator
+
+	// Multi-server support
+	servers        []string       // Static server list
+	serverResolver ServerResolver // Dynamic server discovery
 }
 
 // defaultOptions returns options with sensible defaults.
@@ -295,6 +305,26 @@ func WithConsumerInterceptors(interceptors ...ConsumerInterceptor) Option {
 func WithEnhancedAuthentication(auth ClientEnhancedAuthenticator) Option {
 	return func(o *clientOptions) {
 		o.enhancedAuth = auth
+	}
+}
+
+// WithServers sets a static list of server addresses for connection attempts.
+// Servers are tried in round-robin order on each connection/reconnection.
+// Addresses should be in URI format: scheme://host:port (e.g., "tcp://broker:1883").
+// Multiple calls append to the existing list.
+func WithServers(servers ...string) Option {
+	return func(o *clientOptions) {
+		o.servers = append(o.servers, servers...)
+	}
+}
+
+// WithServerResolver sets a dynamic server resolver for service discovery.
+// The resolver is called before each connection/reconnection attempt.
+// If the resolver returns an error or empty list, static servers are used as fallback.
+// This enables integration with DNS SRV records, service registries, or custom discovery.
+func WithServerResolver(resolver ServerResolver) Option {
+	return func(o *clientOptions) {
+		o.serverResolver = resolver
 	}
 }
 

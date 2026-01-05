@@ -24,7 +24,8 @@ func run() error {
 	}
 
 	// Connect to MQTT broker with TLS
-	client, err := mqttv5.Dial("tls://localhost:8883",
+	client, err := mqttv5.Dial(
+		mqttv5.WithServers("tls://localhost:8883"),
 		mqttv5.WithClientID("tls-client-example"),
 		mqttv5.WithTLS(tlsConfig),
 		mqttv5.WithKeepAlive(60),

@@ -21,7 +21,8 @@ func main() {
 
 func run() error {
 	// Connect to MQTT broker with options
-	client, err := mqttv5.Dial("tcp://localhost:1883",
+	client, err := mqttv5.Dial(
+		mqttv5.WithServers("tcp://localhost:1883"),
 		mqttv5.WithClientID("simple-client-example"),
 		mqttv5.WithKeepAlive(60),
 		mqttv5.OnEvent(func(_ *mqttv5.Client, ev error) {

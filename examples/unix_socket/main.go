@@ -69,7 +69,8 @@ func run() error {
 	time.Sleep(100 * time.Millisecond)
 
 	// Connect client via Unix socket
-	client, err := mqttv5.Dial(fmt.Sprintf("unix://%s", socketPath),
+	client, err := mqttv5.Dial(
+		mqttv5.WithServers(fmt.Sprintf("unix://%s", socketPath)),
 		mqttv5.WithClientID("unix-socket-client"),
 		mqttv5.WithKeepAlive(60),
 	)

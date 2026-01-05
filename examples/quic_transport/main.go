@@ -93,7 +93,8 @@ func run() error {
 	}
 
 	// Connect client via QUIC
-	client, err := mqttv5.Dial("quic://127.0.0.1:8883",
+	client, err := mqttv5.Dial(
+		mqttv5.WithServers("quic://127.0.0.1:8883"),
 		mqttv5.WithClientID("quic-client"),
 		mqttv5.WithKeepAlive(60),
 		mqttv5.WithTLS(clientTLS),

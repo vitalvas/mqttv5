@@ -255,7 +255,7 @@ func TestBridgeManagerP2MPIntegration(t *testing.T) {
 		// Subscribe to local broker
 		var receivedMsgs []*Message
 		var mu sync.Mutex
-		localSubscriber, err := Dial("tcp://"+localListener.Addr().String(),
+		localSubscriber, err := Dial(WithServers("tcp://"+localListener.Addr().String()),
 			WithClientID("local-subscriber"),
 		)
 		require.NoError(t, err)
@@ -271,7 +271,7 @@ func TestBridgeManagerP2MPIntegration(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		// Publish to remote1 (sensors)
-		remote1Client, err := Dial("tcp://"+remote1Listener.Addr().String(),
+		remote1Client, err := Dial(WithServers("tcp://"+remote1Listener.Addr().String()),
 			WithClientID("remote1-publisher"),
 		)
 		require.NoError(t, err)
@@ -285,7 +285,7 @@ func TestBridgeManagerP2MPIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Publish to remote2 (alerts)
-		remote2Client, err := Dial("tcp://"+remote2Listener.Addr().String(),
+		remote2Client, err := Dial(WithServers("tcp://"+remote2Listener.Addr().String()),
 			WithClientID("remote2-publisher"),
 		)
 		require.NoError(t, err)

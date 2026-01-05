@@ -183,8 +183,11 @@ func (b *Bridge) Start() error {
 		opts = append(opts, WithCredentials(b.config.Username, b.config.Password))
 	}
 
+	// Add remote server address
+	opts = append(opts, WithServers(b.config.RemoteAddr))
+
 	// Connect to remote broker
-	client, err := DialContext(b.ctx, b.config.RemoteAddr, opts...)
+	client, err := DialContext(b.ctx, opts...)
 	if err != nil {
 		return err
 	}

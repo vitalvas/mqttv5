@@ -19,7 +19,9 @@ type MessageHandler func(msg *Message)
 type Client struct {
 	conn    net.Conn
 	options *clientOptions
-	addr    string
+
+	// Multi-server support
+	serverIndex uint32 // Atomic counter for round-robin server selection
 
 	// Session state
 	session            Session
@@ -72,19 +74,23 @@ type Client struct {
 }
 
 // Dial connects to an MQTT broker and returns a client.
-// The address should be in the format "scheme://host:port" where scheme is
-// "tcp", "ssl", "tls", "ws", or "wss".
-func Dial(addr string, opts ...Option) (*Client, error) {
-	return DialContext(context.Background(), addr, opts...)
+// Use WithServers() or WithServerResolver() to configure server addresses.
+func Dial(opts ...Option) (*Client, error) {
+	return DialContext(context.Background(), opts...)
 }
 
 // DialContext connects to an MQTT broker with a context.
 // The context controls the client's lifecycle - when canceled, the client will close.
-func DialContext(ctx context.Context, addr string, opts ...Option) (*Client, error) {
+// Use WithServers() or WithServerResolver() to configure server addresses.
+func DialContext(ctx context.Context, opts ...Option) (*Client, error) {
 	options := applyOptions(opts...)
 
+	// Validate that servers are configured
+	if len(options.servers) == 0 && options.serverResolver == nil {
+		return nil, errors.New("no servers configured: use WithServers() or WithServerResolver()")
+	}
+
 	c := &Client{
-		addr:                addr,
 		options:             options,
 		parentCtx:           ctx, // Store parent context for lifecycle management
 		subscriptions:       make(map[string]MessageHandler),
@@ -254,7 +260,14 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	// previous connection causing spurious ReasonReceiveMaxExceeded errors.
 	c.inboundFlowControl.Reset()
 
-	conn, err := c.dial(ctx)
+	// Get server address for this connection attempt
+	serverAddr, err := c.nextServer(ctx)
+	if err != nil {
+		c.cancel()
+		return false, fmt.Errorf("failed to get server: %w", err)
+	}
+
+	conn, err := c.dial(ctx, serverAddr)
 	if err != nil {
 		c.cancel()
 		return false, err
@@ -430,9 +443,40 @@ func (c *Client) applyConnackProperties(connack *ConnackPacket) error {
 	return nil
 }
 
-// dial creates the network connection.
-func (c *Client) dial(ctx context.Context) (net.Conn, error) {
-	u, err := url.Parse(c.addr)
+// nextServer returns the next server address to try using round-robin selection.
+// It calls the resolver if configured, then falls back to static servers.
+func (c *Client) nextServer(ctx context.Context) (string, error) {
+	var servers []string
+
+	// Try resolver first if configured
+	if c.options.serverResolver != nil {
+		resolvedServers, err := c.options.serverResolver(ctx)
+		if err == nil && len(resolvedServers) > 0 {
+			servers = resolvedServers
+		}
+		// If resolver fails, fall through to static servers
+	}
+
+	// Use static servers if no resolved servers
+	if len(servers) == 0 {
+		servers = c.options.servers
+	}
+
+	// Error if no servers available
+	if len(servers) == 0 {
+		return "", errors.New("no servers available")
+	}
+
+	// Round-robin selection using atomic increment
+	index := atomic.AddUint32(&c.serverIndex, 1) - 1
+	selectedIndex := index % uint32(len(servers))
+
+	return servers[selectedIndex], nil
+}
+
+// dial creates the network connection to the specified address.
+func (c *Client) dial(ctx context.Context, addr string) (net.Conn, error) {
+	u, err := url.Parse(addr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid address: %w", err)
 	}
@@ -472,7 +516,7 @@ func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 			wsDialer.Dialer.TLSClientConfig = c.options.tlsConfig
 		}
 		var wsConn Conn
-		wsConn, err = wsDialer.Dial(ctx, c.addr)
+		wsConn, err = wsDialer.Dial(ctx, addr)
 		if wsConn != nil {
 			conn = wsConn.(net.Conn)
 		}

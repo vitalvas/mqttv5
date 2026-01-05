@@ -520,7 +520,7 @@ func TestBridgeIntegration(t *testing.T) {
 		// Connect a subscriber to local broker to receive forwarded messages
 		var receivedMsg *Message
 		var mu sync.Mutex
-		localSubscriber, err := Dial("tcp://"+localListener.Addr().String(),
+		localSubscriber, err := Dial(WithServers("tcp://"+localListener.Addr().String()),
 			WithClientID("local-subscriber"),
 		)
 		require.NoError(t, err)
@@ -556,7 +556,7 @@ func TestBridgeIntegration(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		// Publish to remote broker
-		remoteClient, err := Dial("tcp://"+remoteListener.Addr().String(),
+		remoteClient, err := Dial(WithServers("tcp://"+remoteListener.Addr().String()),
 			WithClientID("remote-publisher"),
 		)
 		require.NoError(t, err)

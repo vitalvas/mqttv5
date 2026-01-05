@@ -35,7 +35,8 @@ func run() error {
 
 	// Connect to MQTT broker via QUIC
 	// Format: quic://host:port
-	client, err := mqttv5.Dial(fmt.Sprintf("quic://%s", address),
+	client, err := mqttv5.Dial(
+		mqttv5.WithServers(fmt.Sprintf("quic://%s", address)),
 		mqttv5.WithClientID("quic-client"),
 		mqttv5.WithKeepAlive(60),
 		mqttv5.WithTLS(tlsConfig),

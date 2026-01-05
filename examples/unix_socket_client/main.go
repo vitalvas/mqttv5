@@ -28,7 +28,8 @@ func run() error {
 
 	// Connect to MQTT broker via Unix socket
 	// Format: unix:///path/to/socket or unix://localhost/path/to/socket
-	client, err := mqttv5.Dial(fmt.Sprintf("unix://%s", socketPath),
+	client, err := mqttv5.Dial(
+		mqttv5.WithServers(fmt.Sprintf("unix://%s", socketPath)),
 		mqttv5.WithClientID("unix-client"),
 		mqttv5.WithKeepAlive(60),
 		mqttv5.OnEvent(func(_ *mqttv5.Client, ev error) {
