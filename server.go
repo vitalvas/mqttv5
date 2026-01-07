@@ -1146,7 +1146,7 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 	}()
 
 	// Convert to Message
-	msg := messageFromPublishPacket(pub, topic, effectiveQoS, namespace)
+	msg := messageFromPublishPacket(pub, topic, effectiveQoS, namespace, clientID)
 
 	// Apply consumer interceptors
 	msg = applyConsumerInterceptors(s.config.consumerInterceptors, msg)
@@ -2100,13 +2100,14 @@ func (s *Server) handleReauth(client *ServerClient, authPkt *AuthPacket, clientK
 }
 
 // messageFromPublishPacket creates a Message from a PublishPacket.
-func messageFromPublishPacket(pub *PublishPacket, topic string, effectiveQoS byte, namespace string) *Message {
+func messageFromPublishPacket(pub *PublishPacket, topic string, effectiveQoS byte, namespace, clientID string) *Message {
 	msg := &Message{
 		Topic:       topic,
 		Payload:     pub.Payload,
 		QoS:         effectiveQoS,
 		Retain:      pub.Retain,
 		Namespace:   namespace,
+		ClientID:    clientID,
 		PublishedAt: time.Now(),
 	}
 

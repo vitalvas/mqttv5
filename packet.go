@@ -66,46 +66,62 @@ type PacketWithProperties interface {
 // This is the user-facing struct with public fields for easy access.
 type Message struct {
 	// Topic is the topic name to publish to or received from.
+	// Context: Client/Server
 	Topic string
 
 	// Payload is the application message payload.
+	// Context: Client/Server
 	Payload []byte
 
 	// QoS is the Quality of Service level (0, 1, or 2).
+	// Context: Client/Server
 	QoS byte
 
 	// Retain indicates if this is a retained message.
+	// Context: Client/Server
 	Retain bool
 
 	// PayloadFormat indicates if the payload is UTF-8 encoded text (1) or unspecified bytes (0).
+	// Context: Client/Server
 	PayloadFormat byte
 
 	// MessageExpiry is the lifetime of the message in seconds.
 	// Zero means no expiry.
+	// Context: Client/Server
 	MessageExpiry uint32
 
 	// PublishedAt is when the message was originally published.
 	// Used to calculate remaining expiry on delivery.
+	// Context: Server (set internally when message is received)
 	PublishedAt time.Time
 
 	// ContentType is the MIME type of the payload.
+	// Context: Client/Server
 	ContentType string
 
 	// ResponseTopic is the topic for response messages.
+	// Context: Client/Server
 	ResponseTopic string
 
 	// CorrelationData is used to correlate request/response messages.
+	// Context: Client/Server
 	CorrelationData []byte
 
 	// UserProperties contains user-defined name-value pairs.
+	// Context: Client/Server
 	UserProperties []StringPair
 
 	// SubscriptionIdentifiers contains subscription identifiers from matching subscriptions.
-	// Only set when receiving messages.
+	// Context: Server (set when delivering messages to subscribers)
 	SubscriptionIdentifiers []uint32
 
 	// Namespace is the tenant namespace for multi-tenancy isolation.
+	// Context: Server (set internally for multi-tenancy)
 	Namespace string
+
+	// ClientID is the identifier of the client that sent this message.
+	// Context: Server (set when receiving messages from clients)
+	ClientID string
 }
 
 // Clone creates a deep copy of the message.
@@ -124,6 +140,7 @@ func (m *Message) Clone() *Message {
 		ContentType:   m.ContentType,
 		ResponseTopic: m.ResponseTopic,
 		Namespace:     m.Namespace,
+		ClientID:      m.ClientID,
 	}
 
 	if m.Payload != nil {
