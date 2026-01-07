@@ -1,6 +1,7 @@
 # RPC Extension for MQTT v5.0
 
-This package provides request/response (RPC) functionality for MQTT v5.0 clients using correlation data and response topic properties as defined in MQTT v5.0 specification Section 4.10.
+This package provides request/response (RPC) functionality for MQTT v5.0 clients using correlation data
+and response topic properties as defined in MQTT v5.0 specification Section 4.10.
 
 ## Features
 
@@ -105,7 +106,8 @@ handler, err := rpc.NewHandler(client, &rpc.HandlerOptions{
 
 ## Implementing a Responder (Client-Side)
 
-A client can act as a responder by subscribing to request topics and sending responses using the correlation data and response topic from incoming messages:
+A client can act as a responder by subscribing to request topics and sending responses
+using the correlation data and response topic from incoming messages:
 
 ```go
 client.Subscribe("service/echo", 0, func(msg *mqttv5.Message) {
@@ -128,7 +130,8 @@ client.Subscribe("service/echo", 0, func(msg *mqttv5.Message) {
 
 ## Handling RPC Requests (Broker-Side)
 
-The broker can intercept and handle RPC requests directly using the `OnMessage` callback. This is useful for implementing server-side services without requiring a separate client connection.
+The broker can intercept and handle RPC requests directly using the `OnMessage` callback.
+This is useful for implementing server-side services without requiring a separate client connection.
 
 ### Basic Server-Side Handler
 

@@ -176,6 +176,7 @@ This section highlights MQTT-related features available in other brokers that ar
 ### Planned vs Out of Scope
 
 **May be added in future:**
+
 - $SYS topics for broker statistics
 - Built-in rate limiting
 - Offline message queuing
@@ -183,6 +184,7 @@ This section highlights MQTT-related features available in other brokers that ar
 - Banned clients list
 
 **Intentionally out of scope:**
+
 - MQTT 3.1.1 (library focuses on MQTT 5.0 only)
 - Native clustering (use external orchestration like Kubernetes)
 - Web dashboard (use external monitoring tools)

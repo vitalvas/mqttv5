@@ -1,6 +1,7 @@
 # Metrics
 
-The MQTT v5.0 SDK provides built-in metrics collection using Go's `expvar` package. Metrics are automatically exposed at `/debug/vars` when using the standard `net/http` package.
+The MQTT v5.0 SDK provides built-in metrics collection using Go's `expvar` package.
+Metrics are automatically exposed at `/debug/vars` when using the standard `net/http` package.
 
 ## Available Metrics
 

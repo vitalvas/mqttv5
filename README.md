@@ -264,7 +264,8 @@ srv := mqttv5.NewServer(
 )
 ```
 
-Clients authenticated with namespace `tenant1` can only publish/subscribe within that namespace. Messages from `tenant1` are invisible to `tenant2`.
+Clients authenticated with namespace `tenant1` can only publish/subscribe within that namespace.
+Messages from `tenant1` are invisible to `tenant2`.
 
 ## Interceptors
 
