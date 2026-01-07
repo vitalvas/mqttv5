@@ -75,6 +75,10 @@ type clientOptions struct {
 	// Multi-server support
 	servers        []string       // Static server list
 	serverResolver ServerResolver // Dynamic server discovery
+
+	// Proxy configuration
+	proxyConfig  *ProxyConfig // Explicit proxy configuration
+	proxyFromEnv bool         // Use HTTP_PROXY/HTTPS_PROXY/NO_PROXY environment variables
 }
 
 // defaultOptions returns options with sensible defaults.
@@ -325,6 +329,36 @@ func WithServers(servers ...string) Option {
 func WithServerResolver(resolver ServerResolver) Option {
 	return func(o *clientOptions) {
 		o.serverResolver = resolver
+	}
+}
+
+// WithProxy sets a proxy server for client connections.
+// Supported proxy schemes: http, https (HTTP CONNECT), socks5.
+// Example: "http://proxy:8080", "socks5://proxy:1080"
+func WithProxy(proxyURL string) Option {
+	return func(o *clientOptions) {
+		o.proxyConfig = &ProxyConfig{URL: proxyURL}
+	}
+}
+
+// WithProxyAuth sets a proxy server with authentication credentials.
+// Supported proxy schemes: http, https (HTTP CONNECT), socks5.
+func WithProxyAuth(proxyURL, username, password string) Option {
+	return func(o *clientOptions) {
+		o.proxyConfig = &ProxyConfig{
+			URL:      proxyURL,
+			Username: username,
+			Password: password,
+		}
+	}
+}
+
+// WithProxyFromEnvironment enables automatic proxy detection from environment variables.
+// Uses HTTP_PROXY, HTTPS_PROXY, and NO_PROXY environment variables.
+// When enabled, the proxy is resolved for each connection attempt based on the target address.
+func WithProxyFromEnvironment(enabled bool) Option {
+	return func(o *clientOptions) {
+		o.proxyFromEnv = enabled
 	}
 }
 

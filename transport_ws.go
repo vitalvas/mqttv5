@@ -192,6 +192,14 @@ func NewWSDialer() *WSDialer {
 	}
 }
 
+// SetProxyFromEnvironment configures the dialer to use proxy from environment variables.
+// Uses HTTP_PROXY, HTTPS_PROXY, and NO_PROXY environment variables.
+func (d *WSDialer) SetProxyFromEnvironment() {
+	if d.Dialer != nil {
+		d.Dialer.Proxy = http.ProxyFromEnvironment
+	}
+}
+
 // WSHandler is an HTTP handler that upgrades connections to WebSocket for MQTT.
 type WSHandler struct {
 	// Upgrader is the WebSocket upgrader.

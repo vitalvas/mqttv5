@@ -4,14 +4,14 @@ Supported transport protocols for MQTT v5.0 connections.
 
 ## Overview
 
-| Transport | Client URI | Server Listener | TLS Required |
-|-----------|------------|-----------------|--------------|
-| TCP | `tcp://host:port` | `net.Listen("tcp", ...)` | No |
-| TLS | `tls://host:port` | `tls.Listen(...)` | Yes |
-| WebSocket | `ws://host:port/path` | `NewWSHandler(...)` | No |
-| WebSocket Secure | `wss://host:port/path` | `NewWSHandler(...)` + TLS | Yes |
-| Unix Socket | `unix:///path/to/sock` | `NewUnixListener(...)` | No |
-| QUIC | `quic://host:port` | `NewQUICListener(...)` | Yes |
+| Transport | Client URI | Server Listener | TLS Required | Proxy Support |
+|-----------|------------|-----------------|--------------|---------------|
+| TCP | `tcp://host:port` | `net.Listen("tcp", ...)` | No | HTTP, SOCKS5 |
+| TLS | `tls://host:port` | `tls.Listen(...)` | Yes | HTTP, SOCKS5 |
+| WebSocket | `ws://host:port/path` | `NewWSHandler(...)` | No | HTTP |
+| WebSocket Secure | `wss://host:port/path` | `NewWSHandler(...)` + TLS | Yes | HTTP |
+| Unix Socket | `unix:///path/to/sock` | `NewUnixListener(...)` | No | N/A |
+| QUIC | `quic://host:port` | `NewQUICListener(...)` | Yes | N/A |
 
 ## TCP
 
@@ -158,3 +158,46 @@ dialer := mqttv5.NewWSDialer()
 dialer.Header.Set("Authorization", "Bearer token")
 dialer.Dialer.HandshakeTimeout = 10 * time.Second
 ```
+
+## Proxy Support
+
+Client connections can be routed through HTTP CONNECT or SOCKS5 proxies.
+
+### HTTP Proxy
+
+```go
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("tcp://broker:1883"),
+    mqttv5.WithProxy("http://proxy:8080"),
+)
+```
+
+### SOCKS5 Proxy
+
+```go
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("tcp://broker:1883"),
+    mqttv5.WithProxyAuth("socks5://proxy:1080", "user", "pass"),
+)
+```
+
+### Environment Variables
+
+Automatically detect proxy from `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`:
+
+```go
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("tcp://broker:1883"),
+    mqttv5.WithProxyFromEnvironment(true),
+)
+```
+
+### Proxy Compatibility
+
+| Transport | HTTP CONNECT | SOCKS5 |
+|-----------|--------------|--------|
+| TCP | Yes | Yes |
+| TLS | Yes | Yes |
+| WebSocket | Yes | No |
+| Unix Socket | N/A | N/A |
+| QUIC | No | No |

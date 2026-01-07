@@ -75,6 +75,14 @@ All options for configuring an MQTT v5.0 client.
 |--------|---------|-------------|
 | `OnEvent(handler)` | - | Lifecycle event handler |
 
+## Proxy
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithProxy(url)` | - | Proxy server URL (http, socks5) |
+| `WithProxyAuth(url, user, pass)` | - | Proxy with authentication |
+| `WithProxyFromEnvironment(bool)` | false | Use HTTP_PROXY, HTTPS_PROXY, NO_PROXY |
+
 ## Examples
 
 ### Basic Connection
@@ -190,5 +198,32 @@ client, _ := mqttv5.Dial(
 client, _ := mqttv5.Dial(
     mqttv5.WithServers("quic://localhost:8883"),
     mqttv5.WithTLS(&tls.Config{NextProtos: []string{"mqtt"}}),
+)
+```
+
+### HTTP Proxy
+
+```go
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("tcp://broker:1883"),
+    mqttv5.WithProxy("http://proxy:8080"),
+)
+```
+
+### SOCKS5 Proxy
+
+```go
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("tcp://broker:1883"),
+    mqttv5.WithProxyAuth("socks5://proxy:1080", "user", "pass"),
+)
+```
+
+### Proxy from Environment
+
+```go
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("tcp://broker:1883"),
+    mqttv5.WithProxyFromEnvironment(true),
 )
 ```

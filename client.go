@@ -497,23 +497,50 @@ func (c *Client) dial(ctx context.Context, addr string) (net.Conn, error) {
 		}
 	}
 
+	// Resolve proxy configuration
+	proxyDialer, err := c.resolveProxy(addr)
+	if err != nil {
+		return nil, fmt.Errorf("proxy configuration error: %w", err)
+	}
+
 	var conn net.Conn
 	dialer := &net.Dialer{}
 
 	switch u.Scheme {
 	case "tcp", "mqtt":
-		conn, err = dialer.DialContext(ctx, "tcp", host)
+		if proxyDialer != nil {
+			conn, err = proxyDialer.DialContext(ctx, "tcp", host)
+		} else {
+			conn, err = dialer.DialContext(ctx, "tcp", host)
+		}
 	case "ssl", "tls", "mqtts":
 		tlsConfig := c.options.tlsConfig
 		if tlsConfig == nil {
 			tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		}
-		tlsDialer := &tls.Dialer{NetDialer: dialer, Config: tlsConfig}
-		conn, err = tlsDialer.DialContext(ctx, "tcp", host)
+		if proxyDialer != nil {
+			// Dial through proxy, then wrap with TLS
+			conn, err = proxyDialer.DialContext(ctx, "tcp", host)
+			if err == nil && conn != nil {
+				tlsConn := tls.Client(conn, tlsConfig)
+				if err = tlsConn.HandshakeContext(ctx); err != nil {
+					conn.Close()
+					return nil, fmt.Errorf("TLS handshake failed: %w", err)
+				}
+				conn = tlsConn
+			}
+		} else {
+			tlsDialer := &tls.Dialer{NetDialer: dialer, Config: tlsConfig}
+			conn, err = tlsDialer.DialContext(ctx, "tcp", host)
+		}
 	case "ws", "wss":
 		wsDialer := NewWSDialer()
 		if c.options.tlsConfig != nil && wsDialer.Dialer != nil {
 			wsDialer.Dialer.TLSClientConfig = c.options.tlsConfig
+		}
+		// Set proxy for WebSocket if configured
+		if proxyDialer != nil || c.options.proxyFromEnv {
+			wsDialer.SetProxyFromEnvironment()
 		}
 		var wsConn Conn
 		wsConn, err = wsDialer.Dial(ctx, addr)
@@ -522,6 +549,7 @@ func (c *Client) dial(ctx context.Context, addr string) (net.Conn, error) {
 		}
 	case "unix":
 		// Unix socket: unix:///path/to/socket or unix://localhost/path/to/socket
+		// Proxy is not applicable to unix sockets
 		socketPath := u.Path
 		if socketPath == "" {
 			socketPath = u.Host + u.Path
@@ -533,6 +561,7 @@ func (c *Client) dial(ctx context.Context, addr string) (net.Conn, error) {
 			conn = unixConn.(net.Conn)
 		}
 	case "quic":
+		// QUIC over proxy is not supported (UDP tunneling is complex)
 		quicDialer := NewQUICDialer(c.options.tlsConfig)
 		var quicConn Conn
 		quicConn, err = quicDialer.Dial(ctx, host)
@@ -548,6 +577,32 @@ func (c *Client) dial(ctx context.Context, addr string) (net.Conn, error) {
 	}
 
 	return conn, nil
+}
+
+// resolveProxy returns a ProxyDialer based on client configuration.
+// Returns nil if no proxy should be used.
+func (c *Client) resolveProxy(targetAddr string) (*ProxyDialer, error) {
+	// Check explicit proxy configuration first
+	if c.options.proxyConfig != nil {
+		return NewProxyDialer(
+			c.options.proxyConfig.URL,
+			c.options.proxyConfig.Username,
+			c.options.proxyConfig.Password,
+		)
+	}
+
+	// Check environment variables if enabled
+	if c.options.proxyFromEnv {
+		proxyURL, err := ProxyFromEnvironment(targetAddr)
+		if err != nil {
+			return nil, err
+		}
+		if proxyURL != nil {
+			return NewProxyDialer(proxyURL.String(), "", "")
+		}
+	}
+
+	return nil, nil
 }
 
 // Close disconnects from the broker and releases resources.
