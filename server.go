@@ -36,9 +36,18 @@ func (s *Server) setupSession(client *ServerClient, clientID, namespace string, 
 	return false
 }
 
-// authenticateClient performs authentication (standard or enhanced) and returns
-// the auth result, any assigned client ID, namespace, and whether authentication succeeded.
-func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clientID string, maxPacketSize uint32, logger Logger) (*AuthResult, string, string, bool) {
+// authClientResult contains the result of client authentication.
+type authClientResult struct {
+	authResult         *AuthResult
+	assignedClientID   string
+	namespace          string
+	tlsConnectionState *tls.ConnectionState
+	tlsIdentity        *TLSIdentity
+	ok                 bool
+}
+
+// authenticateClient performs authentication (standard or enhanced).
+func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clientID string, maxPacketSize uint32, logger Logger) authClientResult {
 	// Check for enhanced authentication (AuthMethod in CONNECT properties)
 	authMethod := connect.Props.GetString(PropAuthenticationMethod)
 	if authMethod != "" {
@@ -51,13 +60,13 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 				ReasonCode: ReasonBadAuthMethod,
 			}
 			WritePacket(conn, connack, maxPacketSize)
-			return nil, "", "", false
+			return authClientResult{}
 		}
 
 		// Perform enhanced authentication
 		enhancedResult, ok := s.performEnhancedAuth(conn, connect, clientID, authMethod, maxPacketSize, logger)
 		if !ok {
-			return nil, "", "", false
+			return authClientResult{}
 		}
 
 		// Convert enhanced auth result to standard auth result for CONNACK properties
@@ -80,14 +89,38 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 			if len(enhancedResult.AuthData) > 0 {
 				authResult.Properties.Set(PropAuthenticationData, enhancedResult.AuthData)
 			}
-			return authResult, enhancedResult.AssignedClientID, namespace, true
+			// Extract TLS info for authz
+			tlsState := getTLSConnectionState(conn)
+			var tlsIdentity *TLSIdentity
+			if s.config.tlsIdentityMapper != nil && tlsState != nil {
+				tlsIdentity, _ = s.config.tlsIdentityMapper.MapIdentity(authCtx, tlsState)
+			}
+			return authClientResult{
+				authResult:         authResult,
+				assignedClientID:   enhancedResult.AssignedClientID,
+				namespace:          namespace,
+				tlsConnectionState: tlsState,
+				tlsIdentity:        tlsIdentity,
+				ok:                 true,
+			}
 		}
-		return nil, "", DefaultNamespace, true
+		return authClientResult{namespace: DefaultNamespace, ok: true}
 	}
 
 	// Standard authentication
 	if s.config.auth != nil {
 		actx := buildAuthContext(conn, connect, clientID)
+
+		// Apply TLS identity mapper if configured
+		if s.config.tlsIdentityMapper != nil && actx.TLSConnectionState != nil {
+			identity, err := s.config.tlsIdentityMapper.MapIdentity(authCtx, actx.TLSConnectionState)
+			if err != nil {
+				logger.Warn("TLS identity mapping failed", LogFields{LogFieldError: err.Error()})
+				// Continue - let authenticator decide how to handle
+			}
+			actx.TLSIdentity = identity
+		}
+
 		result, err := s.config.auth.Authenticate(authCtx, actx)
 		if err != nil || result == nil || !result.Success {
 			reasonCode := ReasonNotAuthorized
@@ -101,7 +134,7 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 				ReasonCode: reasonCode,
 			}
 			WritePacket(conn, connack, maxPacketSize)
-			return nil, "", "", false
+			return authClientResult{}
 		}
 		logger.Debug("authentication successful", nil)
 		// Default empty namespace to DefaultNamespace
@@ -109,11 +142,28 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 		if namespace == "" {
 			namespace = DefaultNamespace
 		}
-		return result, result.AssignedClientID, namespace, true
+		return authClientResult{
+			authResult:         result,
+			assignedClientID:   result.AssignedClientID,
+			namespace:          namespace,
+			tlsConnectionState: actx.TLSConnectionState,
+			tlsIdentity:        actx.TLSIdentity,
+			ok:                 true,
+		}
 	}
 
-	// No authentication configured - use default namespace
-	return nil, "", DefaultNamespace, true
+	// No authentication configured - extract TLS info for authz
+	tlsState := getTLSConnectionState(conn)
+	var tlsIdentity *TLSIdentity
+	if s.config.tlsIdentityMapper != nil && tlsState != nil {
+		tlsIdentity, _ = s.config.tlsIdentityMapper.MapIdentity(authCtx, tlsState)
+	}
+	return authClientResult{
+		namespace:          DefaultNamespace,
+		tlsConnectionState: tlsState,
+		tlsIdentity:        tlsIdentity,
+		ok:                 true,
+	}
 }
 
 // underlyingConnGetter is an interface for connections that wrap another connection.
@@ -136,25 +186,20 @@ func buildAuthContext(conn net.Conn, connect *ConnectPacket, clientID string) *A
 		AuthData:      connect.Props.GetBinary(PropAuthenticationData),
 	}
 
-	// Extract TLS certificate information if available
-	// Check the connection directly first, then check underlying connection
-	// (for WebSocket connections that wrap TLS)
-	extractTLSInfo(conn, actx)
+	// Extract TLS connection state if available
+	actx.TLSConnectionState = getTLSConnectionState(conn)
 
 	return actx
 }
 
-// extractTLSInfo extracts TLS certificate information from a connection.
+// getTLSConnectionState extracts TLS connection state from a connection.
 // It handles both direct TLS connections and wrapped connections (e.g., WebSocket over TLS).
-func extractTLSInfo(conn net.Conn, actx *AuthContext) {
+// Returns nil for non-TLS connections.
+func getTLSConnectionState(conn net.Conn) *tls.ConnectionState {
 	// First, try direct TLS connection
 	if tlsConn, ok := conn.(*tls.Conn); ok {
 		state := tlsConn.ConnectionState()
-		if len(state.PeerCertificates) > 0 {
-			actx.TLSCommonName = state.PeerCertificates[0].Subject.CommonName
-			actx.TLSVerified = len(state.VerifiedChains) > 0
-		}
-		return
+		return &state
 	}
 
 	// Check if connection wraps another connection (e.g., WSConn wrapping tls.Conn)
@@ -162,12 +207,11 @@ func extractTLSInfo(conn net.Conn, actx *AuthContext) {
 		underlying := wrapper.UnderlyingConn()
 		if tlsConn, ok := underlying.(*tls.Conn); ok {
 			state := tlsConn.ConnectionState()
-			if len(state.PeerCertificates) > 0 {
-				actx.TLSCommonName = state.PeerCertificates[0].Subject.CommonName
-				actx.TLSVerified = len(state.VerifiedChains) > 0
-			}
+			return &state
 		}
 	}
+
+	return nil
 }
 
 // buildConnack creates a CONNACK packet with all required properties.
@@ -296,11 +340,12 @@ func (s *Server) ListenAndServe() error {
 	}
 
 	// Start background tasks
-	s.wg.Add(4)
+	s.wg.Add(5)
 	go s.keepAliveLoop()
 	go s.willLoop()
 	go s.qosRetryLoop()
 	go s.sessionExpiryLoop()
+	go s.credentialExpiryLoop()
 
 	// Start accept loop for each listener (all but last in goroutines)
 	for i, listener := range s.config.listeners {
@@ -541,6 +586,31 @@ func (s *Server) ClientCount() int {
 	return len(s.clients)
 }
 
+// GetClient returns the connected client with the given ID and namespace.
+// Returns nil if the client is not connected.
+// Use DefaultNamespace for clients in the default namespace.
+func (s *Server) GetClient(namespace, clientID string) *ServerClient {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.clients[NamespaceKey(namespace, clientID)]
+}
+
+// DisconnectClient disconnects a client with the given reason code.
+// Returns true if the client was found and disconnected, false if not found.
+// Use DefaultNamespace for clients in the default namespace.
+func (s *Server) DisconnectClient(namespace, clientID string, reason ReasonCode) bool {
+	s.mu.RLock()
+	client := s.clients[NamespaceKey(namespace, clientID)]
+	s.mu.RUnlock()
+
+	if client == nil {
+		return false
+	}
+
+	client.Disconnect(reason)
+	return true
+}
+
 // Addrs returns all listener network addresses.
 func (s *Server) Addrs() []net.Addr {
 	addrs := make([]net.Addr, len(s.config.listeners))
@@ -650,12 +720,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 
 	// Perform authentication (standard or enhanced)
-	authResult, newClientID, namespace, ok := s.authenticateClient(conn, connect, clientID, clientMaxPacketSize, logger)
-	if !ok {
+	authRes := s.authenticateClient(conn, connect, clientID, clientMaxPacketSize, logger)
+	if !authRes.ok {
 		return // Auth failed, connection closed
 	}
-	if newClientID != "" && newClientID != clientID {
-		clientID = newClientID
+	authResult := authRes.authResult
+	namespace := authRes.namespace
+	if authRes.assignedClientID != "" && authRes.assignedClientID != clientID {
+		clientID = authRes.assignedClientID
 		assignedClientID = clientID
 		connect.ClientID = clientID
 		logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
@@ -693,6 +765,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 	// Session Expiry Interval: stored for session management and will-delay interaction
 	// Set unconditionally (0 is the default meaning no session persistence)
 	client.SetSessionExpiryInterval(connect.Props.GetUint32(PropSessionExpiryInterval))
+
+	// Set credential expiry from authentication result (for cert/token-based expiry)
+	s.applyCredentialExpiry(client, authResult)
+
+	// Store TLS connection state and identity on client for authorization
+	client.SetTLSConnectionState(authRes.tlsConnectionState)
+	client.SetTLSIdentity(authRes.tlsIdentity)
 
 	// Handle session
 	sessionPresent := s.setupSession(client, clientID, namespace, connect.CleanStart)
@@ -1078,15 +1157,17 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 	effectiveQoS := pub.QoS
 	if s.config.authz != nil {
 		azCtx := &AuthzContext{
-			ClientID:   clientID,
-			Namespace:  namespace,
-			Username:   client.Username(),
-			Topic:      topic,
-			Action:     AuthzActionPublish,
-			QoS:        pub.QoS,
-			Retain:     pub.Retain,
-			RemoteAddr: client.Conn().RemoteAddr(),
-			LocalAddr:  client.Conn().LocalAddr(),
+			ClientID:           clientID,
+			Namespace:          namespace,
+			Username:           client.Username(),
+			Topic:              topic,
+			Action:             AuthzActionPublish,
+			QoS:                pub.QoS,
+			Retain:             pub.Retain,
+			RemoteAddr:         client.Conn().RemoteAddr(),
+			LocalAddr:          client.Conn().LocalAddr(),
+			TLSConnectionState: client.TLSConnectionState(),
+			TLSIdentity:        client.TLSIdentity(),
 		}
 		result, err := s.config.authz.Authorize(authCtx, azCtx)
 		if err != nil || result == nil || !result.Allowed {
@@ -1358,14 +1439,16 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 		// Authorization
 		if s.config.authz != nil {
 			azCtx := &AuthzContext{
-				ClientID:   clientID,
-				Namespace:  namespace,
-				Username:   client.Username(),
-				Topic:      subscription.TopicFilter,
-				Action:     AuthzActionSubscribe,
-				QoS:        subscription.QoS,
-				RemoteAddr: client.Conn().RemoteAddr(),
-				LocalAddr:  client.Conn().LocalAddr(),
+				ClientID:           clientID,
+				Namespace:          namespace,
+				Username:           client.Username(),
+				Topic:              subscription.TopicFilter,
+				Action:             AuthzActionSubscribe,
+				QoS:                subscription.QoS,
+				RemoteAddr:         client.Conn().RemoteAddr(),
+				LocalAddr:          client.Conn().LocalAddr(),
+				TLSConnectionState: client.TLSConnectionState(),
+				TLSIdentity:        client.TLSIdentity(),
 			}
 			result, err := s.config.authz.Authorize(authCtx, azCtx)
 			if err != nil || result == nil || !result.Allowed {
@@ -1853,6 +1936,53 @@ func (s *Server) sessionExpiryLoop() {
 		case <-ticker.C:
 			s.config.sessionStore.Cleanup("") // Cleanup all namespaces
 		}
+	}
+}
+
+// credentialExpiryLoop periodically checks for clients with expired credentials.
+// It disconnects clients whose certificates or tokens have expired.
+func (s *Server) credentialExpiryLoop() {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			s.checkCredentialExpiry()
+		}
+	}
+}
+
+// applyCredentialExpiry sets the credential expiry on a client from the auth result.
+func (s *Server) applyCredentialExpiry(client *ServerClient, authResult *AuthResult) {
+	if authResult != nil && !authResult.SessionExpiry.IsZero() {
+		client.SetCredentialExpiry(authResult.SessionExpiry)
+	}
+}
+
+// checkCredentialExpiry disconnects clients with expired credentials.
+func (s *Server) checkCredentialExpiry() {
+	// Collect expired clients while holding read lock
+	s.mu.RLock()
+	var expired []*ServerClient
+	for _, client := range s.clients {
+		if client.IsCredentialExpired() {
+			expired = append(expired, client)
+		}
+	}
+	s.mu.RUnlock()
+
+	// Disconnect expired clients without holding lock
+	for _, client := range expired {
+		s.config.logger.Info("disconnecting client due to credential expiry", LogFields{
+			LogFieldClientID:  client.ClientID(),
+			LogFieldNamespace: client.Namespace(),
+		})
+		client.Disconnect(ReasonAdminAction)
 	}
 }
 

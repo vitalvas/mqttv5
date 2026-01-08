@@ -49,6 +49,9 @@ This document compares the mqttv5 library with other popular open-source MQTT br
 |--------|--------|-----------|------|---------|--------|-----------|----------|------|
 | Username/Password | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | TLS Certificates | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| mTLS Identity Mapping | Yes | No | Plugin | No | No | Plugin | No | No |
+| Certificate CN Mapping | Yes | No | Plugin | No | No | Plugin | No | No |
+| Session expiration | Yes | No | No | No | No | No | No | No |
 | Enhanced Auth | Yes | Yes | Yes | Partial | Partial | Yes | No | No |
 | SCRAM-SHA-1 | Yes | No | Yes | No | No | No | Yes | No |
 | SCRAM-SHA-256 | Yes | No | Yes | No | No | No | Yes | Yes |
@@ -196,6 +199,7 @@ This section highlights MQTT-related features available in other brokers that ar
 - **Pure Go implementation** - no CGO dependencies, easy cross-compilation
 - **Library-first design** - build custom brokers or embed in applications
 - **Native namespace isolation** - built-in multi-tenancy support
+- **mTLS identity mapping** - pluggable certificate-to-identity mapping with session expiry
 - **SCRAM authentication** - includes SCRAM-SHA-512 (unique among compared brokers)
 - **RPC extension** - request/response pattern built-in
 - **Message interceptors** - Kafka-style producer/consumer interceptors

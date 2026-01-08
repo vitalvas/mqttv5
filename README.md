@@ -16,6 +16,7 @@ Implements the [MQTT Version 5.0 OASIS Standard](https://docs.oasis-open.org/mqt
 - Broker bridging with P2MP support
 - Transport: TCP, TLS, WebSocket, WSS, Unix Socket, QUIC
 - Pluggable authentication and authorization
+- mTLS with certificate identity mapping
 - Session persistence interface
 - Retained messages
 - Will messages
@@ -233,6 +234,58 @@ srv := mqttv5.NewServer(
     mqttv5.WithServerAuthz(&MyAuthz{}),
 )
 ```
+
+## mTLS Authentication
+
+Authenticate clients using TLS certificates with identity mapping:
+
+```go
+// Create TLS listener requiring client certificates
+tlsConfig := &tls.Config{
+    Certificates: []tls.Certificate{serverCert},
+    ClientCAs:    caPool,
+    ClientAuth:   tls.RequireAndVerifyClientCert,
+}
+listener, _ := tls.Listen("tcp", ":8883", tlsConfig)
+
+// Map certificate CN to username, OU to namespace
+mapper := mqttv5.TLSIdentityMapperFunc(func(_ context.Context, state *tls.ConnectionState) (*mqttv5.TLSIdentity, error) {
+    if state == nil || len(state.PeerCertificates) == 0 {
+        return nil, nil
+    }
+    cert := state.PeerCertificates[0]
+    identity := &mqttv5.TLSIdentity{Username: cert.Subject.CommonName}
+    if len(cert.Subject.OrganizationalUnit) > 0 {
+        identity.Namespace = cert.Subject.OrganizationalUnit[0]
+    }
+    return identity, nil
+})
+
+srv := mqttv5.NewServer(
+    mqttv5.WithListener(listener),
+    mqttv5.WithTLSIdentityMapper(mapper),
+    mqttv5.WithServerAuth(&MTLSAuthenticator{}),
+)
+```
+
+Access certificate in authenticator and set session expiry:
+
+```go
+func (a *MTLSAuth) Authenticate(ctx context.Context, c *mqttv5.AuthContext) (*mqttv5.AuthResult, error) {
+    if c.TLSIdentity == nil {
+        return &mqttv5.AuthResult{Success: false, ReasonCode: mqttv5.ReasonNotAuthorized}, nil
+    }
+
+    cert := c.TLSConnectionState.PeerCertificates[0]
+    return &mqttv5.AuthResult{
+        Success:       true,
+        Namespace:     c.TLSIdentity.Namespace,
+        SessionExpiry: cert.NotAfter, // Auto-disconnect when cert expires
+    }, nil
+}
+```
+
+See [mTLS documentation](docs/mtls.md) for more details.
 
 ## Multi-tenancy
 

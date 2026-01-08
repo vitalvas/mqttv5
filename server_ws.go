@@ -155,12 +155,14 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
 
 	// Perform authentication (standard or enhanced) - same as TCP path
-	authResult, newClientID, namespace, ok := s.authenticateClient(conn, connect, clientID, clientMaxPacketSize, logger)
-	if !ok {
+	authRes := s.authenticateClient(conn, connect, clientID, clientMaxPacketSize, logger)
+	if !authRes.ok {
 		return // Auth failed, connection closed
 	}
-	if newClientID != "" && newClientID != clientID {
-		clientID = newClientID
+	authResult := authRes.authResult
+	namespace := authRes.namespace
+	if authRes.assignedClientID != "" && authRes.assignedClientID != clientID {
+		clientID = authRes.assignedClientID
 		assignedClientID = clientID
 		connect.ClientID = clientID
 		logger = logger.WithFields(LogFields{LogFieldClientID: clientID})
@@ -197,6 +199,13 @@ func (s *WSServer) handleWSConn(conn Conn) {
 
 	// Session Expiry Interval: stored for session management and will-delay interaction
 	client.SetSessionExpiryInterval(connect.Props.GetUint32(PropSessionExpiryInterval))
+
+	// Set credential expiry from authentication result (for cert/token-based expiry)
+	s.applyCredentialExpiry(client, authResult)
+
+	// Store TLS connection state and identity on client for authorization
+	client.SetTLSConnectionState(authRes.tlsConnectionState)
+	client.SetTLSIdentity(authRes.tlsIdentity)
 
 	// Handle session
 	sessionPresent := s.setupSession(client, clientID, namespace, connect.CleanStart)

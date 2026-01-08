@@ -1,6 +1,7 @@
 package mqttv5
 
 import (
+	"crypto/tls"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,7 +27,10 @@ type ServerClient struct {
 	cleanStart            bool
 	keepAlive             uint16
 	maxPacketSize         uint32
-	sessionExpiryInterval uint32 // session expiry interval in seconds (from CONNECT or DISCONNECT)
+	sessionExpiryInterval uint32    // session expiry interval in seconds (from CONNECT or DISCONNECT)
+	credentialExpiry      time.Time // when credentials (cert/token) expire, zero means no expiry
+	tlsConnectionState    *tls.ConnectionState
+	tlsIdentity           *TLSIdentity
 }
 
 // NewServerClient creates a new server client.
@@ -121,6 +125,63 @@ func (c *ServerClient) SetSessionExpiryInterval(interval uint32) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.sessionExpiryInterval = interval
+}
+
+// CredentialExpiry returns when the client's credentials expire.
+// Returns zero time if no credential expiry is set.
+func (c *ServerClient) CredentialExpiry() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.credentialExpiry
+}
+
+// SetCredentialExpiry sets when the client's credentials expire.
+// The server will disconnect the client when this time is reached.
+// Use zero time to disable credential expiry.
+func (c *ServerClient) SetCredentialExpiry(expiry time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.credentialExpiry = expiry
+}
+
+// IsCredentialExpired returns true if the client's credentials have expired.
+func (c *ServerClient) IsCredentialExpired() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.credentialExpiry.IsZero() {
+		return false
+	}
+	return time.Now().After(c.credentialExpiry)
+}
+
+// TLSConnectionState returns the TLS connection state.
+// Returns nil for non-TLS connections.
+func (c *ServerClient) TLSConnectionState() *tls.ConnectionState {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tlsConnectionState
+}
+
+// SetTLSConnectionState sets the TLS connection state.
+func (c *ServerClient) SetTLSConnectionState(state *tls.ConnectionState) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tlsConnectionState = state
+}
+
+// TLSIdentity returns the TLS identity mapped from the certificate.
+// Returns nil if no identity mapper is configured or no identity was mapped.
+func (c *ServerClient) TLSIdentity() *TLSIdentity {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tlsIdentity
+}
+
+// SetTLSIdentity sets the TLS identity.
+func (c *ServerClient) SetTLSIdentity(identity *TLSIdentity) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.tlsIdentity = identity
 }
 
 // IsCleanDisconnect returns true if the client sent a DISCONNECT packet.

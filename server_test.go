@@ -2362,15 +2362,13 @@ func TestRemoveClient(t *testing.T) {
 	})
 }
 
-func TestExtractTLSInfo(t *testing.T) {
-	t.Run("non-TLS connection has no TLS info", func(t *testing.T) {
+func TestGetTLSConnectionState(t *testing.T) {
+	t.Run("non-TLS connection returns nil", func(t *testing.T) {
 		conn := &mockConn{}
-		actx := &AuthContext{}
 
-		extractTLSInfo(conn, actx)
+		state := getTLSConnectionState(conn)
 
-		assert.Empty(t, actx.TLSCommonName)
-		assert.False(t, actx.TLSVerified)
+		assert.Nil(t, state, "non-TLS connection should return nil state")
 	})
 }
 
@@ -3014,4 +3012,182 @@ func TestConnectPropertyValidation(t *testing.T) {
 			assert.Equal(t, tt.expectReject, isRejected, tt.description)
 		})
 	}
+}
+
+func TestServerClientCredentialExpiry(t *testing.T) {
+	t.Run("default credential expiry is zero", func(t *testing.T) {
+		client := &ServerClient{}
+		assert.True(t, client.CredentialExpiry().IsZero())
+		assert.False(t, client.IsCredentialExpired())
+	})
+
+	t.Run("set and get credential expiry", func(t *testing.T) {
+		client := &ServerClient{}
+		expiry := time.Now().Add(time.Hour)
+		client.SetCredentialExpiry(expiry)
+
+		assert.Equal(t, expiry, client.CredentialExpiry())
+		assert.False(t, client.IsCredentialExpired())
+	})
+
+	t.Run("credential is expired when past expiry time", func(t *testing.T) {
+		client := &ServerClient{}
+		expiry := time.Now().Add(-time.Second) // Already expired
+		client.SetCredentialExpiry(expiry)
+
+		assert.True(t, client.IsCredentialExpired())
+	})
+
+	t.Run("zero expiry means never expired", func(t *testing.T) {
+		client := &ServerClient{}
+		client.SetCredentialExpiry(time.Time{})
+
+		assert.False(t, client.IsCredentialExpired())
+	})
+}
+
+func TestServerGetClient(t *testing.T) {
+	t.Run("get existing client", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		client := &ServerClient{clientID: "test-client", namespace: DefaultNamespace}
+		srv.mu.Lock()
+		srv.clients[NamespaceKey(DefaultNamespace, "test-client")] = client
+		srv.mu.Unlock()
+
+		found := srv.GetClient(DefaultNamespace, "test-client")
+		assert.Equal(t, client, found)
+	})
+
+	t.Run("get non-existing client returns nil", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		found := srv.GetClient(DefaultNamespace, "non-existent")
+		assert.Nil(t, found)
+	})
+
+	t.Run("get client with different namespace returns nil", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		client := &ServerClient{clientID: "test-client", namespace: "tenant-a"}
+		srv.mu.Lock()
+		srv.clients[NamespaceKey("tenant-a", "test-client")] = client
+		srv.mu.Unlock()
+
+		found := srv.GetClient(DefaultNamespace, "test-client")
+		assert.Nil(t, found)
+
+		found = srv.GetClient("tenant-a", "test-client")
+		assert.Equal(t, client, found)
+	})
+}
+
+func TestServerDisconnectClient(t *testing.T) {
+	t.Run("disconnect existing client returns true", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		// Create a mock client with a connection
+		conn := &mockConn{}
+		client := &ServerClient{
+			clientID:  "test-client",
+			namespace: DefaultNamespace,
+			conn:      conn,
+		}
+		client.connected.Store(true)
+
+		srv.mu.Lock()
+		srv.clients[NamespaceKey(DefaultNamespace, "test-client")] = client
+		srv.mu.Unlock()
+
+		result := srv.DisconnectClient(DefaultNamespace, "test-client", ReasonAdminAction)
+		assert.True(t, result)
+	})
+
+	t.Run("disconnect non-existing client returns false", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		result := srv.DisconnectClient(DefaultNamespace, "non-existent", ReasonAdminAction)
+		assert.False(t, result)
+	})
+}
+
+func TestServerCheckCredentialExpiry(t *testing.T) {
+	t.Run("disconnects expired clients", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		// Create client with expired credentials
+		conn := &mockConn{}
+		client := &ServerClient{
+			clientID:  "expired-client",
+			namespace: DefaultNamespace,
+			conn:      conn,
+		}
+		client.connected.Store(true)
+		client.SetCredentialExpiry(time.Now().Add(-time.Second))
+
+		srv.mu.Lock()
+		srv.clients[NamespaceKey(DefaultNamespace, "expired-client")] = client
+		srv.mu.Unlock()
+
+		// Run credential expiry check
+		srv.checkCredentialExpiry()
+
+		// Client should have been marked for disconnect
+		assert.True(t, client.IsCleanDisconnect() || !client.IsConnected())
+	})
+
+	t.Run("does not disconnect non-expired clients", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		// Create client with future expiry
+		conn := &mockConn{}
+		client := &ServerClient{
+			clientID:  "valid-client",
+			namespace: DefaultNamespace,
+			conn:      conn,
+		}
+		client.connected.Store(true)
+		client.SetCredentialExpiry(time.Now().Add(time.Hour))
+
+		srv.mu.Lock()
+		srv.clients[NamespaceKey(DefaultNamespace, "valid-client")] = client
+		srv.mu.Unlock()
+
+		// Run credential expiry check
+		srv.checkCredentialExpiry()
+
+		// Client should still be connected
+		assert.True(t, client.IsConnected())
+	})
+
+	t.Run("does not disconnect clients without expiry", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		// Create client without credential expiry
+		conn := &mockConn{}
+		client := &ServerClient{
+			clientID:  "no-expiry-client",
+			namespace: DefaultNamespace,
+			conn:      conn,
+		}
+		client.connected.Store(true)
+
+		srv.mu.Lock()
+		srv.clients[NamespaceKey(DefaultNamespace, "no-expiry-client")] = client
+		srv.mu.Unlock()
+
+		// Run credential expiry check
+		srv.checkCredentialExpiry()
+
+		// Client should still be connected
+		assert.True(t, client.IsConnected())
+	})
 }

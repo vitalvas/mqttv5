@@ -47,8 +47,6 @@ func TestAuthContext(t *testing.T) {
 			Password:      []byte("pass"),
 			RemoteAddr:    remoteAddr,
 			LocalAddr:     localAddr,
-			TLSCommonName: "client.example.com",
-			TLSVerified:   true,
 			ConnectPacket: connectPkt,
 			AuthMethod:    "SCRAM-SHA-256",
 			AuthData:      []byte("auth-data"),
@@ -60,8 +58,6 @@ func TestAuthContext(t *testing.T) {
 		assert.Equal(t, []byte("pass"), authCtx.Password)
 		assert.Equal(t, remoteAddr, authCtx.RemoteAddr)
 		assert.Equal(t, localAddr, authCtx.LocalAddr)
-		assert.Equal(t, "client.example.com", authCtx.TLSCommonName)
-		assert.True(t, authCtx.TLSVerified)
 		assert.Equal(t, connectPkt, authCtx.ConnectPacket)
 		assert.Equal(t, "SCRAM-SHA-256", authCtx.AuthMethod)
 		assert.Equal(t, []byte("auth-data"), authCtx.AuthData)

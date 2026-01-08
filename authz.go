@@ -2,6 +2,7 @@ package mqttv5
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
 )
 
@@ -55,6 +56,14 @@ type AuthzContext struct {
 
 	// Namespace is the tenant namespace for multi-tenancy isolation.
 	Namespace string
+
+	// TLSConnectionState contains the full TLS connection state.
+	// Available when client connects over TLS. Nil for non-TLS connections.
+	TLSConnectionState *tls.ConnectionState
+
+	// TLSIdentity contains the mapped identity from the certificate.
+	// Set when a TLSIdentityMapper is configured and returns an identity.
+	TLSIdentity *TLSIdentity
 }
 
 // AuthzResult represents the result of an authorization check.

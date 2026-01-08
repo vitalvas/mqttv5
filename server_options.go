@@ -31,6 +31,7 @@ type serverConfig struct {
 	auth               Authenticator
 	enhancedAuth       EnhancedAuthenticator
 	authz              Authorizer
+	tlsIdentityMapper  TLSIdentityMapper
 	namespaceValidator NamespaceValidator
 	logger             Logger
 	metrics            MetricsCollector
@@ -129,6 +130,15 @@ func WithEnhancedAuth(auth EnhancedAuthenticator) ServerOption {
 func WithServerAuthz(authz Authorizer) ServerOption {
 	return func(c *serverConfig) {
 		c.authz = authz
+	}
+}
+
+// WithTLSIdentityMapper sets the TLS identity mapper for mTLS authentication.
+// The mapper is called during connection setup to extract identity from client certificates.
+// The mapped identity is available in AuthContext.TLSIdentity for use by authenticators.
+func WithTLSIdentityMapper(mapper TLSIdentityMapper) ServerOption {
+	return func(c *serverConfig) {
+		c.tlsIdentityMapper = mapper
 	}
 }
 

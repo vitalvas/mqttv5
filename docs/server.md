@@ -23,6 +23,7 @@ All options for configuring an MQTT v5.0 server/broker.
 | `WithServerAuth(auth)` | nil | Authenticator interface |
 | `WithEnhancedAuth(auth)` | nil | SASL-style authenticator |
 | `WithServerAuthz(authz)` | nil | Authorizer interface |
+| `WithTLSIdentityMapper(mapper)` | nil | TLS certificate identity mapper |
 | `WithNamespaceValidator(fn)` | default | Namespace validation function |
 
 ## Limits
@@ -152,6 +153,31 @@ tlsListener, _ := tls.Listen("tcp", ":8883", &tls.Config{Certificates: []tls.Cer
 
 srv := mqttv5.NewServer(mqttv5.WithListener(tlsListener))
 ```
+
+### mTLS Server
+
+```go
+cert, _ := tls.LoadX509KeyPair("server.crt", "server.key")
+caPool := x509.NewCertPool()
+caPEM, _ := os.ReadFile("ca.crt")
+caPool.AppendCertsFromPEM(caPEM)
+
+tlsConfig := &tls.Config{
+    Certificates: []tls.Certificate{cert},
+    ClientCAs:    caPool,
+    ClientAuth:   tls.RequireAndVerifyClientCert,
+    MinVersion:   tls.VersionTLS12,
+}
+tlsListener, _ := tls.Listen("tcp", ":8883", tlsConfig)
+
+srv := mqttv5.NewServer(
+    mqttv5.WithListener(tlsListener),
+    mqttv5.WithTLSIdentityMapper(&mqttv5.CommonNameMapper{}),
+    mqttv5.WithServerAuth(&MTLSAuthenticator{}),
+)
+```
+
+See [mTLS documentation](mtls.md) for detailed examples.
 
 ### WebSocket Server
 

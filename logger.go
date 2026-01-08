@@ -226,4 +226,7 @@ const (
 
 	// LogFieldBytes is the bytes field.
 	LogFieldBytes = "bytes"
+
+	// LogFieldNamespace is the namespace field for multi-tenancy.
+	LogFieldNamespace = "namespace"
 )

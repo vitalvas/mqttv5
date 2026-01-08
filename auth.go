@@ -2,7 +2,9 @@ package mqttv5
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
+	"time"
 )
 
 // AuthResult represents the result of an authentication attempt.
@@ -30,6 +32,12 @@ type AuthResult struct {
 
 	// Namespace is the tenant namespace for multi-tenancy isolation.
 	Namespace string
+
+	// SessionExpiry specifies when the client session should expire.
+	// The server will disconnect the client when this time is reached.
+	// Zero value means no credential-based expiry (session uses MQTT session expiry only).
+	// Use this for token expiry, certificate expiry, or time-limited access.
+	SessionExpiry time.Time
 }
 
 // AuthContext contains information about the authentication request.
@@ -49,11 +57,14 @@ type AuthContext struct {
 	// LocalAddr is the local address of the server connection.
 	LocalAddr net.Addr
 
-	// TLSCommonName is the common name from the client TLS certificate (if any).
-	TLSCommonName string
+	// TLSConnectionState contains the full TLS connection state.
+	// Available when client connects over TLS. Nil for non-TLS connections.
+	// Use PeerCertificates[0] to access the client certificate.
+	TLSConnectionState *tls.ConnectionState
 
-	// TLSVerified indicates if the client presented a valid TLS certificate.
-	TLSVerified bool
+	// TLSIdentity contains the mapped identity from the certificate.
+	// Set when a TLSIdentityMapper is configured and returns an identity.
+	TLSIdentity *TLSIdentity
 
 	// ConnectPacket provides access to the full CONNECT packet.
 	ConnectPacket *ConnectPacket
