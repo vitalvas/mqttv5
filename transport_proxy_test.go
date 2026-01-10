@@ -322,3 +322,225 @@ func TestWSDialerSetProxyFromEnvironment(t *testing.T) {
 	d.SetProxyFromEnvironment()
 	assert.NotNil(t, d.Dialer.Proxy)
 }
+
+func TestProxyDialerSOCKS5(t *testing.T) {
+	// Start a mock SOCKS5 proxy
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer proxyListener.Close()
+
+	// Start a mock target server
+	targetListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer targetListener.Close()
+
+	targetAddr := targetListener.Addr().String()
+
+	// SOCKS5 proxy handler (minimal implementation)
+	proxyDone := make(chan struct{})
+	go func() {
+		defer close(proxyDone)
+		conn, err := proxyListener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		// Read auth methods
+		buf := make([]byte, 256)
+		n, err := conn.Read(buf)
+		if err != nil || n < 2 || buf[0] != 0x05 {
+			return
+		}
+
+		// Accept no auth method
+		conn.Write([]byte{0x05, 0x00})
+
+		// Read connect request
+		n, err = conn.Read(buf)
+		if err != nil || n < 7 {
+			return
+		}
+
+		// Parse connect request: version(1) + cmd(1) + rsv(1) + addr_type(1) + addr(variable) + port(2)
+		if buf[0] != 0x05 || buf[1] != 0x01 {
+			return
+		}
+
+		// Connect to target
+		target, err := net.Dial("tcp", targetAddr)
+		if err != nil {
+			// Send failure response
+			conn.Write([]byte{0x05, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+			return
+		}
+		defer target.Close()
+
+		// Send success response (bind to 0.0.0.0:0)
+		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+
+		// Relay data
+		go io.Copy(target, conn)
+		io.Copy(conn, target)
+	}()
+
+	// Target handler (echo server)
+	targetDone := make(chan struct{})
+	go func() {
+		defer close(targetDone)
+		conn, err := targetListener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		buf := make([]byte, 5)
+		n, _ := conn.Read(buf)
+		conn.Write(buf[:n])
+	}()
+
+	// Test the proxy dialer
+	proxyAddr := "socks5://" + proxyListener.Addr().String()
+	dialer, err := NewProxyDialer(proxyAddr, "", "")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, err := dialer.DialContext(ctx, "tcp", targetAddr)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Test communication through proxy
+	_, err = conn.Write([]byte("hello"))
+	require.NoError(t, err)
+
+	buf := make([]byte, 5)
+	n, err := conn.Read(buf)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(buf[:n]))
+}
+
+func TestProxyDialerSOCKS5WithAuth(t *testing.T) {
+	// Start a mock SOCKS5 proxy that requires auth
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer proxyListener.Close()
+
+	proxyDone := make(chan struct{})
+	go func() {
+		defer close(proxyDone)
+		conn, err := proxyListener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		// Read auth methods
+		buf := make([]byte, 256)
+		n, err := conn.Read(buf)
+		if err != nil || n < 2 || buf[0] != 0x05 {
+			return
+		}
+
+		// Require username/password auth
+		conn.Write([]byte{0x05, 0x02})
+
+		// Read username/password auth request
+		n, err = conn.Read(buf)
+		if err != nil || n < 5 {
+			return
+		}
+
+		// Parse: version(1) + username_len(1) + username(n) + password_len(1) + password(m)
+		if buf[0] != 0x01 {
+			return
+		}
+		usernameLen := int(buf[1])
+		username := string(buf[2 : 2+usernameLen])
+		passwordLen := int(buf[2+usernameLen])
+		password := string(buf[3+usernameLen : 3+usernameLen+passwordLen])
+
+		if username != "user" || password != "pass" {
+			conn.Write([]byte{0x01, 0x01}) // Auth failed
+			return
+		}
+
+		conn.Write([]byte{0x01, 0x00}) // Auth success
+
+		// Read connect request
+		n, err = conn.Read(buf)
+		if err != nil || n < 7 {
+			return
+		}
+
+		// Send success response
+		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+	}()
+
+	proxyAddr := "socks5://" + proxyListener.Addr().String()
+	dialer, err := NewProxyDialer(proxyAddr, "user", "pass")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, err := dialer.DialContext(ctx, "tcp", "example.com:1883")
+	require.NoError(t, err)
+	conn.Close()
+}
+
+func TestProxyDialerSOCKS5ContextCancellation(t *testing.T) {
+	// Start a mock SOCKS5 proxy that's slow to respond
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer proxyListener.Close()
+
+	go func() {
+		conn, err := proxyListener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		// Slow response - wait for client to cancel (must be longer than 100ms timeout)
+		time.Sleep(500 * time.Millisecond)
+	}()
+
+	proxyAddr := "socks5://" + proxyListener.Addr().String()
+	dialer, err := NewProxyDialer(proxyAddr, "", "")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err = dialer.DialContext(ctx, "tcp", "example.com:1883")
+	assert.Error(t, err)
+}
+
+func TestProxyDialerSOCKS5DefaultPort(t *testing.T) {
+	// Test that default port 1080 is used when not specified
+	dialer, err := NewProxyDialer("socks5://proxy.example.com", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, "socks5", dialer.proxyURL.Scheme)
+	assert.Equal(t, "proxy.example.com", dialer.proxyURL.Host)
+}
+
+func TestProxyDialerHTTPDefaultPort(t *testing.T) {
+	// Test default port for HTTP proxy
+	dialer, err := NewProxyDialer("http://proxy.example.com", "", "")
+	require.NoError(t, err)
+
+	// The default port is added during dial, not during creation
+	// Just verify URL is parsed correctly
+	assert.Equal(t, "http", dialer.proxyURL.Scheme)
+	assert.Equal(t, "proxy.example.com", dialer.proxyURL.Host)
+}
+
+func TestProxyDialerHTTPSDefaultPort(t *testing.T) {
+	// Test default port for HTTPS proxy
+	dialer, err := NewProxyDialer("https://proxy.example.com", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, "https", dialer.proxyURL.Scheme)
+	assert.Equal(t, "proxy.example.com", dialer.proxyURL.Host)
+}

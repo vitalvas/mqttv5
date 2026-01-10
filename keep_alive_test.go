@@ -128,7 +128,10 @@ func TestKeepAliveManager(t *testing.T) {
 }
 
 func TestKeepAliveExpiration(t *testing.T) {
+	t.Parallel()
+
 	t.Run("client expires after timeout", func(t *testing.T) {
+		t.Parallel()
 		m := NewKeepAliveManager()
 		m.SetGraceFactor(1.0)
 
@@ -142,6 +145,7 @@ func TestKeepAliveExpiration(t *testing.T) {
 	})
 
 	t.Run("get expired clients", func(t *testing.T) {
+		t.Parallel()
 		m := NewKeepAliveManager()
 		m.SetGraceFactor(1.0)
 

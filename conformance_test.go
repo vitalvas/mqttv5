@@ -418,7 +418,10 @@ func TestPacketEncodingRoundTrip(t *testing.T) {
 
 // TestZeroAllocPaths verifies that hot code paths have minimal allocations.
 func TestZeroAllocPaths(t *testing.T) {
+	t.Parallel()
+
 	t.Run("fixed header encoding has minimal allocs", func(t *testing.T) {
+		t.Parallel()
 		header := FixedHeader{
 			PacketType:      PacketPUBLISH,
 			Flags:           0x00,

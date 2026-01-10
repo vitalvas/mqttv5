@@ -183,7 +183,10 @@ func TestWillMessageValidate(t *testing.T) {
 }
 
 func TestPendingWill(t *testing.T) {
+	t.Parallel()
+
 	t.Run("no delay", func(t *testing.T) {
+		t.Parallel()
 		will := &WillMessage{
 			Topic:         "test/topic",
 			DelayInterval: 0,
@@ -196,6 +199,7 @@ func TestPendingWill(t *testing.T) {
 	})
 
 	t.Run("with delay", func(t *testing.T) {
+		t.Parallel()
 		will := &WillMessage{
 			Topic:         "test/topic",
 			DelayInterval: 1,
@@ -212,6 +216,7 @@ func TestPendingWill(t *testing.T) {
 	})
 
 	t.Run("client ID", func(t *testing.T) {
+		t.Parallel()
 		will := &WillMessage{Topic: "test"}
 		pending := NewPendingWill("my-client", will)
 

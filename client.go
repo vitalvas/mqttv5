@@ -238,7 +238,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		// Wait for readLoop to finish if it was running
 		select {
 		case <-c.readDone:
-		case <-time.After(time.Second):
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
 
@@ -634,7 +634,7 @@ func (c *Client) CloseWithCode(code ReasonCode) error {
 	// Wait for readLoop to finish
 	select {
 	case <-c.readDone:
-	case <-time.After(time.Second):
+	case <-time.After(100 * time.Millisecond):
 	}
 
 	close(c.done)

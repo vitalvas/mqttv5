@@ -280,6 +280,7 @@ func TestServerClose(t *testing.T) {
 		var disconnectReceived bool
 		var disconnectReason ReasonCode
 		var mu sync.Mutex
+		disconnectDone := make(chan struct{})
 
 		srv := NewServer(
 			WithListener(listener),
@@ -313,6 +314,7 @@ func TestServerClose(t *testing.T) {
 
 		// Close server - should disconnect client with ReasonServerShuttingDown
 		go func() {
+			defer close(disconnectDone)
 			// Read DISCONNECT from server
 			pkt, _, err := ReadPacket(conn, 256*1024)
 			if err == nil {
@@ -328,7 +330,11 @@ func TestServerClose(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for disconnect to be processed
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-disconnectDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for disconnect")
+		}
 
 		mu.Lock()
 		assert.True(t, disconnectReceived)
@@ -2307,7 +2313,7 @@ func TestServerMaxConnectionsSendsCONNACK(t *testing.T) {
 		defer conn.Close()
 
 		// Set read deadline to avoid hanging
-		conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 
 		// Read the CONNACK packet that should be sent
 		var header FixedHeader
@@ -3189,5 +3195,816 @@ func TestServerCheckCredentialExpiry(t *testing.T) {
 
 		// Client should still be connected
 		assert.True(t, client.IsConnected())
+	})
+}
+
+// TestServerHandlePubrec tests the handlePubrec function
+func TestServerHandlePubrec(t *testing.T) {
+	testCases := []struct {
+		name       string
+		reasonCode ReasonCode
+	}{
+		{"handles valid PUBREC and sends PUBREL", ReasonSuccess},
+		{"handles PUBREC with error reason code", ReasonNoMatchingSubscribers},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := NewServer()
+			defer srv.Close()
+
+			conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+			connect := &ConnectPacket{ClientID: "test-client"}
+			client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+			// Track a QoS 2 message first
+			msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS2}
+			client.QoS2Tracker().TrackSend(1, msg)
+
+			// Handle PUBREC
+			pubrec := &PubrecPacket{PacketID: 1, ReasonCode: tc.reasonCode}
+			srv.handlePubrec(client, pubrec)
+
+			// Verify PUBREL was sent (per MQTT v5 spec, PUBREL is always sent)
+			written := conn.writeBuf.Bytes()
+			require.NotEmpty(t, written)
+
+			r := bytes.NewReader(written)
+			var header FixedHeader
+			_, err := header.Decode(r)
+			require.NoError(t, err)
+			assert.Equal(t, PacketPUBREL, header.PacketType)
+		})
+	}
+
+	t.Run("handles PUBREC for unknown packet ID", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		// Handle PUBREC for unknown packet ID
+		pubrec := &PubrecPacket{PacketID: 99, ReasonCode: ReasonSuccess}
+		srv.handlePubrec(client, pubrec)
+
+		// Should not crash, but also not send anything
+		written := conn.writeBuf.Bytes()
+		assert.Empty(t, written)
+	})
+}
+
+// TestServerHandlePubrel tests the handlePubrel function
+func TestServerHandlePubrel(t *testing.T) {
+	t.Run("handles valid PUBREL and sends PUBCOMP", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		// Track a received QoS 2 message and transition to awaiting PUBREL
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS2}
+		client.QoS2Tracker().TrackReceive(1, msg)
+		client.QoS2Tracker().SendPubrec(1)
+
+		// Handle PUBREL
+		pubrel := &PubrelPacket{PacketID: 1, ReasonCode: ReasonSuccess}
+		srv.handlePubrel(client, pubrel)
+
+		// Verify PUBCOMP was sent
+		written := conn.writeBuf.Bytes()
+		require.NotEmpty(t, written)
+
+		r := bytes.NewReader(written)
+		var header FixedHeader
+		_, err := header.Decode(r)
+		require.NoError(t, err)
+		assert.Equal(t, PacketPUBCOMP, header.PacketType)
+	})
+
+	t.Run("handles PUBREL for unknown packet ID with PacketIDNotFound", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		// Handle PUBREL for unknown packet ID
+		pubrel := &PubrelPacket{PacketID: 99, ReasonCode: ReasonSuccess}
+		srv.handlePubrel(client, pubrel)
+
+		// Should send PUBCOMP with PacketIDNotFound
+		written := conn.writeBuf.Bytes()
+		require.NotEmpty(t, written)
+
+		r := bytes.NewReader(written)
+		var header FixedHeader
+		_, err := header.Decode(r)
+		require.NoError(t, err)
+		assert.Equal(t, PacketPUBCOMP, header.PacketType)
+
+		var pubcomp PubcompPacket
+		_, err = pubcomp.Decode(r, header)
+		require.NoError(t, err)
+		assert.Equal(t, ReasonPacketIDNotFound, pubcomp.ReasonCode)
+	})
+
+	t.Run("delivers message on PUBREL", func(t *testing.T) {
+		var messageReceived bool
+		srv := NewServer(OnMessage(func(_ *ServerClient, _ *Message) {
+			messageReceived = true
+		}))
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		// Track a received QoS 2 message
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS2}
+		client.QoS2Tracker().TrackReceive(1, msg)
+		client.QoS2Tracker().SendPubrec(1)
+
+		// Handle PUBREL - should trigger message delivery
+		pubrel := &PubrelPacket{PacketID: 1, ReasonCode: ReasonSuccess}
+		srv.handlePubrel(client, pubrel)
+
+		assert.True(t, messageReceived)
+	})
+}
+
+// TestServerHandlePubcomp tests the handlePubcomp function
+func TestServerHandlePubcomp(t *testing.T) {
+	t.Run("handles valid PUBCOMP and releases flow control", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		// Set up flow control
+		client.SetReceiveMaximum(10)
+		client.FlowControl().TryAcquire()
+
+		// Track a sent QoS 2 message and transition states
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS2}
+		client.QoS2Tracker().TrackSend(1, msg)
+		client.QoS2Tracker().HandlePubrec(1)
+
+		initialAvailable := client.FlowControl().Available()
+
+		// Handle PUBCOMP
+		pubcomp := &PubcompPacket{PacketID: 1, ReasonCode: ReasonSuccess}
+		srv.handlePubcomp(client, pubcomp)
+
+		// Flow control should have released
+		assert.Greater(t, client.FlowControl().Available(), initialAvailable)
+
+		// Message should be removed from tracker
+		_, ok := client.QoS2Tracker().Get(1)
+		assert.False(t, ok)
+	})
+
+	t.Run("handles PUBCOMP for unknown packet ID", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		// Handle PUBCOMP for unknown packet ID - should not crash
+		pubcomp := &PubcompPacket{PacketID: 99, ReasonCode: ReasonSuccess}
+		srv.handlePubcomp(client, pubcomp)
+
+		// Should not panic or write anything
+		assert.Empty(t, conn.writeBuf.Bytes())
+	})
+}
+
+// TestServerHandleUnsubscribe tests the handleUnsubscribe function
+func TestServerHandleUnsubscribe(t *testing.T) {
+	t.Run("handles valid UNSUBSCRIBE and sends UNSUBACK", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.SetSession(NewMemorySession("test-client", DefaultNamespace))
+
+		// Add subscription first
+		srv.subs.Subscribe("test-client", DefaultNamespace, Subscription{TopicFilter: "test/topic", QoS: QoS1})
+
+		logger := &testLogger{}
+
+		// Handle UNSUBSCRIBE
+		unsub := &UnsubscribePacket{
+			PacketID:     1,
+			TopicFilters: []string{"test/topic"},
+		}
+		srv.handleUnsubscribe(client, unsub, logger)
+
+		// Verify UNSUBACK was sent
+		written := conn.writeBuf.Bytes()
+		require.NotEmpty(t, written)
+
+		r := bytes.NewReader(written)
+		var header FixedHeader
+		_, err = header.Decode(r)
+		require.NoError(t, err)
+		assert.Equal(t, PacketUNSUBACK, header.PacketType)
+	})
+
+	t.Run("handles UNSUBSCRIBE for non-existing subscription", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.SetSession(NewMemorySession("test-client", DefaultNamespace))
+
+		logger := &testLogger{}
+
+		// Handle UNSUBSCRIBE for non-existing subscription
+		unsub := &UnsubscribePacket{
+			PacketID:     1,
+			TopicFilters: []string{"non/existing"},
+		}
+		srv.handleUnsubscribe(client, unsub, logger)
+
+		// Verify UNSUBACK was sent with NoSubscriptionExisted
+		written := conn.writeBuf.Bytes()
+		require.NotEmpty(t, written)
+
+		r := bytes.NewReader(written)
+		var header FixedHeader
+		_, err = header.Decode(r)
+		require.NoError(t, err)
+
+		var unsuback UnsubackPacket
+		_, err = unsuback.Decode(r, header)
+		require.NoError(t, err)
+		require.Len(t, unsuback.ReasonCodes, 1)
+		assert.Equal(t, ReasonNoSubscriptionExisted, unsuback.ReasonCodes[0])
+	})
+
+	t.Run("handles UNSUBSCRIBE with invalid topic filter", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		logger := &testLogger{}
+
+		// Handle UNSUBSCRIBE with invalid topic filter
+		unsub := &UnsubscribePacket{
+			PacketID:     1,
+			TopicFilters: []string{""}, // Empty is invalid
+		}
+		srv.handleUnsubscribe(client, unsub, logger)
+
+		// Verify UNSUBACK was sent with TopicFilterInvalid
+		written := conn.writeBuf.Bytes()
+		require.NotEmpty(t, written)
+
+		r := bytes.NewReader(written)
+		var header FixedHeader
+		_, err = header.Decode(r)
+		require.NoError(t, err)
+
+		var unsuback UnsubackPacket
+		_, err = unsuback.Decode(r, header)
+		require.NoError(t, err)
+		require.Len(t, unsuback.ReasonCodes, 1)
+		assert.Equal(t, ReasonTopicFilterInvalid, unsuback.ReasonCodes[0])
+	})
+
+	t.Run("handles multiple topic filters in UNSUBSCRIBE", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.SetSession(NewMemorySession("test-client", DefaultNamespace))
+
+		// Add subscriptions
+		srv.subs.Subscribe("test-client", DefaultNamespace, Subscription{TopicFilter: "topic/a", QoS: QoS1})
+		srv.subs.Subscribe("test-client", DefaultNamespace, Subscription{TopicFilter: "topic/b", QoS: QoS0})
+
+		logger := &testLogger{}
+
+		// Handle UNSUBSCRIBE with multiple topics
+		unsub := &UnsubscribePacket{
+			PacketID:     1,
+			TopicFilters: []string{"topic/a", "topic/b", "topic/c"},
+		}
+		srv.handleUnsubscribe(client, unsub, logger)
+
+		// Verify UNSUBACK has correct reason codes
+		written := conn.writeBuf.Bytes()
+		require.NotEmpty(t, written)
+
+		r := bytes.NewReader(written)
+		var header FixedHeader
+		_, err = header.Decode(r)
+		require.NoError(t, err)
+
+		var unsuback UnsubackPacket
+		_, err = unsuback.Decode(r, header)
+		require.NoError(t, err)
+		require.Len(t, unsuback.ReasonCodes, 3)
+		assert.Equal(t, ReasonSuccess, unsuback.ReasonCodes[0])               // topic/a existed
+		assert.Equal(t, ReasonSuccess, unsuback.ReasonCodes[1])               // topic/b existed
+		assert.Equal(t, ReasonNoSubscriptionExisted, unsuback.ReasonCodes[2]) // topic/c didn't exist
+	})
+}
+
+// TestServerQueueOfflineMessage tests the queueOfflineMessage function
+func TestServerQueueOfflineMessage(t *testing.T) {
+	t.Run("queues message for offline client with session", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		// Create a session in the store
+		session := NewMemorySession("test-client", DefaultNamespace)
+		srv.config.sessionStore.Create(DefaultNamespace, session)
+
+		// Queue a message
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS1}
+		srv.queueOfflineMessage(DefaultNamespace, "test-client", msg)
+
+		// Verify message was queued
+		pendingMsgs := session.PendingMessages()
+		assert.Len(t, pendingMsgs, 1)
+	})
+
+	t.Run("does nothing for client without session", func(_ *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		// Queue a message for non-existent client - should not panic
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS1}
+		srv.queueOfflineMessage(DefaultNamespace, "non-existent", msg)
+	})
+}
+
+// TestServerDeliverPendingMessages tests the deliverPendingMessages function
+func TestServerDeliverPendingMessages(t *testing.T) {
+	t.Run("delivers pending messages to reconnected client", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		session := NewMemorySession("test-client", DefaultNamespace)
+		client.SetSession(session)
+
+		// Add pending message
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS1}
+		session.AddPendingMessage(1, msg)
+
+		// Deliver pending messages
+		srv.deliverPendingMessages(client, session)
+
+		// Verify message was sent
+		written := conn.writeBuf.Bytes()
+		assert.NotEmpty(t, written)
+
+		// Pending messages should be cleared
+		assert.Empty(t, session.PendingMessages())
+	})
+
+	t.Run("discards expired messages", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		session := NewMemorySession("test-client", DefaultNamespace)
+		client.SetSession(session)
+
+		// Add expired message
+		msg := &Message{
+			Topic:         "test/topic",
+			Payload:       []byte("data"),
+			QoS:           QoS1,
+			MessageExpiry: 1,                                // 1 second
+			PublishedAt:   time.Now().Add(-2 * time.Second), // Published 2 seconds ago
+		}
+		session.AddPendingMessage(1, msg)
+
+		// Deliver pending messages
+		srv.deliverPendingMessages(client, session)
+
+		// No message should be sent (expired)
+		written := conn.writeBuf.Bytes()
+		assert.Empty(t, written)
+	})
+}
+
+// TestServerRestoreInflightMessages tests the restoreInflightMessages function
+func TestServerRestoreInflightMessages(t *testing.T) {
+	t.Run("restores QoS 1 messages with DUP flag", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.SetReceiveMaximum(10)
+
+		session := NewMemorySession("test-client", DefaultNamespace)
+		client.SetSession(session)
+
+		// Add inflight QoS 1 message
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS1}
+		session.AddInflightQoS1(1, &QoS1Message{PacketID: 1, Message: msg})
+
+		logger := &testLogger{}
+
+		// Restore inflight messages
+		srv.restoreInflightMessages(client, session, logger)
+
+		// Verify PUBLISH was sent with DUP flag
+		written := conn.writeBuf.Bytes()
+		require.NotEmpty(t, written)
+
+		r := bytes.NewReader(written)
+		var header FixedHeader
+		_, err := header.Decode(r)
+		require.NoError(t, err)
+		assert.Equal(t, PacketPUBLISH, header.PacketType)
+
+		var pub PublishPacket
+		_, err = pub.Decode(r, header)
+		require.NoError(t, err)
+		assert.True(t, pub.DUP)
+		assert.Equal(t, uint16(1), pub.PacketID)
+	})
+
+	t.Run("restores QoS 2 messages awaiting PUBREC with DUP flag", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.SetReceiveMaximum(10)
+
+		session := NewMemorySession("test-client", DefaultNamespace)
+		client.SetSession(session)
+
+		// Add inflight QoS 2 message awaiting PUBREC
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS2}
+		session.AddInflightQoS2(1, &QoS2Message{
+			PacketID: 1,
+			Message:  msg,
+			State:    QoS2AwaitingPubrec,
+			IsSender: true,
+		})
+
+		logger := &testLogger{}
+
+		// Restore inflight messages
+		srv.restoreInflightMessages(client, session, logger)
+
+		// Verify PUBLISH was sent with DUP flag
+		written := conn.writeBuf.Bytes()
+		require.NotEmpty(t, written)
+
+		r := bytes.NewReader(written)
+		var header FixedHeader
+		_, err := header.Decode(r)
+		require.NoError(t, err)
+		assert.Equal(t, PacketPUBLISH, header.PacketType)
+
+		var pub PublishPacket
+		_, err = pub.Decode(r, header)
+		require.NoError(t, err)
+		assert.True(t, pub.DUP)
+		assert.Equal(t, QoS2, pub.QoS)
+	})
+
+	t.Run("restores QoS 2 messages awaiting PUBCOMP with PUBREL", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.SetReceiveMaximum(10)
+
+		session := NewMemorySession("test-client", DefaultNamespace)
+		client.SetSession(session)
+
+		// Add inflight QoS 2 message awaiting PUBCOMP
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS2}
+		session.AddInflightQoS2(1, &QoS2Message{
+			PacketID: 1,
+			Message:  msg,
+			State:    QoS2AwaitingPubcomp,
+			IsSender: true,
+		})
+
+		logger := &testLogger{}
+
+		// Restore inflight messages
+		srv.restoreInflightMessages(client, session, logger)
+
+		// Verify PUBREL was sent
+		written := conn.writeBuf.Bytes()
+		require.NotEmpty(t, written)
+
+		r := bytes.NewReader(written)
+		var header FixedHeader
+		_, err := header.Decode(r)
+		require.NoError(t, err)
+		assert.Equal(t, PacketPUBREL, header.PacketType)
+	})
+
+	t.Run("restores receiver-side QoS 2 messages", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.SetInboundReceiveMaximum(10)
+
+		session := NewMemorySession("test-client", DefaultNamespace)
+		client.SetSession(session)
+
+		// Add inflight receiver-side QoS 2 message
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS2}
+		session.AddInflightQoS2(1, &QoS2Message{
+			PacketID: 1,
+			Message:  msg,
+			State:    QoS2AwaitingPubrel,
+			IsSender: false,
+		})
+
+		logger := &testLogger{}
+
+		// Restore inflight messages
+		srv.restoreInflightMessages(client, session, logger)
+
+		// Should restore to tracker (no packet sent for receiver side)
+		_, ok := client.QoS2Tracker().Get(1)
+		assert.True(t, ok)
+	})
+}
+
+// testLogger is a simple logger for testing
+type testLogger struct {
+	level LogLevel
+}
+
+func (l *testLogger) Debug(_ string, _ LogFields)   {}
+func (l *testLogger) Info(_ string, _ LogFields)    {}
+func (l *testLogger) Warn(_ string, _ LogFields)    {}
+func (l *testLogger) Error(_ string, _ LogFields)   {}
+func (l *testLogger) WithFields(_ LogFields) Logger { return l }
+func (l *testLogger) Level() LogLevel               { return l.level }
+func (l *testLogger) SetLevel(level LogLevel)       { l.level = level }
+
+// TestServerHandleReauth tests the handleReauth function
+func TestServerHandleReauth(t *testing.T) {
+	t.Run("reauth with unsupported method disconnects client", func(t *testing.T) {
+		enhancedAuth := &testEnhancedAuthEmptyNamespace{}
+		srv := NewServer(WithEnhancedAuth(enhancedAuth))
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.connected.Store(true)
+
+		srv.mu.Lock()
+		srv.clients[NamespaceKey(DefaultNamespace, "test-client")] = client
+		srv.mu.Unlock()
+
+		logger := &testLogger{}
+
+		// Send AUTH with unsupported method
+		authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
+		authPkt.Props.Set(PropAuthenticationMethod, "UNSUPPORTED")
+
+		srv.handleReauth(client, authPkt, NamespaceKey(DefaultNamespace, "test-client"), logger)
+
+		// Client should be disconnected
+		assert.False(t, client.IsConnected())
+	})
+
+	t.Run("reauth with empty method disconnects client", func(t *testing.T) {
+		enhancedAuth := &testEnhancedAuthEmptyNamespace{}
+		srv := NewServer(WithEnhancedAuth(enhancedAuth))
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.connected.Store(true)
+
+		srv.mu.Lock()
+		srv.clients[NamespaceKey(DefaultNamespace, "test-client")] = client
+		srv.mu.Unlock()
+
+		logger := &testLogger{}
+
+		// Send AUTH without method
+		authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
+
+		srv.handleReauth(client, authPkt, NamespaceKey(DefaultNamespace, "test-client"), logger)
+
+		// Client should be disconnected
+		assert.False(t, client.IsConnected())
+	})
+
+	t.Run("successful reauth sends success AUTH", func(t *testing.T) {
+		enhancedAuth := &testEnhancedAuthEmptyNamespace{}
+		srv := NewServer(WithEnhancedAuth(enhancedAuth))
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.connected.Store(true)
+
+		srv.mu.Lock()
+		srv.clients[NamespaceKey(DefaultNamespace, "test-client")] = client
+		srv.mu.Unlock()
+
+		// Register keep-alive to prevent nil pointer
+		srv.keepAlive.Register(NamespaceKey(DefaultNamespace, "test-client"), 60)
+
+		logger := &testLogger{}
+
+		// Send AUTH with supported method
+		authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
+		authPkt.Props.Set(PropAuthenticationMethod, "PLAIN")
+
+		srv.handleReauth(client, authPkt, NamespaceKey(DefaultNamespace, "test-client"), logger)
+
+		// Should send success AUTH
+		written := conn.writeBuf.Bytes()
+		require.NotEmpty(t, written)
+
+		r := bytes.NewReader(written)
+		var header FixedHeader
+		_, err := header.Decode(r)
+		require.NoError(t, err)
+		assert.Equal(t, PacketAUTH, header.PacketType)
+
+		var respAuth AuthPacket
+		_, err = respAuth.Decode(r, header)
+		require.NoError(t, err)
+		assert.Equal(t, ReasonSuccess, respAuth.ReasonCode)
+	})
+}
+
+// TestServerResolvePublishTopic tests the resolvePublishTopic function
+func TestServerResolvePublishTopic(t *testing.T) {
+	t.Run("resolves topic without alias", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.SetTopicAliasMax(10, 0)
+
+		pub := &PublishPacket{Topic: "test/topic"}
+
+		topic, reason := srv.resolvePublishTopic(client, pub)
+		assert.Equal(t, ReasonSuccess, reason)
+		assert.Equal(t, "test/topic", topic)
+	})
+
+	t.Run("resolves topic with new alias", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.SetTopicAliasMax(10, 0)
+
+		pub := &PublishPacket{Topic: "test/topic"}
+		pub.Props.Set(PropTopicAlias, uint16(1))
+
+		topic, reason := srv.resolvePublishTopic(client, pub)
+		assert.Equal(t, ReasonSuccess, reason)
+		assert.Equal(t, "test/topic", topic)
+	})
+
+	t.Run("resolves topic using existing alias", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.SetTopicAliasMax(10, 0)
+
+		// First, set the alias
+		pub1 := &PublishPacket{Topic: "test/topic"}
+		pub1.Props.Set(PropTopicAlias, uint16(1))
+		topic, reason := srv.resolvePublishTopic(client, pub1)
+		assert.Equal(t, ReasonSuccess, reason)
+		assert.Equal(t, "test/topic", topic)
+
+		// Now use the alias without topic
+		pub2 := &PublishPacket{Topic: ""}
+		pub2.Props.Set(PropTopicAlias, uint16(1))
+		topic, reason = srv.resolvePublishTopic(client, pub2)
+		assert.Equal(t, ReasonSuccess, reason)
+		assert.Equal(t, "test/topic", topic)
+	})
+
+	t.Run("returns error for invalid alias", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.SetTopicAliasMax(10, 0)
+
+		// Use alias that was never set
+		pub := &PublishPacket{Topic: ""}
+		pub.Props.Set(PropTopicAlias, uint16(5))
+
+		_, reason := srv.resolvePublishTopic(client, pub)
+		assert.Equal(t, ReasonTopicAliasInvalid, reason)
+	})
+
+	t.Run("returns error for empty topic without alias", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		pub := &PublishPacket{Topic: ""}
+
+		_, reason := srv.resolvePublishTopic(client, pub)
+		assert.Equal(t, ReasonProtocolError, reason)
+	})
+}
+
+// TestServerValidatePublishFlags tests the validatePublishFlags function
+func TestServerValidatePublishFlags(t *testing.T) {
+	t.Run("accepts valid QoS and retain", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		pub := &PublishPacket{QoS: QoS1, Retain: true}
+		reason := srv.validatePublishFlags(pub)
+		assert.Equal(t, ReasonSuccess, reason)
+	})
+
+	t.Run("rejects QoS above server max", func(t *testing.T) {
+		srv := NewServer(WithMaxQoS(QoS1))
+		defer srv.Close()
+
+		pub := &PublishPacket{QoS: QoS2}
+		reason := srv.validatePublishFlags(pub)
+		assert.Equal(t, ReasonQoSNotSupported, reason)
+	})
+
+	t.Run("rejects retain when not available", func(t *testing.T) {
+		srv := NewServer(WithRetainAvailable(false))
+		defer srv.Close()
+
+		pub := &PublishPacket{Retain: true}
+		reason := srv.validatePublishFlags(pub)
+		assert.Equal(t, ReasonRetainNotSupported, reason)
 	})
 }
