@@ -832,3 +832,405 @@ func TestBridgeDirectionFiltering(t *testing.T) {
 		bridge.ForwardToRemote(msg)
 	})
 }
+
+func TestBridgeForwardToRemoteSuccess(t *testing.T) {
+	// Create local and remote servers
+	localListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer localListener.Close()
+
+	remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer remoteListener.Close()
+
+	localSrv := NewServer(WithListener(localListener))
+	go localSrv.ListenAndServe()
+	defer localSrv.Close()
+
+	remoteSrv := NewServer(WithListener(remoteListener))
+	go remoteSrv.ListenAndServe()
+	defer remoteSrv.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create a subscriber on remote to verify messages arrive
+	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
+	require.NoError(t, err)
+	defer remoteSubscriber.Close()
+
+	received := make(chan *Message, 1)
+	err = remoteSubscriber.Subscribe("remote/#", 0, func(msg *Message) {
+		received <- msg
+	})
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create bridge with OUT direction
+	config := BridgeConfig{
+		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		ClientID:   "forward-test-bridge",
+		Topics: []BridgeTopic{
+			{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionOut, QoS: 0},
+		},
+	}
+
+	bridge, err := NewBridge(localSrv, config)
+	require.NoError(t, err)
+
+	err = bridge.Start()
+	require.NoError(t, err)
+	defer bridge.Stop()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Forward a message
+	msg := &Message{
+		Topic:       "local/sensor/temp",
+		Payload:     []byte("25.5"),
+		ContentType: "text/plain",
+	}
+	bridge.ForwardToRemote(msg)
+
+	// Verify message was forwarded with remapped topic
+	select {
+	case fwdMsg := <-received:
+		assert.Equal(t, "remote/sensor/temp", fwdMsg.Topic)
+		assert.Equal(t, []byte("25.5"), fwdMsg.Payload)
+		// Verify bridge property was added
+		found := false
+		for _, prop := range fwdMsg.UserProperties {
+			if prop.Key == "x-bridge-id" {
+				found = true
+				assert.Equal(t, "forward-test-bridge", prop.Value)
+			}
+		}
+		assert.True(t, found, "bridge property should be added")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for forwarded message")
+	}
+}
+
+func TestBridgeForwardToRemoteWithBothDirection(t *testing.T) {
+	localListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer localListener.Close()
+
+	remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer remoteListener.Close()
+
+	localSrv := NewServer(WithListener(localListener))
+	go localSrv.ListenAndServe()
+	defer localSrv.Close()
+
+	remoteSrv := NewServer(WithListener(remoteListener))
+	go remoteSrv.ListenAndServe()
+	defer remoteSrv.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
+	require.NoError(t, err)
+	defer remoteSubscriber.Close()
+
+	received := make(chan *Message, 1)
+	err = remoteSubscriber.Subscribe("cloud/#", 0, func(msg *Message) {
+		received <- msg
+	})
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create bridge with BOTH direction
+	config := BridgeConfig{
+		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		ClientID:   "both-direction-bridge",
+		Topics: []BridgeTopic{
+			{LocalPrefix: "device", RemotePrefix: "cloud", Direction: BridgeDirectionBoth, QoS: 1},
+		},
+	}
+
+	bridge, err := NewBridge(localSrv, config)
+	require.NoError(t, err)
+
+	err = bridge.Start()
+	require.NoError(t, err)
+	defer bridge.Stop()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Forward a message - should work with BridgeDirectionBoth
+	msg := &Message{
+		Topic:   "device/status",
+		Payload: []byte("online"),
+	}
+	bridge.ForwardToRemote(msg)
+
+	select {
+	case fwdMsg := <-received:
+		assert.Equal(t, "cloud/status", fwdMsg.Topic)
+		assert.Equal(t, []byte("online"), fwdMsg.Payload)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for forwarded message")
+	}
+}
+
+func TestBridgeForwardToRemoteTopicMismatch(t *testing.T) {
+	localListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer localListener.Close()
+
+	remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer remoteListener.Close()
+
+	localSrv := NewServer(WithListener(localListener))
+	go localSrv.ListenAndServe()
+	defer localSrv.Close()
+
+	remoteSrv := NewServer(WithListener(remoteListener))
+	go remoteSrv.ListenAndServe()
+	defer remoteSrv.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
+	require.NoError(t, err)
+	defer remoteSubscriber.Close()
+
+	received := make(chan *Message, 1)
+	err = remoteSubscriber.Subscribe("#", 0, func(msg *Message) {
+		received <- msg
+	})
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	config := BridgeConfig{
+		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		ClientID:   "mismatch-bridge",
+		Topics: []BridgeTopic{
+			{LocalPrefix: "sensors", RemotePrefix: "data", Direction: BridgeDirectionOut},
+		},
+	}
+
+	bridge, err := NewBridge(localSrv, config)
+	require.NoError(t, err)
+
+	err = bridge.Start()
+	require.NoError(t, err)
+	defer bridge.Stop()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Forward a message that doesn't match the configured prefix
+	msg := &Message{
+		Topic:   "other/topic",
+		Payload: []byte("data"),
+	}
+	bridge.ForwardToRemote(msg)
+
+	// Should not receive anything since topic doesn't match
+	select {
+	case <-received:
+		t.Fatal("should not receive message for non-matching topic")
+	case <-time.After(200 * time.Millisecond):
+		// Expected - no message should be forwarded
+	}
+}
+
+func TestBridgeForwardToRemoteWithTopicRemapper(t *testing.T) {
+	localListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer localListener.Close()
+
+	remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer remoteListener.Close()
+
+	localSrv := NewServer(WithListener(localListener))
+	go localSrv.ListenAndServe()
+	defer localSrv.Close()
+
+	remoteSrv := NewServer(WithListener(remoteListener))
+	go remoteSrv.ListenAndServe()
+	defer remoteSrv.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
+	require.NoError(t, err)
+	defer remoteSubscriber.Close()
+
+	received := make(chan *Message, 1)
+	err = remoteSubscriber.Subscribe("custom/#", 0, func(msg *Message) {
+		received <- msg
+	})
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create bridge with custom topic remapper
+	config := BridgeConfig{
+		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		ClientID:   "remapper-bridge",
+		Topics: []BridgeTopic{
+			{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionOut},
+		},
+		TopicRemapper: func(topic string, direction BridgeDirection) string {
+			if direction == BridgeDirectionOut {
+				return "custom/" + topic
+			}
+			return ""
+		},
+	}
+
+	bridge, err := NewBridge(localSrv, config)
+	require.NoError(t, err)
+
+	err = bridge.Start()
+	require.NoError(t, err)
+	defer bridge.Stop()
+
+	time.Sleep(50 * time.Millisecond)
+
+	msg := &Message{
+		Topic:   "local/test",
+		Payload: []byte("remapped"),
+	}
+	bridge.ForwardToRemote(msg)
+
+	select {
+	case fwdMsg := <-received:
+		// Custom remapper should transform topic
+		assert.Equal(t, "custom/local/test", fwdMsg.Topic)
+		assert.Equal(t, []byte("remapped"), fwdMsg.Payload)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for forwarded message")
+	}
+}
+
+func TestBridgeForwardToRemoteEmptyNamespace(t *testing.T) {
+	localListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer localListener.Close()
+
+	remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer remoteListener.Close()
+
+	localSrv := NewServer(WithListener(localListener))
+	go localSrv.ListenAndServe()
+	defer localSrv.Close()
+
+	remoteSrv := NewServer(WithListener(remoteListener))
+	go remoteSrv.ListenAndServe()
+	defer remoteSrv.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
+	require.NoError(t, err)
+	defer remoteSubscriber.Close()
+
+	received := make(chan *Message, 1)
+	err = remoteSubscriber.Subscribe("remote/#", 0, func(msg *Message) {
+		received <- msg
+	})
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Bridge with default namespace (empty = DefaultNamespace)
+	config := BridgeConfig{
+		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		ClientID:   "namespace-bridge",
+		Topics: []BridgeTopic{
+			{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionOut},
+		},
+	}
+
+	bridge, err := NewBridge(localSrv, config)
+	require.NoError(t, err)
+
+	err = bridge.Start()
+	require.NoError(t, err)
+	defer bridge.Stop()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Message with empty namespace should default to DefaultNamespace and match
+	msg := &Message{
+		Topic:     "local/data",
+		Payload:   []byte("test"),
+		Namespace: "", // Empty = DefaultNamespace
+	}
+	bridge.ForwardToRemote(msg)
+
+	select {
+	case fwdMsg := <-received:
+		assert.Equal(t, "remote/data", fwdMsg.Topic)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for forwarded message")
+	}
+}
+
+func TestBridgeForwardToRemotePublishError(t *testing.T) {
+	localListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer localListener.Close()
+
+	remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer remoteListener.Close()
+
+	// Use MemoryMetrics to track errors
+	memMetrics := NewMemoryMetrics()
+	localSrv := NewServer(WithListener(localListener), WithMetrics(memMetrics))
+	go localSrv.ListenAndServe()
+	defer localSrv.Close()
+
+	remoteSrv := NewServer(WithListener(remoteListener))
+	go remoteSrv.ListenAndServe()
+	defer remoteSrv.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	config := BridgeConfig{
+		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		ClientID:   "error-bridge",
+		Topics: []BridgeTopic{
+			{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionOut},
+		},
+	}
+
+	bridge, err := NewBridge(localSrv, config)
+	require.NoError(t, err)
+
+	err = bridge.Start()
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Close the client to simulate publish error
+	bridge.client.Close()
+
+	// Keep bridge running state but client is closed
+	bridge.running.Store(true)
+
+	// Record errors before
+	errorsBefore := memMetrics.BridgeErrorsTotal()
+
+	// This should trigger the error path in ForwardToRemote
+	msg := &Message{
+		Topic:   "local/test",
+		Payload: []byte("test"),
+	}
+	// Should not panic, just log error and return
+	bridge.ForwardToRemote(msg)
+
+	// Verify metrics recorded the error
+	errorsAfter := memMetrics.BridgeErrorsTotal()
+	assert.Greater(t, errorsAfter, errorsBefore, "BridgeError should be incremented")
+}
