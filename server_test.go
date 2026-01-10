@@ -378,8 +378,10 @@ func TestServerClose(t *testing.T) {
 		_, _, _ = ReadPacket(conn1, 256*1024)
 		_, _, _ = ReadPacket(conn2, 256*1024)
 
-		time.Sleep(50 * time.Millisecond)
-		assert.Equal(t, 2, srv.ClientCount())
+		// Wait for both clients to be registered (with retry for CI)
+		require.Eventually(t, func() bool {
+			return srv.ClientCount() == 2
+		}, 1*time.Second, 10*time.Millisecond, "expected 2 clients to be connected")
 
 		// Close should disconnect both clients
 		err = srv.Close()
