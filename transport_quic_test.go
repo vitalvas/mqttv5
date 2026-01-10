@@ -310,3 +310,73 @@ func TestQUICListenerTLSVersionEnforcement(t *testing.T) {
 		defer listener.Close()
 	})
 }
+
+func TestQUICDialerEmptyALPN(t *testing.T) {
+	cert, certPool := generateTestCertificate(t)
+
+	serverTLS := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		NextProtos:   []string{"mqtt"},
+	}
+
+	listener, err := NewQUICListener("127.0.0.1:0", serverTLS, nil)
+	require.NoError(t, err)
+	defer listener.Close()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		conn, err := listener.Accept(ctx)
+		if err == nil {
+			// Keep connection open briefly then close
+			time.Sleep(100 * time.Millisecond)
+			conn.Close()
+		}
+	}()
+
+	// Test dialer with empty NextProtos - should add "mqtt" automatically
+	clientTLS := &tls.Config{
+		RootCAs:            certPool,
+		InsecureSkipVerify: true,
+		NextProtos:         []string{}, // Empty ALPN
+	}
+	dialer := &QUICDialer{TLSConfig: clientTLS}
+
+	conn, err := dialer.Dial(context.Background(), listener.Addr().String())
+	require.NoError(t, err, "Dial should succeed with empty ALPN - mqtt should be added automatically")
+	assert.NotNil(t, conn)
+	if conn != nil {
+		conn.Close()
+	}
+}
+
+func TestQUICListenerAcceptContextCancel(t *testing.T) {
+	cert, _ := generateTestCertificate(t)
+
+	serverTLS := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		NextProtos:   []string{"mqtt"},
+	}
+
+	listener, err := NewQUICListener("127.0.0.1:0", serverTLS, nil)
+	require.NoError(t, err)
+	defer listener.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err = listener.Accept(ctx)
+	assert.Error(t, err)
+}
+
+func TestQUICListenerInvalidAddress(t *testing.T) {
+	cert, _ := generateTestCertificate(t)
+
+	serverTLS := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		NextProtos:   []string{"mqtt"},
+	}
+
+	_, err := NewQUICListener("invalid-address-not-ip:port", serverTLS, nil)
+	assert.Error(t, err)
+}

@@ -615,3 +615,220 @@ func TestBridgeHandleClientEvent(t *testing.T) {
 		bridge.handleClientEvent(event)
 	})
 }
+
+func TestBridgeNamespace(t *testing.T) {
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer listener.Close()
+
+	srv := NewServer(WithListener(listener))
+
+	t.Run("default namespace", func(t *testing.T) {
+		config := BridgeConfig{
+			RemoteAddr: "tcp://localhost:1883",
+			Topics: []BridgeTopic{
+				{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionBoth},
+			},
+		}
+
+		bridge, err := NewBridge(srv, config)
+		require.NoError(t, err)
+		assert.Equal(t, DefaultNamespace, bridge.Namespace())
+	})
+
+	t.Run("custom namespace", func(t *testing.T) {
+		config := BridgeConfig{
+			RemoteAddr: "tcp://localhost:1883",
+			Namespace:  "custom",
+			Topics: []BridgeTopic{
+				{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionBoth},
+			},
+		}
+
+		bridge, err := NewBridge(srv, config)
+		require.NoError(t, err)
+		assert.Equal(t, "custom", bridge.Namespace())
+	})
+}
+
+func TestBridgeForwardToRemote(t *testing.T) {
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer listener.Close()
+
+	srv := NewServer(WithListener(listener))
+
+	config := BridgeConfig{
+		RemoteAddr: "tcp://localhost:1883",
+		ClientID:   "test-bridge",
+		Topics: []BridgeTopic{
+			{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionOut},
+		},
+	}
+
+	bridge, err := NewBridge(srv, config)
+	require.NoError(t, err)
+
+	t.Run("not running", func(_ *testing.T) {
+		msg := &Message{Topic: "local/test", Payload: []byte("test")}
+		// Should not panic, just return early
+		bridge.ForwardToRemote(msg)
+	})
+
+	t.Run("loop detection", func(_ *testing.T) {
+		// Simulate running state
+		bridge.running.Store(true)
+		defer bridge.running.Store(false)
+
+		msg := &Message{
+			Topic:   "local/test",
+			Payload: []byte("test"),
+			UserProperties: []StringPair{
+				{Key: bridgePropertyKey, Value: "test-bridge"},
+			},
+		}
+		// Should return early due to loop detection, not panic
+		bridge.ForwardToRemote(msg)
+	})
+
+	t.Run("namespace isolation", func(_ *testing.T) {
+		bridge.running.Store(true)
+		defer bridge.running.Store(false)
+
+		msg := &Message{
+			Topic:     "local/test",
+			Payload:   []byte("test"),
+			Namespace: "different-namespace",
+		}
+		// Should return early due to namespace mismatch
+		bridge.ForwardToRemote(msg)
+	})
+}
+
+func TestBridgeStartAlreadyRunning(t *testing.T) {
+	// Start two brokers
+	remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer remoteListener.Close()
+
+	remoteServer := NewServer(WithListener(remoteListener))
+	go remoteServer.ListenAndServe()
+	defer remoteServer.Close()
+
+	localListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer localListener.Close()
+
+	localServer := NewServer(WithListener(localListener))
+	go localServer.ListenAndServe()
+	defer localServer.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	config := BridgeConfig{
+		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		ClientID:   "test-bridge",
+		Topics: []BridgeTopic{
+			{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionBoth},
+		},
+	}
+
+	bridge, err := NewBridge(localServer, config)
+	require.NoError(t, err)
+
+	err = bridge.Start()
+	require.NoError(t, err)
+	defer bridge.Stop()
+
+	// Try to start again
+	err = bridge.Start()
+	assert.ErrorIs(t, err, ErrBridgeAlreadyRunning)
+}
+
+func TestBridgeCleanPrefix(t *testing.T) {
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer listener.Close()
+
+	srv := NewServer(WithListener(listener))
+
+	config := BridgeConfig{
+		RemoteAddr: "tcp://localhost:1883",
+		Topics: []BridgeTopic{
+			{LocalPrefix: "local/#", RemotePrefix: "remote/+", Direction: BridgeDirectionBoth},
+		},
+	}
+
+	bridge, err := NewBridge(srv, config)
+	require.NoError(t, err)
+
+	// Check that prefixes are cleaned
+	assert.Equal(t, "local", bridge.cachedTopics[0].localPrefix)
+	assert.Equal(t, "remote", bridge.cachedTopics[0].remotePrefix)
+}
+
+func TestBridgeWithCredentials(t *testing.T) {
+	// Start remote broker
+	remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer remoteListener.Close()
+
+	remoteServer := NewServer(WithListener(remoteListener))
+	go remoteServer.ListenAndServe()
+	defer remoteServer.Close()
+
+	localListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer localListener.Close()
+
+	localServer := NewServer(WithListener(localListener))
+	go localServer.ListenAndServe()
+	defer localServer.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	config := BridgeConfig{
+		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		ClientID:   "test-bridge",
+		Username:   "testuser",
+		Password:   "testpass",
+		KeepAlive:  30,
+		Topics: []BridgeTopic{
+			{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionIn},
+		},
+	}
+
+	bridge, err := NewBridge(localServer, config)
+	require.NoError(t, err)
+
+	err = bridge.Start()
+	require.NoError(t, err)
+
+	assert.True(t, bridge.IsRunning())
+	err = bridge.Stop()
+	require.NoError(t, err)
+}
+
+func TestBridgeDirectionFiltering(t *testing.T) {
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer listener.Close()
+
+	srv := NewServer(WithListener(listener))
+
+	t.Run("in direction only", func(t *testing.T) {
+		config := BridgeConfig{
+			RemoteAddr: "tcp://localhost:1883",
+			ClientID:   "test-bridge",
+			Topics: []BridgeTopic{
+				{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionIn},
+			},
+		}
+
+		bridge, err := NewBridge(srv, config)
+		require.NoError(t, err)
+
+		bridge.running.Store(true)
+		defer bridge.running.Store(false)
+
+		msg := &Message{Topic: "local/test", Payload: []byte("test")}
+		// Should not forward since direction is IN only
+		bridge.ForwardToRemote(msg)
+	})
+}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -543,4 +544,130 @@ func TestProxyDialerHTTPSDefaultPort(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "https", dialer.proxyURL.Scheme)
 	assert.Equal(t, "proxy.example.com", dialer.proxyURL.Host)
+}
+
+func TestProxyDialerHTTPConnectProxyConnectionFailure(t *testing.T) {
+	// Test dial to non-existent proxy
+	dialer, err := NewProxyDialer("http://127.0.0.1:59999", "", "")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	_, err = dialer.DialContext(ctx, "tcp", "example.com:1883")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to connect to proxy")
+}
+
+func TestProxyDialerHTTPConnectProxyReject(t *testing.T) {
+	// Start a mock HTTP proxy that rejects CONNECT
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer proxyListener.Close()
+
+	go func() {
+		conn, err := proxyListener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		_, _ = http.ReadRequest(reader)
+		conn.Write([]byte("HTTP/1.1 403 Forbidden\r\n\r\n"))
+	}()
+
+	proxyAddr := "http://" + proxyListener.Addr().String()
+	dialer, err := NewProxyDialer(proxyAddr, "", "")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err = dialer.DialContext(ctx, "tcp", "example.com:1883")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "proxy CONNECT failed")
+}
+
+func TestProxyFromEnvironmentMorePatterns(t *testing.T) {
+	t.Run("lowercase no_proxy", func(t *testing.T) {
+		// Use only lowercase versions - unset uppercase to ensure fallback
+		os.Unsetenv("NO_PROXY")
+		os.Unsetenv("HTTP_PROXY")
+		t.Setenv("http_proxy", "http://proxy:8080")
+		t.Setenv("no_proxy", "broker")
+
+		proxyURL, err := ProxyFromEnvironment("tcp://broker:1883")
+		require.NoError(t, err)
+		assert.Nil(t, proxyURL)
+	})
+
+	t.Run("suffix match without dot prefix", func(t *testing.T) {
+		t.Setenv("HTTP_PROXY", "http://proxy:8080")
+		t.Setenv("NO_PROXY", "example.com")
+
+		proxyURL, err := ProxyFromEnvironment("tcp://sub.example.com:1883")
+		require.NoError(t, err)
+		assert.Nil(t, proxyURL)
+	})
+
+	t.Run("empty pattern in NO_PROXY", func(t *testing.T) {
+		t.Setenv("HTTP_PROXY", "http://proxy:8080")
+		t.Setenv("NO_PROXY", ",broker,")
+
+		proxyURL, err := ProxyFromEnvironment("tcp://broker:1883")
+		require.NoError(t, err)
+		assert.Nil(t, proxyURL)
+	})
+
+	t.Run("lowercase https_proxy", func(t *testing.T) {
+		t.Setenv("HTTP_PROXY", "")
+		t.Setenv("http_proxy", "")
+		t.Setenv("HTTPS_PROXY", "")
+		t.Setenv("https_proxy", "http://lowercase-https:8080")
+		t.Setenv("NO_PROXY", "")
+
+		proxyURL, err := ProxyFromEnvironment("tls://broker:8883")
+		require.NoError(t, err)
+		require.NotNil(t, proxyURL)
+		assert.Equal(t, "http://lowercase-https:8080", proxyURL.String())
+	})
+
+	t.Run("mqtts scheme uses HTTPS_PROXY", func(t *testing.T) {
+		t.Setenv("HTTP_PROXY", "http://httpproxy:8080")
+		t.Setenv("HTTPS_PROXY", "http://httpsproxy:8080")
+		t.Setenv("NO_PROXY", "")
+
+		proxyURL, err := ProxyFromEnvironment("mqtts://broker:8883")
+		require.NoError(t, err)
+		require.NotNil(t, proxyURL)
+		assert.Equal(t, "http://httpsproxy:8080", proxyURL.String())
+	})
+
+	t.Run("wss scheme uses HTTPS_PROXY", func(t *testing.T) {
+		t.Setenv("HTTP_PROXY", "http://httpproxy:8080")
+		t.Setenv("HTTPS_PROXY", "http://httpsproxy:8080")
+		t.Setenv("NO_PROXY", "")
+
+		proxyURL, err := ProxyFromEnvironment("wss://broker:8883")
+		require.NoError(t, err)
+		require.NotNil(t, proxyURL)
+		assert.Equal(t, "http://httpsproxy:8080", proxyURL.String())
+	})
+
+	t.Run("exact match without suffix", func(t *testing.T) {
+		t.Setenv("HTTP_PROXY", "http://proxy:8080")
+		t.Setenv("NO_PROXY", ".example.com")
+
+		// Host matches the domain after the dot
+		proxyURL, err := ProxyFromEnvironment("tcp://example.com:1883")
+		require.NoError(t, err)
+		assert.Nil(t, proxyURL)
+	})
+}
+
+func TestProxyDialerSOCKS5hScheme(t *testing.T) {
+	dialer, err := NewProxyDialer("socks5h://proxy:1080", "", "")
+	require.NoError(t, err)
+	assert.Equal(t, "socks5h", dialer.proxyURL.Scheme)
 }

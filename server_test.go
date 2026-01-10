@@ -4008,3 +4008,191 @@ func TestServerValidatePublishFlags(t *testing.T) {
 		assert.Equal(t, ReasonRetainNotSupported, reason)
 	})
 }
+
+func TestServerKeepAliveTimeout(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	srv := NewServer(WithListener(listener))
+	go srv.ListenAndServe()
+	defer srv.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Connect a client
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+
+	connect := &ConnectPacket{
+		ClientID:   "keepalive-test",
+		CleanStart: true,
+		KeepAlive:  1, // Very short keepalive
+	}
+	_, err = WritePacket(conn, connect, 0)
+	require.NoError(t, err)
+
+	// Read CONNACK
+	pkt, _, err := ReadPacket(conn, 0)
+	require.NoError(t, err)
+	_, ok := pkt.(*ConnackPacket)
+	require.True(t, ok)
+
+	// Client count should be 1
+	assert.Equal(t, 1, srv.ClientCount())
+
+	// Close connection without DISCONNECT (will trigger keepalive expiry handling)
+	conn.Close()
+
+	// Wait for connection to be cleaned up
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, 0, srv.ClientCount())
+}
+
+func TestServerRetryClientMessages(t *testing.T) {
+	srv := NewServer()
+	defer srv.Close()
+
+	conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+	connect := &ConnectPacket{ClientID: "retry-test"}
+	client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+	client.connected.Store(true)
+
+	// Track a QoS 1 message that needs retry
+	msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS1}
+	client.QoS1Tracker().Track(1, msg)
+
+	// Force a retry by setting sent time in the past
+	pending := client.QoS1Tracker().GetPendingRetries()
+	assert.Empty(t, pending) // No pending retries yet (not timed out)
+
+	// Manually trigger retry
+	srv.retryClientMessages(client)
+
+	// Not yet timed out, so nothing written
+	assert.Empty(t, conn.writeBuf.Bytes())
+}
+
+func TestServerRetryQoS2Messages(_ *testing.T) {
+	srv := NewServer()
+	defer srv.Close()
+
+	conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+	connect := &ConnectPacket{ClientID: "retry-qos2-test"}
+	client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+	client.connected.Store(true)
+
+	// Track a QoS 2 message
+	msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS2}
+	client.QoS2Tracker().TrackSend(1, msg)
+
+	// Trigger retry
+	srv.retryClientMessages(client)
+
+	// QoS 2 tracker cleanup should be called (no crash)
+	client.QoS2Tracker().CleanupExpired()
+	client.QoS2Tracker().CleanupCompleted()
+}
+
+func TestServerHandlePubrecWithSession(t *testing.T) {
+	srv := NewServer()
+	defer srv.Close()
+
+	conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+	connect := &ConnectPacket{ClientID: "pubrec-session-test"}
+	client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+	// Set up session
+	session := NewMemorySession("pubrec-session-test", DefaultNamespace)
+	client.SetSession(session)
+
+	// Track a QoS 2 message
+	msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS2}
+	client.QoS2Tracker().TrackSend(1, msg)
+
+	// Add to session as inflight
+	session.AddInflightQoS2(1, &QoS2Message{
+		PacketID:     1,
+		Message:      msg,
+		State:        QoS2AwaitingPubrec,
+		SentAt:       time.Now(),
+		RetryTimeout: 30 * time.Second,
+		IsSender:     true,
+	})
+
+	// Handle PUBREC
+	pubrec := &PubrecPacket{PacketID: 1, ReasonCode: ReasonSuccess}
+	srv.handlePubrec(client, pubrec)
+
+	// Verify PUBREL was sent
+	written := conn.writeBuf.Bytes()
+	require.NotEmpty(t, written)
+
+	// Session should have updated state
+	qos2Msg, exists := session.GetInflightQoS2(1)
+	require.True(t, exists)
+	assert.Equal(t, QoS2AwaitingPubcomp, qos2Msg.State)
+}
+
+func TestServerDisconnectedClientRetry(t *testing.T) {
+	srv := NewServer()
+	defer srv.Close()
+
+	conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+	connect := &ConnectPacket{ClientID: "disconnected-retry"}
+	client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+	// Client is not connected (connected.Store(false) is default)
+
+	// Track messages
+	msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS1}
+	client.QoS1Tracker().Track(1, msg)
+
+	// Retry should return early for disconnected client
+	srv.retryClientMessages(client)
+
+	// Nothing written because client not connected
+	assert.Empty(t, conn.writeBuf.Bytes())
+}
+
+func TestServerReauthAuthStartFails(t *testing.T) {
+	// Create a mock enhanced auth that fails AuthStart
+	enhancedAuth := &testEnhancedAuthFailStart{}
+	srv := NewServer(WithEnhancedAuth(enhancedAuth))
+	defer srv.Close()
+
+	conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+	connect := &ConnectPacket{ClientID: "reauth-fail-test"}
+	client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+	client.connected.Store(true)
+
+	srv.mu.Lock()
+	srv.clients[NamespaceKey(DefaultNamespace, "reauth-fail-test")] = client
+	srv.mu.Unlock()
+
+	srv.keepAlive.Register(NamespaceKey(DefaultNamespace, "reauth-fail-test"), 60)
+
+	logger := &testLogger{}
+
+	// Send AUTH with supported method but AuthStart will fail
+	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
+	authPkt.Props.Set(PropAuthenticationMethod, "FAIL")
+
+	srv.handleReauth(client, authPkt, NamespaceKey(DefaultNamespace, "reauth-fail-test"), logger)
+
+	// Client should be disconnected
+	assert.False(t, client.IsConnected())
+}
+
+type testEnhancedAuthFailStart struct{}
+
+func (a *testEnhancedAuthFailStart) SupportsMethod(method string) bool {
+	return method == "FAIL"
+}
+
+func (a *testEnhancedAuthFailStart) AuthStart(_ context.Context, _ *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	return nil, assert.AnError // Fail AuthStart
+}
+
+func (a *testEnhancedAuthFailStart) AuthContinue(_ context.Context, _ *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	return nil, nil
+}

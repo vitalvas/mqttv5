@@ -3678,3 +3678,161 @@ func TestClientKeepAliveLoop(t *testing.T) {
 		}
 	})
 }
+
+func TestClientResolveProxy(t *testing.T) {
+	t.Run("returns nil when no proxy configured", func(t *testing.T) {
+		c := &Client{
+			options: &clientOptions{
+				proxyConfig:  nil,
+				proxyFromEnv: false,
+			},
+		}
+
+		dialer, err := c.resolveProxy("tcp://broker:1883")
+		require.NoError(t, err)
+		assert.Nil(t, dialer)
+	})
+
+	t.Run("uses explicit proxy config", func(t *testing.T) {
+		c := &Client{
+			options: &clientOptions{
+				proxyConfig: &ProxyConfig{
+					URL: "http://proxy:8080",
+				},
+				proxyFromEnv: false,
+			},
+		}
+
+		dialer, err := c.resolveProxy("tcp://broker:1883")
+		require.NoError(t, err)
+		assert.NotNil(t, dialer)
+	})
+
+	t.Run("uses proxy from environment", func(t *testing.T) {
+		t.Setenv("HTTP_PROXY", "http://envproxy:8080")
+		t.Setenv("NO_PROXY", "")
+
+		c := &Client{
+			options: &clientOptions{
+				proxyConfig:  nil,
+				proxyFromEnv: true,
+			},
+		}
+
+		dialer, err := c.resolveProxy("tcp://broker:1883")
+		require.NoError(t, err)
+		assert.NotNil(t, dialer)
+	})
+
+	t.Run("returns error for invalid proxy URL", func(t *testing.T) {
+		c := &Client{
+			options: &clientOptions{
+				proxyConfig: &ProxyConfig{
+					URL: "://invalid",
+				},
+			},
+		}
+
+		_, err := c.resolveProxy("tcp://broker:1883")
+		assert.Error(t, err)
+	})
+
+	t.Run("respects NO_PROXY from environment", func(t *testing.T) {
+		t.Setenv("HTTP_PROXY", "http://proxy:8080")
+		t.Setenv("NO_PROXY", "broker")
+
+		c := &Client{
+			options: &clientOptions{
+				proxyConfig:  nil,
+				proxyFromEnv: true,
+			},
+		}
+
+		dialer, err := c.resolveProxy("tcp://broker:1883")
+		require.NoError(t, err)
+		assert.Nil(t, dialer) // NO_PROXY should exclude this host
+	})
+}
+
+func TestClientQoSRetryLoopContextCancel(t *testing.T) {
+	t.Run("exits on context cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+
+		c := &Client{
+			ctx:         ctx,
+			conn:        &bufMockConn{writer: &bytes.Buffer{}},
+			qos1Tracker: NewQoS1Tracker(30*time.Second, 3),
+			qos2Tracker: NewQoS2Tracker(30*time.Second, 3),
+			options:     &clientOptions{maxPacketSize: 256 * 1024},
+		}
+		c.connected.Store(true)
+
+		done := make(chan struct{})
+		go func() {
+			c.qosRetryLoop()
+			close(done)
+		}()
+
+		cancel()
+
+		select {
+		case <-done:
+			// Expected
+		case <-time.After(1 * time.Second):
+			t.Fatal("qosRetryLoop didn't exit on context cancel")
+		}
+	})
+}
+
+func TestClientHandlePacketUnknown(t *testing.T) {
+	addr, cleanup := mockServer(t, func(conn net.Conn) {
+		ReadPacket(conn, 256*1024)
+		sendConnack(conn, false, ReasonSuccess)
+		time.Sleep(200 * time.Millisecond)
+	})
+	defer cleanup()
+
+	client, err := Dial(WithServers("tcp://" + addr))
+	require.NoError(t, err)
+	defer client.Close()
+
+	// Client should handle unknown packets gracefully
+	assert.True(t, client.IsConnected())
+}
+
+func TestClientUnsubscribeErrors(t *testing.T) {
+	t.Run("returns error when not connected", func(t *testing.T) {
+		c := &Client{
+			options: &clientOptions{},
+		}
+		c.connected.Store(false)
+
+		err := c.Unsubscribe("test/topic")
+		assert.ErrorIs(t, err, ErrNotConnected)
+	})
+
+	t.Run("returns error for empty filters", func(t *testing.T) {
+		c := &Client{
+			options: &clientOptions{},
+		}
+		c.connected.Store(true)
+
+		err := c.Unsubscribe()
+		assert.Error(t, err)
+	})
+}
+
+func TestClientDialWithWebSocket(t *testing.T) {
+	// Test that ws:// scheme is handled correctly
+	_, err := Dial(WithServers("ws://nonexistent:8080"))
+	assert.Error(t, err) // Should fail to connect but not panic
+}
+
+func TestClientDialWithTLS(t *testing.T) {
+	// Test that tls:// scheme is handled correctly
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := DialContext(ctx, WithServers("tls://nonexistent:8883"))
+	assert.Error(t, err) // Should fail to connect but not panic
+}

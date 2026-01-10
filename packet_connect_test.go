@@ -425,6 +425,55 @@ func TestConnectPacketEncodeErrors(t *testing.T) {
 }
 
 func TestConnectPacketDecodeMoreErrors(t *testing.T) {
+	t.Run("invalid packet type", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketPUBLISH,
+			RemainingLength: 10,
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(make([]byte, 10)), header)
+		assert.ErrorIs(t, err, ErrInvalidPacketType)
+	})
+
+	t.Run("protocol name read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: 10,
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader([]byte{}), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("protocol version read error", func(t *testing.T) {
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		// No version byte
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("flags read error", func(t *testing.T) {
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		buf.WriteByte(5) // Version
+		// No flags byte
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
 	t.Run("keep alive read error", func(t *testing.T) {
 		var buf bytes.Buffer
 		_, _ = encodeString(&buf, "MQTT")
@@ -533,6 +582,122 @@ func TestConnectPacketDecodeMoreErrors(t *testing.T) {
 		buf.Write(willPropBuf.Bytes()) // Will properties
 		_, _ = encodeString(&buf, "will/topic")
 		_, _ = encodeBinary(&buf, []byte("payload"))
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("client ID read error", func(t *testing.T) {
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		buf.WriteByte(5)              // Version
+		buf.WriteByte(0x02)           // Flags (clean start)
+		buf.Write([]byte{0x00, 0x3C}) // Keep alive
+		buf.WriteByte(0x00)           // Empty properties
+		// No client ID
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("will properties read error", func(t *testing.T) {
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		buf.WriteByte(5)              // Version
+		buf.WriteByte(0x06)           // Flags: clean start + will flag
+		buf.Write([]byte{0x00, 0x3C}) // Keep alive
+		buf.WriteByte(0x00)           // Empty CONNECT properties
+		_, _ = encodeString(&buf, "client")
+		buf.WriteByte(0xFF) // Invalid will properties length
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("will topic read error", func(t *testing.T) {
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		buf.WriteByte(5)              // Version
+		buf.WriteByte(0x06)           // Flags: clean start + will flag
+		buf.Write([]byte{0x00, 0x3C}) // Keep alive
+		buf.WriteByte(0x00)           // Empty CONNECT properties
+		_, _ = encodeString(&buf, "client")
+		buf.WriteByte(0x00) // Empty will properties
+		// No will topic
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("will payload read error", func(t *testing.T) {
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		buf.WriteByte(5)              // Version
+		buf.WriteByte(0x06)           // Flags: clean start + will flag
+		buf.Write([]byte{0x00, 0x3C}) // Keep alive
+		buf.WriteByte(0x00)           // Empty CONNECT properties
+		_, _ = encodeString(&buf, "client")
+		buf.WriteByte(0x00)                // Empty will properties
+		_, _ = encodeString(&buf, "topic") // Will topic
+		// No will payload
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("username read error", func(t *testing.T) {
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		buf.WriteByte(5)              // Version
+		buf.WriteByte(0x82)           // Flags: clean start + username flag
+		buf.Write([]byte{0x00, 0x3C}) // Keep alive
+		buf.WriteByte(0x00)           // Empty properties
+		_, _ = encodeString(&buf, "client")
+		// No username
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("password read error", func(t *testing.T) {
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		buf.WriteByte(5)              // Version
+		buf.WriteByte(0x42)           // Flags: clean start + password flag
+		buf.Write([]byte{0x00, 0x3C}) // Keep alive
+		buf.WriteByte(0x00)           // Empty properties
+		_, _ = encodeString(&buf, "client")
+		// No password
 
 		header := FixedHeader{
 			PacketType:      PacketCONNECT,
