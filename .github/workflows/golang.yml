@@ -1,6 +1,7 @@
 name: golang
 
 on:
+  workflow_dispatch:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
@@ -59,7 +60,7 @@ jobs:
         run: go test -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Test Race
-        run: go test -race -v ./...
+        run: go test -race ./...
 
       - name: Publish coverage
         uses: codecov/codecov-action@v5
