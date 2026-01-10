@@ -425,6 +425,203 @@ func BenchmarkBridgeManagerList(b *testing.B) {
 	}
 }
 
+func TestBridgeManagerForwardToRemote(t *testing.T) {
+	t.Run("forwards to matching bridges", func(t *testing.T) {
+		// Create remote server
+		remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer remoteListener.Close()
+
+		remoteServer := NewServer(WithListener(remoteListener))
+		go remoteServer.ListenAndServe()
+		defer remoteServer.Close()
+
+		// Create local server
+		localListener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer localListener.Close()
+
+		localServer := NewServer(WithListener(localListener))
+		go localServer.ListenAndServe()
+		defer localServer.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Create bridge manager
+		manager := NewBridgeManager(localServer)
+
+		// Add bridge with DirectionOut (local -> remote)
+		_, err = manager.Add(BridgeConfig{
+			RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+			ClientID:   "bridge-out",
+			Topics: []BridgeTopic{
+				{LocalPrefix: "sensors", RemotePrefix: "data/sensors", Direction: BridgeDirectionOut, QoS: 1},
+			},
+		})
+		require.NoError(t, err)
+
+		// Start the bridge
+		err = manager.StartAll()
+		require.NoError(t, err)
+		defer manager.StopAll()
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Subscribe on remote server to receive forwarded messages
+		var receivedMsgs []*Message
+		var mu sync.Mutex
+
+		remoteSubscriber, err := Dial(
+			WithServers("tcp://"+remoteListener.Addr().String()),
+			WithClientID("remote-subscriber"),
+		)
+		require.NoError(t, err)
+		defer remoteSubscriber.Close()
+
+		err = remoteSubscriber.Subscribe("data/sensors/#", 1, func(msg *Message) {
+			mu.Lock()
+			receivedMsgs = append(receivedMsgs, msg)
+			mu.Unlock()
+		})
+		require.NoError(t, err)
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Call ForwardToRemote directly
+		manager.ForwardToRemote(&Message{
+			Topic:   "sensors/temperature",
+			Payload: []byte("25.5"),
+			QoS:     1,
+		})
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Verify message was forwarded
+		mu.Lock()
+		require.Len(t, receivedMsgs, 1, "should receive forwarded message")
+		assert.Equal(t, "data/sensors/temperature", receivedMsgs[0].Topic)
+		assert.Equal(t, []byte("25.5"), receivedMsgs[0].Payload)
+		mu.Unlock()
+	})
+
+	t.Run("forwards to multiple bridges", func(t *testing.T) {
+		// Create two remote servers
+		remote1Listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer remote1Listener.Close()
+
+		remote1Server := NewServer(WithListener(remote1Listener))
+		go remote1Server.ListenAndServe()
+		defer remote1Server.Close()
+
+		remote2Listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer remote2Listener.Close()
+
+		remote2Server := NewServer(WithListener(remote2Listener))
+		go remote2Server.ListenAndServe()
+		defer remote2Server.Close()
+
+		// Create local server
+		localListener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer localListener.Close()
+
+		localServer := NewServer(WithListener(localListener))
+		go localServer.ListenAndServe()
+		defer localServer.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Create bridge manager with two bridges that both match "sensors"
+		manager := NewBridgeManager(localServer)
+
+		_, err = manager.Add(BridgeConfig{
+			RemoteAddr: "tcp://" + remote1Listener.Addr().String(),
+			ClientID:   "bridge-1",
+			Topics: []BridgeTopic{
+				{LocalPrefix: "sensors", RemotePrefix: "remote1/sensors", Direction: BridgeDirectionOut, QoS: 1},
+			},
+		})
+		require.NoError(t, err)
+
+		_, err = manager.Add(BridgeConfig{
+			RemoteAddr: "tcp://" + remote2Listener.Addr().String(),
+			ClientID:   "bridge-2",
+			Topics: []BridgeTopic{
+				{LocalPrefix: "sensors", RemotePrefix: "remote2/sensors", Direction: BridgeDirectionOut, QoS: 1},
+			},
+		})
+		require.NoError(t, err)
+
+		// Start bridges
+		err = manager.StartAll()
+		require.NoError(t, err)
+		defer manager.StopAll()
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Subscribe on both remotes
+		var msgs1, msgs2 []*Message
+		var mu sync.Mutex
+
+		sub1, err := Dial(WithServers("tcp://"+remote1Listener.Addr().String()), WithClientID("sub1"))
+		require.NoError(t, err)
+		defer sub1.Close()
+
+		err = sub1.Subscribe("remote1/sensors/#", 1, func(msg *Message) {
+			mu.Lock()
+			msgs1 = append(msgs1, msg)
+			mu.Unlock()
+		})
+		require.NoError(t, err)
+
+		sub2, err := Dial(WithServers("tcp://"+remote2Listener.Addr().String()), WithClientID("sub2"))
+		require.NoError(t, err)
+		defer sub2.Close()
+
+		err = sub2.Subscribe("remote2/sensors/#", 1, func(msg *Message) {
+			mu.Lock()
+			msgs2 = append(msgs2, msg)
+			mu.Unlock()
+		})
+		require.NoError(t, err)
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Forward message
+		manager.ForwardToRemote(&Message{
+			Topic:   "sensors/temp",
+			Payload: []byte("30.0"),
+			QoS:     1,
+		})
+
+		time.Sleep(150 * time.Millisecond)
+
+		// Both remotes should receive the message
+		mu.Lock()
+		require.Len(t, msgs1, 1, "remote1 should receive message")
+		require.Len(t, msgs2, 1, "remote2 should receive message")
+		assert.Equal(t, "remote1/sensors/temp", msgs1[0].Topic)
+		assert.Equal(t, "remote2/sensors/temp", msgs2[0].Topic)
+		mu.Unlock()
+	})
+
+	t.Run("handles empty bridge list", func(_ *testing.T) {
+		listener, _ := net.Listen("tcp", "127.0.0.1:0")
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		manager := NewBridgeManager(srv)
+
+		// Should not panic with empty bridge list
+		manager.ForwardToRemote(&Message{
+			Topic:   "test/topic",
+			Payload: []byte("data"),
+		})
+	})
+}
+
 func BenchmarkBridgeManagerForwardToRemote(b *testing.B) {
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()

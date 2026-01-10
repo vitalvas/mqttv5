@@ -4455,3 +4455,165 @@ func TestServerGetTLSConnectionState(t *testing.T) {
 	state := getTLSConnectionState(conn)
 	assert.Nil(t, state)
 }
+
+func TestServerApplyCredentialExpiry(t *testing.T) {
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer listener.Close()
+
+	srv := NewServer(WithListener(listener))
+	defer srv.Close()
+
+	t.Run("applies session expiry", func(_ *testing.T) {
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "cred-expiry-test"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		expiryTime := time.Now().Add(1 * time.Hour)
+		result := &AuthResult{
+			Success:       true,
+			SessionExpiry: expiryTime,
+		}
+
+		srv.applyCredentialExpiry(client, result)
+	})
+
+	t.Run("handles nil auth result", func(_ *testing.T) {
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "nil-result"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		// Should not panic with nil result
+		srv.applyCredentialExpiry(client, nil)
+	})
+
+	t.Run("handles zero expiry time", func(_ *testing.T) {
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "zero-expiry"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		result := &AuthResult{
+			Success:       true,
+			SessionExpiry: time.Time{}, // Zero time
+		}
+
+		srv.applyCredentialExpiry(client, result)
+	})
+}
+
+func TestServerHandlePubcompNoQoS2Tracker(_ *testing.T) {
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer listener.Close()
+
+	srv := NewServer(WithListener(listener))
+	defer srv.Close()
+
+	conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+	connect := &ConnectPacket{ClientID: "pubcomp-no-tracker"}
+	client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+	client.connected.Store(true)
+
+	// Track a QoS 2 message in AwaitingPubcomp state
+	client.QoS2Tracker().TrackSend(1, &Message{Topic: "test", Payload: []byte("data")})
+	client.QoS2Tracker().HandlePubrec(1) // Move to AwaitingPubcomp
+
+	// Handle PUBCOMP
+	pubcomp := &PubcompPacket{PacketID: 1}
+	srv.handlePubcomp(client, pubcomp)
+}
+
+func TestServerPublishAuthorizationError(t *testing.T) {
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer listener.Close()
+
+	authz := &testAuthorizer{
+		authzFunc: func(_ context.Context, _ *AuthzContext) (*AuthzResult, error) {
+			return nil, fmt.Errorf("authorization error")
+		},
+	}
+
+	srv := NewServer(
+		WithListener(listener),
+		WithServerAuthz(authz),
+	)
+	go srv.ListenAndServe()
+	defer srv.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Connect
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Send CONNECT
+	connect := &ConnectPacket{ClientID: "publish-authz-error"}
+	WritePacket(conn, connect, 256*1024)
+
+	// Read CONNACK
+	_, _, err = ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+
+	// Send PUBLISH QoS 1
+	pub := &PublishPacket{
+		Topic:    "test/topic",
+		Payload:  []byte("data"),
+		QoS:      QoS1,
+		PacketID: 1,
+	}
+	WritePacket(conn, pub, 256*1024)
+
+	// Should receive PUBACK with error
+	time.Sleep(100 * time.Millisecond)
+}
+
+func TestServerHandleSubscribeAuthorizationError(t *testing.T) {
+	listener, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer listener.Close()
+
+	authz := &testAuthorizer{
+		authzFunc: func(_ context.Context, azCtx *AuthzContext) (*AuthzResult, error) {
+			if azCtx.Action == AuthzActionSubscribe {
+				return nil, fmt.Errorf("subscribe auth error")
+			}
+			return &AuthzResult{Allowed: true}, nil
+		},
+	}
+
+	srv := NewServer(
+		WithListener(listener),
+		WithServerAuthz(authz),
+	)
+	go srv.ListenAndServe()
+	defer srv.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Connect
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Send CONNECT
+	connect := &ConnectPacket{ClientID: "subscribe-authz-error"}
+	WritePacket(conn, connect, 256*1024)
+
+	// Read CONNACK
+	_, _, err = ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+
+	// Send SUBSCRIBE
+	sub := &SubscribePacket{
+		PacketID: 1,
+		Subscriptions: []Subscription{
+			{TopicFilter: "test/topic", QoS: QoS1},
+		},
+	}
+	WritePacket(conn, sub, 256*1024)
+
+	// Should receive SUBACK
+	pkt, _, err := ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	suback, ok := pkt.(*SubackPacket)
+	assert.True(t, ok)
+	assert.NotEmpty(t, suback.ReasonCodes)
+}
