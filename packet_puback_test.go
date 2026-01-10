@@ -1,3 +1,4 @@
+//nolint:dupl // Similar test structure for similar packet types
 package mqttv5
 
 import (
@@ -112,6 +113,32 @@ func TestPubackPacketValidation(t *testing.T) {
 	})
 }
 
+func TestPubackPacketEncodeErrors(t *testing.T) {
+	t.Run("encode with validation error", func(t *testing.T) {
+		// Invalid packet ID triggers validation error in Encode
+		invalid := PubackPacket{PacketID: 0, ReasonCode: ReasonSuccess}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidPacketID)
+	})
+
+	t.Run("encode with invalid reason code", func(t *testing.T) {
+		invalid := PubackPacket{PacketID: 1, ReasonCode: ReasonGrantedQoS1}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidReasonCode)
+	})
+
+	t.Run("encode with invalid property", func(t *testing.T) {
+		// Use a property not valid for PUBACK context
+		invalid := PubackPacket{PacketID: 1, ReasonCode: ReasonSuccess}
+		invalid.Props.Set(PropServerKeepAlive, uint16(60)) // Not valid for PUBACK
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.Error(t, err)
+	})
+}
+
 func BenchmarkPubackPacketEncode(b *testing.B) {
 	packet := PubackPacket{PacketID: 1, ReasonCode: ReasonSuccess}
 	var buf bytes.Buffer
@@ -187,4 +214,28 @@ func TestPubackPacketProperties(t *testing.T) {
 	props := p.Properties()
 	require.NotNil(t, props)
 	assert.Equal(t, "test reason", props.GetString(PropReasonString))
+}
+
+func TestPubackPacketDecodeErrors(t *testing.T) {
+	t.Run("invalid packet type", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketPUBLISH,
+			Flags:           0x00,
+			RemainingLength: 2,
+		}
+		var p PubackPacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00, 0x01}), header)
+		assert.ErrorIs(t, err, ErrInvalidPacketType)
+	})
+
+	t.Run("decode read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketPUBACK,
+			Flags:           0x00,
+			RemainingLength: 2,
+		}
+		var p PubackPacket
+		_, err := p.Decode(bytes.NewReader([]byte{}), header)
+		assert.Error(t, err)
+	})
 }

@@ -184,6 +184,56 @@ func TestAckPacketDecodePartialPacketID(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestAckPacketDecodeReasonCodeReadError(t *testing.T) {
+	// Packet ID present but reason code read fails (truncated)
+	data := []byte{0x00, 0x01} // Only packet ID, no reason code
+	header := FixedHeader{
+		PacketType:      PacketPUBACK,
+		Flags:           0x00,
+		RemainingLength: 3, // Expects 3 bytes but only 2 available
+	}
+
+	var ack ackPacket
+	_, err := decodeAck(bytes.NewReader(data), header, &ack, PropCtxPUBACK)
+	assert.Error(t, err)
+}
+
+func TestAckPacketDecodePropertiesReadError(t *testing.T) {
+	// Reason code present but properties read fails (truncated)
+	data := []byte{0x00, 0x01, 0x00} // Packet ID + reason code, but no properties
+	header := FixedHeader{
+		PacketType:      PacketPUBACK,
+		Flags:           0x00,
+		RemainingLength: 5, // Expects properties but data is truncated
+	}
+
+	var ack ackPacket
+	_, err := decodeAck(bytes.NewReader(data), header, &ack, PropCtxPUBACK)
+	assert.Error(t, err)
+}
+
+func TestAckPacketDecodeInvalidProperties(t *testing.T) {
+	// Properties that are invalid for PUBACK context
+	var propBuf bytes.Buffer
+	props := Properties{}
+	props.Set(PropServerKeepAlive, uint16(60)) // Not valid for PUBACK
+	_, _ = props.Encode(&propBuf)
+
+	var buf bytes.Buffer
+	buf.Write([]byte{0x00, 0x01, 0x00}) // Packet ID + reason code
+	buf.Write(propBuf.Bytes())
+
+	header := FixedHeader{
+		PacketType:      PacketPUBACK,
+		Flags:           0x00,
+		RemainingLength: uint32(buf.Len()),
+	}
+
+	var ack ackPacket
+	_, err := decodeAck(bytes.NewReader(buf.Bytes()), header, &ack, PropCtxPUBACK)
+	assert.Error(t, err)
+}
+
 // Benchmarks
 
 func BenchmarkAckPacketEncode(b *testing.B) {

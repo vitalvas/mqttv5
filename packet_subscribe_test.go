@@ -526,3 +526,124 @@ func TestSubscribePacketProperties(t *testing.T) {
 	require.NotNil(t, props)
 	assert.Equal(t, uint32(12345), props.GetUint32(PropSubscriptionIdentifier))
 }
+
+func TestSubscribePacketEncodeErrors(t *testing.T) {
+	t.Run("encode with zero packet ID", func(t *testing.T) {
+		invalid := SubscribePacket{
+			PacketID:      0,
+			Subscriptions: []Subscription{{TopicFilter: "test", QoS: 0}},
+		}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidPacketID)
+	})
+
+	t.Run("encode with no subscriptions", func(t *testing.T) {
+		invalid := SubscribePacket{PacketID: 1, Subscriptions: []Subscription{}}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrProtocolViolation)
+	})
+
+	t.Run("encode with empty topic filter", func(t *testing.T) {
+		invalid := SubscribePacket{
+			PacketID:      1,
+			Subscriptions: []Subscription{{TopicFilter: "", QoS: 0}},
+		}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrProtocolViolation)
+	})
+
+	t.Run("encode with invalid QoS", func(t *testing.T) {
+		invalid := SubscribePacket{
+			PacketID:      1,
+			Subscriptions: []Subscription{{TopicFilter: "test", QoS: 3}},
+		}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidQoS)
+	})
+
+	t.Run("encode with invalid property", func(t *testing.T) {
+		invalid := SubscribePacket{
+			PacketID:      1,
+			Subscriptions: []Subscription{{TopicFilter: "test", QoS: 0}},
+		}
+		invalid.Props.Set(PropServerKeepAlive, uint16(60)) // Not valid for SUBSCRIBE
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.Error(t, err)
+	})
+}
+
+func TestSubscribePacketDecodeErrors(t *testing.T) {
+	t.Run("packet ID read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketSUBSCRIBE,
+			Flags:           0x02,
+			RemainingLength: 10,
+		}
+		var p SubscribePacket
+		_, err := p.Decode(bytes.NewReader([]byte{}), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("properties read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketSUBSCRIBE,
+			Flags:           0x02,
+			RemainingLength: 10,
+		}
+		// Packet ID but truncated properties
+		var p SubscribePacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00, 0x01, 0xFF}), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid properties for SUBSCRIBE", func(t *testing.T) {
+		var propBuf bytes.Buffer
+		props := Properties{}
+		props.Set(PropServerKeepAlive, uint16(60)) // Not valid for SUBSCRIBE
+		_, _ = props.Encode(&propBuf)
+
+		var buf bytes.Buffer
+		buf.Write([]byte{0x00, 0x01}) // Packet ID
+		buf.Write(propBuf.Bytes())
+		buf.Write([]byte{0x00, 0x01, 't', 0x00}) // Topic "t" + options
+
+		header := FixedHeader{
+			PacketType:      PacketSUBSCRIBE,
+			Flags:           0x02,
+			RemainingLength: uint32(buf.Len()),
+		}
+
+		var p SubscribePacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("topic filter read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketSUBSCRIBE,
+			Flags:           0x02,
+			RemainingLength: 10,
+		}
+		// Packet ID + properties length but no topic
+		var p SubscribePacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00, 0x01, 0x00}), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("subscription options read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketSUBSCRIBE,
+			Flags:           0x02,
+			RemainingLength: 10,
+		}
+		// Packet ID + properties + topic but no options
+		var p SubscribePacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00, 0x01, 0x00, 0x00, 0x01, 't'}), header)
+		assert.Error(t, err)
+	})
+}

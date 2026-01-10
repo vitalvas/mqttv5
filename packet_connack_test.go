@@ -355,6 +355,91 @@ func BenchmarkConnackPacketDecode(b *testing.B) {
 
 // Fuzz tests
 
+func TestConnackPacketEncodeErrors(t *testing.T) {
+	t.Run("encode with invalid reason code", func(t *testing.T) {
+		invalid := ConnackPacket{
+			SessionPresent: false,
+			ReasonCode:     ReasonGrantedQoS1, // Not valid for CONNACK
+		}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidReasonCode)
+	})
+
+	t.Run("encode with session present and error code", func(t *testing.T) {
+		invalid := ConnackPacket{
+			SessionPresent: true,
+			ReasonCode:     ReasonNotAuthorized,
+		}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidConnackFlags)
+	})
+
+	t.Run("encode with invalid property", func(t *testing.T) {
+		invalid := ConnackPacket{
+			SessionPresent: false,
+			ReasonCode:     ReasonSuccess,
+		}
+		invalid.Props.Set(PropWillDelayInterval, uint32(60)) // Not valid for CONNACK
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.Error(t, err)
+	})
+}
+
+func TestConnackPacketDecodeMoreErrors(t *testing.T) {
+	t.Run("flags read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketCONNACK,
+			RemainingLength: 3,
+		}
+		var p ConnackPacket
+		_, err := p.Decode(bytes.NewReader([]byte{}), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("reason code read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketCONNACK,
+			RemainingLength: 3,
+		}
+		var p ConnackPacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00}), header) // Only flags
+		assert.Error(t, err)
+	})
+
+	t.Run("properties read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketCONNACK,
+			RemainingLength: 10, // Expects properties but data truncated
+		}
+		var p ConnackPacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00, 0x00}), header) // Only flags + reason
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid properties for CONNACK", func(t *testing.T) {
+		var propBuf bytes.Buffer
+		props := Properties{}
+		props.Set(PropWillDelayInterval, uint32(60)) // Not valid for CONNACK
+		_, _ = props.Encode(&propBuf)
+
+		var buf bytes.Buffer
+		buf.WriteByte(0x00) // Flags
+		buf.WriteByte(0x00) // Reason code
+		buf.Write(propBuf.Bytes())
+
+		header := FixedHeader{
+			PacketType:      PacketCONNACK,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnackPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+}
+
 func FuzzConnackPacketDecode(f *testing.F) {
 	// Valid CONNACK packet seeds
 	validPacket := ConnackPacket{

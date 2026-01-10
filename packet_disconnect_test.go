@@ -145,6 +145,67 @@ func TestDisconnectPacketProperties(t *testing.T) {
 	assert.Equal(t, "test reason", props.GetString(PropReasonString))
 }
 
+func TestDisconnectPacketEncodeErrors(t *testing.T) {
+	t.Run("encode with validation error", func(t *testing.T) {
+		invalid := DisconnectPacket{ReasonCode: ReasonGrantedQoS1}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidReasonCode)
+	})
+
+	t.Run("encode with invalid property", func(t *testing.T) {
+		invalid := DisconnectPacket{ReasonCode: ReasonSuccess}
+		invalid.Props.Set(PropServerKeepAlive, uint16(60)) // Not valid for DISCONNECT
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.Error(t, err)
+	})
+}
+
+func TestDisconnectPacketDecodeErrors(t *testing.T) {
+	t.Run("reason code read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketDISCONNECT,
+			Flags:           0x00,
+			RemainingLength: 1, // Expects 1 byte but reader is empty
+		}
+		var p DisconnectPacket
+		_, err := p.Decode(bytes.NewReader([]byte{}), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("properties read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketDISCONNECT,
+			Flags:           0x00,
+			RemainingLength: 5, // Expects properties but data truncated
+		}
+		var p DisconnectPacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00}), header) // Just reason code
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid properties for DISCONNECT", func(t *testing.T) {
+		var propBuf bytes.Buffer
+		props := Properties{}
+		props.Set(PropServerKeepAlive, uint16(60)) // Not valid for DISCONNECT
+		_, _ = props.Encode(&propBuf)
+
+		var buf bytes.Buffer
+		buf.WriteByte(0x00) // Reason code
+		buf.Write(propBuf.Bytes())
+
+		header := FixedHeader{
+			PacketType:      PacketDISCONNECT,
+			Flags:           0x00,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p DisconnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+}
+
 func BenchmarkDisconnectPacketEncode(b *testing.B) {
 	packet := DisconnectPacket{ReasonCode: ReasonSuccess}
 	var buf bytes.Buffer

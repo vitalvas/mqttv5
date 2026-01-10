@@ -296,6 +296,109 @@ func TestPublishPacketDecodeErrors(t *testing.T) {
 		_, err := p.Decode(bytes.NewReader(make([]byte, 10)), header)
 		assert.ErrorIs(t, err, ErrInvalidQoS)
 	})
+
+	t.Run("topic read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketPUBLISH,
+			Flags:           0x00,
+			RemainingLength: 10,
+		}
+
+		var p PublishPacket
+		_, err := p.Decode(bytes.NewReader([]byte{}), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("packet ID read error for QoS 1", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketPUBLISH,
+			Flags:           0x02, // QoS 1
+			RemainingLength: 10,
+		}
+
+		// Topic "t" but no packet ID
+		var p PublishPacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00, 0x01, 't'}), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("properties read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketPUBLISH,
+			Flags:           0x00,
+			RemainingLength: 10,
+		}
+
+		// Topic "t" but truncated properties
+		var p PublishPacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00, 0x01, 't', 0xFF}), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid properties for PUBLISH", func(t *testing.T) {
+		var propBuf bytes.Buffer
+		props := Properties{}
+		props.Set(PropServerKeepAlive, uint16(60)) // Not valid for PUBLISH
+		_, _ = props.Encode(&propBuf)
+
+		var buf bytes.Buffer
+		buf.Write([]byte{0x00, 0x01, 't'}) // Topic "t"
+		buf.Write(propBuf.Bytes())
+
+		header := FixedHeader{
+			PacketType:      PacketPUBLISH,
+			Flags:           0x00,
+			RemainingLength: uint32(buf.Len()),
+		}
+
+		var p PublishPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("payload read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketPUBLISH,
+			Flags:           0x00,
+			RemainingLength: 10, // Expects more data than available
+		}
+
+		// Topic "t" + empty properties (1 byte)
+		var p PublishPacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00, 0x01, 't', 0x00}), header)
+		assert.Error(t, err)
+	})
+}
+
+func TestPublishPacketEncodeErrors(t *testing.T) {
+	t.Run("encode with invalid QoS", func(t *testing.T) {
+		invalid := PublishPacket{Topic: "test", QoS: 3}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidQoS)
+	})
+
+	t.Run("encode with DUP at QoS 0", func(t *testing.T) {
+		invalid := PublishPacket{Topic: "test", QoS: 0, DUP: true}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidPacketFlags)
+	})
+
+	t.Run("encode with QoS 1 without packet ID", func(t *testing.T) {
+		invalid := PublishPacket{Topic: "test", QoS: 1, PacketID: 0}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrPacketIDRequired)
+	})
+
+	t.Run("encode with invalid property", func(t *testing.T) {
+		invalid := PublishPacket{Topic: "test", QoS: 0}
+		invalid.Props.Set(PropServerKeepAlive, uint16(60)) // Not valid for PUBLISH
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.Error(t, err)
+	})
 }
 
 func TestPublishPacketFlags(t *testing.T) {

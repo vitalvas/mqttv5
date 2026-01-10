@@ -369,6 +369,181 @@ func TestConnectPacketDecodeErrors(t *testing.T) {
 	})
 }
 
+func TestConnectPacketEncodeErrors(t *testing.T) {
+	t.Run("encode with client ID required error", func(t *testing.T) {
+		invalid := ConnectPacket{ClientID: "", CleanStart: false}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrClientIDRequired)
+	})
+
+	t.Run("encode with invalid will QoS", func(t *testing.T) {
+		invalid := ConnectPacket{
+			ClientID:   "test",
+			CleanStart: true,
+			WillFlag:   true,
+			WillQoS:    3,
+			WillTopic:  "topic",
+		}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidConnectFlags)
+	})
+
+	t.Run("encode with will QoS without will flag", func(t *testing.T) {
+		invalid := ConnectPacket{
+			ClientID:   "test",
+			CleanStart: true,
+			WillFlag:   false,
+			WillQoS:    1,
+		}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidConnectFlags)
+	})
+
+	t.Run("encode with invalid property", func(t *testing.T) {
+		invalid := ConnectPacket{ClientID: "test", CleanStart: true}
+		invalid.Props.Set(PropServerKeepAlive, uint16(60)) // Not valid for CONNECT
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.Error(t, err)
+	})
+
+	t.Run("encode with invalid will property", func(t *testing.T) {
+		invalid := ConnectPacket{
+			ClientID:   "test",
+			CleanStart: true,
+			WillFlag:   true,
+			WillTopic:  "topic",
+		}
+		invalid.WillProps.Set(PropServerKeepAlive, uint16(60)) // Not valid for WILL
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.Error(t, err)
+	})
+}
+
+func TestConnectPacketDecodeMoreErrors(t *testing.T) {
+	t.Run("keep alive read error", func(t *testing.T) {
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		buf.WriteByte(5)    // Version
+		buf.WriteByte(0x02) // Flags (clean start)
+		buf.WriteByte(0x00) // Only 1 byte of keep alive
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("properties read error", func(t *testing.T) {
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		buf.WriteByte(5)              // Version
+		buf.WriteByte(0x02)           // Flags (clean start)
+		buf.Write([]byte{0x00, 0x3C}) // Keep alive
+		buf.WriteByte(0xFF)           // Invalid property length
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid properties for CONNECT", func(t *testing.T) {
+		var propBuf bytes.Buffer
+		props := Properties{}
+		props.Set(PropServerKeepAlive, uint16(60)) // Not valid for CONNECT
+		_, _ = props.Encode(&propBuf)
+
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		buf.WriteByte(5)              // Version
+		buf.WriteByte(0x02)           // Flags (clean start)
+		buf.Write([]byte{0x00, 0x3C}) // Keep alive
+		buf.Write(propBuf.Bytes())
+		_, _ = encodeString(&buf, "client")
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("will QoS without will flag decode error", func(t *testing.T) {
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		buf.WriteByte(5)              // Version
+		buf.WriteByte(0x08)           // Flags: will QoS=1 but will flag=0 (invalid)
+		buf.Write([]byte{0x00, 0x3C}) // Keep alive
+		buf.WriteByte(0x00)           // Empty properties
+		_, _ = encodeString(&buf, "client")
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.ErrorIs(t, err, ErrInvalidConnectFlags)
+	})
+
+	t.Run("will retain without will flag decode error", func(t *testing.T) {
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		buf.WriteByte(5)              // Version
+		buf.WriteByte(0x20)           // Flags: will retain but will flag=0 (invalid)
+		buf.Write([]byte{0x00, 0x3C}) // Keep alive
+		buf.WriteByte(0x00)           // Empty properties
+		_, _ = encodeString(&buf, "client")
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.ErrorIs(t, err, ErrInvalidConnectFlags)
+	})
+
+	t.Run("invalid will properties", func(t *testing.T) {
+		var willPropBuf bytes.Buffer
+		willProps := Properties{}
+		willProps.Set(PropServerKeepAlive, uint16(60)) // Not valid for WILL
+		_, _ = willProps.Encode(&willPropBuf)
+
+		var buf bytes.Buffer
+		_, _ = encodeString(&buf, "MQTT")
+		buf.WriteByte(5)              // Version
+		buf.WriteByte(0x06)           // Flags: clean start + will flag
+		buf.Write([]byte{0x00, 0x3C}) // Keep alive
+		buf.WriteByte(0x00)           // Empty CONNECT properties
+		_, _ = encodeString(&buf, "client")
+		buf.Write(willPropBuf.Bytes()) // Will properties
+		_, _ = encodeString(&buf, "will/topic")
+		_, _ = encodeBinary(&buf, []byte("payload"))
+
+		header := FixedHeader{
+			PacketType:      PacketCONNECT,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p ConnectPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+}
+
 func TestConnectFlagsRoundTrip(t *testing.T) {
 	tests := []struct {
 		name     string

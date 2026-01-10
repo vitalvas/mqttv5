@@ -75,6 +75,30 @@ func TestPubrecPacketValidation(t *testing.T) {
 	})
 }
 
+func TestPubrecPacketEncodeErrors(t *testing.T) {
+	t.Run("encode with validation error", func(t *testing.T) {
+		invalid := PubrecPacket{PacketID: 0, ReasonCode: ReasonSuccess}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidPacketID)
+	})
+
+	t.Run("encode with invalid reason code", func(t *testing.T) {
+		invalid := PubrecPacket{PacketID: 1, ReasonCode: ReasonGrantedQoS1}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidReasonCode)
+	})
+
+	t.Run("encode with invalid property", func(t *testing.T) {
+		invalid := PubrecPacket{PacketID: 1, ReasonCode: ReasonSuccess}
+		invalid.Props.Set(PropServerKeepAlive, uint16(60)) // Not valid for PUBREC
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.Error(t, err)
+	})
+}
+
 func BenchmarkPubrecPacketEncode(b *testing.B) {
 	packet := PubrecPacket{PacketID: 1, ReasonCode: ReasonSuccess}
 	var buf bytes.Buffer
@@ -142,5 +166,29 @@ func TestPubrecPacketMethods(t *testing.T) {
 		p := &PubrecPacket{}
 		p.SetPacketID(54321)
 		assert.Equal(t, uint16(54321), p.PacketID)
+	})
+}
+
+func TestPubrecPacketDecodeErrors(t *testing.T) {
+	t.Run("invalid packet type", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketPUBLISH,
+			Flags:           0x00,
+			RemainingLength: 2,
+		}
+		var p PubrecPacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00, 0x01}), header)
+		assert.ErrorIs(t, err, ErrInvalidPacketType)
+	})
+
+	t.Run("decode read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketPUBREC,
+			Flags:           0x00,
+			RemainingLength: 2,
+		}
+		var p PubrecPacket
+		_, err := p.Decode(bytes.NewReader([]byte{}), header)
+		assert.Error(t, err)
 	})
 }

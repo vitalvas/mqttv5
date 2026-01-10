@@ -263,3 +263,93 @@ func TestUnsubscribePacketProperties(t *testing.T) {
 	require.Len(t, ups, 1)
 	assert.Equal(t, "key", ups[0].Key)
 }
+
+func TestUnsubscribePacketEncodeErrors(t *testing.T) {
+	t.Run("encode with zero packet ID", func(t *testing.T) {
+		invalid := UnsubscribePacket{PacketID: 0, TopicFilters: []string{"test"}}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidPacketID)
+	})
+
+	t.Run("encode with no topic filters", func(t *testing.T) {
+		invalid := UnsubscribePacket{PacketID: 1, TopicFilters: []string{}}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrProtocolViolation)
+	})
+
+	t.Run("encode with empty topic filter", func(t *testing.T) {
+		invalid := UnsubscribePacket{PacketID: 1, TopicFilters: []string{""}}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrProtocolViolation)
+	})
+
+	t.Run("encode with invalid property", func(t *testing.T) {
+		invalid := UnsubscribePacket{PacketID: 1, TopicFilters: []string{"test"}}
+		invalid.Props.Set(PropServerKeepAlive, uint16(60)) // Not valid for UNSUBSCRIBE
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.Error(t, err)
+	})
+}
+
+func TestUnsubscribePacketDecodeErrors(t *testing.T) {
+	t.Run("packet ID read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketUNSUBSCRIBE,
+			Flags:           0x02,
+			RemainingLength: 10,
+		}
+		var p UnsubscribePacket
+		_, err := p.Decode(bytes.NewReader([]byte{}), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("properties read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketUNSUBSCRIBE,
+			Flags:           0x02,
+			RemainingLength: 10,
+		}
+		// Packet ID but truncated properties
+		var p UnsubscribePacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00, 0x01, 0xFF}), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid properties for UNSUBSCRIBE", func(t *testing.T) {
+		var propBuf bytes.Buffer
+		props := Properties{}
+		props.Set(PropServerKeepAlive, uint16(60)) // Not valid for UNSUBSCRIBE
+		_, _ = props.Encode(&propBuf)
+
+		var buf bytes.Buffer
+		buf.Write([]byte{0x00, 0x01}) // Packet ID
+		buf.Write(propBuf.Bytes())
+		buf.Write([]byte{0x00, 0x01, 't'}) // Topic "t"
+
+		header := FixedHeader{
+			PacketType:      PacketUNSUBSCRIBE,
+			Flags:           0x02,
+			RemainingLength: uint32(buf.Len()),
+		}
+
+		var p UnsubscribePacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("topic filter read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketUNSUBSCRIBE,
+			Flags:           0x02,
+			RemainingLength: 10, // Expects more data
+		}
+		// Packet ID + empty properties but no topic filters
+		var p UnsubscribePacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00, 0x01, 0x00}), header)
+		assert.Error(t, err)
+	})
+}

@@ -244,3 +244,64 @@ func TestAuthPacketProperties(t *testing.T) {
 	require.NotNil(t, props)
 	assert.Equal(t, "SCRAM-SHA-256", props.GetString(PropAuthenticationMethod))
 }
+
+func TestAuthPacketEncodeErrors(t *testing.T) {
+	t.Run("encode with validation error", func(t *testing.T) {
+		invalid := AuthPacket{ReasonCode: ReasonNotAuthorized}
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.ErrorIs(t, err, ErrInvalidReasonCode)
+	})
+
+	t.Run("encode with invalid property", func(t *testing.T) {
+		invalid := AuthPacket{ReasonCode: ReasonSuccess}
+		invalid.Props.Set(PropServerKeepAlive, uint16(60)) // Not valid for AUTH
+		var buf bytes.Buffer
+		_, err := invalid.Encode(&buf)
+		assert.Error(t, err)
+	})
+}
+
+func TestAuthPacketDecodeErrors(t *testing.T) {
+	t.Run("reason code read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketAUTH,
+			Flags:           0x00,
+			RemainingLength: 1, // Expects 1 byte but reader is empty
+		}
+		var p AuthPacket
+		_, err := p.Decode(bytes.NewReader([]byte{}), header)
+		assert.Error(t, err)
+	})
+
+	t.Run("properties read error", func(t *testing.T) {
+		header := FixedHeader{
+			PacketType:      PacketAUTH,
+			Flags:           0x00,
+			RemainingLength: 5, // Expects properties but data is truncated
+		}
+		var p AuthPacket
+		_, err := p.Decode(bytes.NewReader([]byte{0x00}), header) // Just reason code
+		assert.Error(t, err)
+	})
+
+	t.Run("invalid properties for AUTH", func(t *testing.T) {
+		var propBuf bytes.Buffer
+		props := Properties{}
+		props.Set(PropServerKeepAlive, uint16(60)) // Not valid for AUTH
+		_, _ = props.Encode(&propBuf)
+
+		var buf bytes.Buffer
+		buf.WriteByte(0x00) // Reason code
+		buf.Write(propBuf.Bytes())
+
+		header := FixedHeader{
+			PacketType:      PacketAUTH,
+			Flags:           0x00,
+			RemainingLength: uint32(buf.Len()),
+		}
+		var p AuthPacket
+		_, err := p.Decode(bytes.NewReader(buf.Bytes()), header)
+		assert.Error(t, err)
+	})
+}
