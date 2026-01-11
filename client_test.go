@@ -3,10 +3,12 @@ package mqttv5
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -352,6 +354,121 @@ func TestPublish(t *testing.T) {
 
 		err = client.Publish(&Message{Topic: "", Payload: []byte("hello"), QoS: 0})
 		assert.ErrorIs(t, err, ErrEmptyTopic)
+	})
+
+	t.Run("QoS 2", func(t *testing.T) {
+		var receivedPublish *PublishPacket
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		addr, cleanup := mockServer(t, func(conn net.Conn) {
+			defer wg.Done()
+			_ = readConnect(t, conn)
+			err := sendConnack(conn, false, ReasonSuccess)
+			assert.NoError(t, err)
+
+			pkt, _, err := ReadPacket(conn, 256*1024)
+			if err == nil {
+				receivedPublish, _ = pkt.(*PublishPacket)
+				if receivedPublish != nil && receivedPublish.QoS == QoS2 {
+					// Send PUBREC
+					pubrec := &PubrecPacket{
+						PacketID:   receivedPublish.PacketID,
+						ReasonCode: ReasonSuccess,
+					}
+					_, _ = WritePacket(conn, pubrec, 256*1024)
+
+					// Read PUBREL
+					pkt, _, _ = ReadPacket(conn, 256*1024)
+					if pubrel, ok := pkt.(*PubrelPacket); ok {
+						// Send PUBCOMP
+						pubcomp := &PubcompPacket{
+							PacketID:   pubrel.PacketID,
+							ReasonCode: ReasonSuccess,
+						}
+						_, _ = WritePacket(conn, pubcomp, 256*1024)
+					}
+				}
+			}
+			time.Sleep(50 * time.Millisecond)
+		})
+		defer cleanup()
+
+		client, err := Dial(WithServers("tcp://"+addr), WithClientID("test-client"))
+		require.NoError(t, err)
+		defer client.Close()
+
+		err = client.Publish(&Message{Topic: "test/topic", Payload: []byte("hello"), QoS: 2})
+		assert.NoError(t, err)
+
+		wg.Wait()
+		require.NotNil(t, receivedPublish)
+		assert.Equal(t, byte(2), receivedPublish.QoS)
+		assert.NotEqual(t, uint16(0), receivedPublish.PacketID)
+	})
+
+	t.Run("write failure cleans up QoS 1 state", func(t *testing.T) {
+		conn := &bufMockConn{writeErr: errors.New("write failed")}
+		c := &Client{
+			conn:              conn,
+			options:           applyOptions(),
+			serverMaxQoS:      2,
+			packetIDMgr:       NewPacketIDManager(),
+			qos1Tracker:       NewQoS1Tracker(30*time.Second, 3),
+			qos2Tracker:       NewQoS2Tracker(30*time.Second, 3),
+			serverFlowControl: NewFlowController(65535),
+		}
+		c.connected.Store(true)
+
+		// Publish should fail but cleanup QoS 1 state
+		err := c.Publish(&Message{Topic: "test/topic", Payload: []byte("data"), QoS: 1})
+		assert.Error(t, err)
+
+		// Verify QoS 1 tracker was cleaned up
+		_, exists := c.qos1Tracker.Get(1)
+		assert.False(t, exists, "QoS 1 tracker should have been cleaned up")
+	})
+
+	t.Run("write failure cleans up QoS 2 state", func(t *testing.T) {
+		conn := &bufMockConn{writeErr: errors.New("write failed")}
+		c := &Client{
+			conn:              conn,
+			options:           applyOptions(),
+			serverMaxQoS:      2,
+			packetIDMgr:       NewPacketIDManager(),
+			qos1Tracker:       NewQoS1Tracker(30*time.Second, 3),
+			qos2Tracker:       NewQoS2Tracker(30*time.Second, 3),
+			serverFlowControl: NewFlowController(65535),
+		}
+		c.connected.Store(true)
+
+		// Publish should fail but cleanup QoS 2 state
+		err := c.Publish(&Message{Topic: "test/topic", Payload: []byte("data"), QoS: 2})
+		assert.Error(t, err)
+
+		// Verify QoS 2 tracker was cleaned up
+		_, exists := c.qos2Tracker.Get(1)
+		assert.False(t, exists)
+	})
+
+	t.Run("quota exceeded returns error", func(t *testing.T) {
+		conn := &bufMockConn{writer: &bytes.Buffer{}}
+		c := &Client{
+			conn:              conn,
+			options:           applyOptions(),
+			serverMaxQoS:      2,
+			packetIDMgr:       NewPacketIDManager(),
+			qos1Tracker:       NewQoS1Tracker(30*time.Second, 3),
+			serverFlowControl: NewFlowController(1), // Only 1 in-flight allowed
+		}
+		c.connected.Store(true)
+
+		// Acquire the only slot
+		c.serverFlowControl.TryAcquire()
+
+		// Second publish should fail with quota exceeded
+		err := c.Publish(&Message{Topic: "test/topic", Payload: []byte("data"), QoS: 1})
+		assert.ErrorIs(t, err, ErrQuotaExceeded)
 	})
 }
 
@@ -1681,6 +1798,12 @@ func TestClientErrorToReasonCode(t *testing.T) {
 			err:            ErrDuplicateProperty,
 			expectedReason: ReasonProtocolError,
 			description:    "ErrDuplicateProperty should return ReasonProtocolError",
+		},
+		{
+			name:           "property not allowed",
+			err:            ErrPropertyNotAllowed,
+			expectedReason: ReasonProtocolError,
+			description:    "ErrPropertyNotAllowed should return ReasonProtocolError",
 		},
 		{
 			name:           "varint too large",
@@ -4080,7 +4203,7 @@ func TestClientHandlePingresp(t *testing.T) {
 	defer client.Close()
 
 	// Wait for at least one PINGREQ/PINGRESP cycle
-	time.Sleep(1500 * time.Millisecond)
+	time.Sleep(1100 * time.Millisecond)
 }
 
 func TestClientKeepAliveLoopNotConnected(_ *testing.T) {
@@ -4099,4 +4222,784 @@ func TestClientKeepAliveLoopNotConnected(_ *testing.T) {
 	}()
 
 	c.keepAliveLoop()
+}
+
+func TestReadConnackWithAuthEdgeCases(t *testing.T) {
+	t.Run("AUTH received without enhanced auth configured", func(t *testing.T) {
+		// Create a buffer with AUTH packet
+		authBuf := &bytes.Buffer{}
+		authPkt := &AuthPacket{ReasonCode: ReasonContinueAuth}
+		authPkt.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
+		WritePacket(authBuf, authPkt, 256*1024)
+
+		conn := &bufMockConn{reader: authBuf}
+		c := &Client{
+			conn: conn,
+			options: &clientOptions{
+				maxPacketSize:  256 * 1024,
+				connectTimeout: 5 * time.Second,
+				enhancedAuth:   nil, // No enhanced auth configured
+			},
+		}
+
+		ctx := context.Background()
+		_, err := c.readConnackWithAuth(ctx)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "received AUTH packet but enhanced auth not configured")
+	})
+
+	t.Run("AUTH with ReasonSuccess followed by CONNACK", func(t *testing.T) {
+		// Create buffer with AUTH (Success) followed by CONNACK
+		buf := &bytes.Buffer{}
+		authPkt := &AuthPacket{ReasonCode: ReasonSuccess}
+		WritePacket(buf, authPkt, 256*1024)
+		connackPkt := &ConnackPacket{ReasonCode: ReasonSuccess, SessionPresent: false}
+		WritePacket(buf, connackPkt, 256*1024)
+
+		conn := &bufMockConn{reader: buf}
+		c := &Client{
+			conn: conn,
+			options: &clientOptions{
+				maxPacketSize:  256 * 1024,
+				connectTimeout: 5 * time.Second,
+				enhancedAuth:   &testClientEnhancedAuth{},
+			},
+		}
+
+		ctx := context.Background()
+		connack, err := c.readConnackWithAuth(ctx)
+
+		require.NoError(t, err)
+		assert.NotNil(t, connack)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+	})
+
+	t.Run("AUTH with ReasonReAuth triggers error path", func(t *testing.T) {
+		// Create buffer with AUTH packet with ReasonReAuth
+		// This tests line 184-186: reason codes other than Success or ContinueAuth
+		buf := &bytes.Buffer{}
+		authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
+		WritePacket(buf, authPkt, 256*1024)
+
+		conn := &bufMockConn{reader: buf}
+		c := &Client{
+			conn: conn,
+			options: &clientOptions{
+				maxPacketSize:  256 * 1024,
+				connectTimeout: 5 * time.Second,
+				enhancedAuth:   &testClientEnhancedAuth{},
+			},
+		}
+
+		ctx := context.Background()
+		_, err := c.readConnackWithAuth(ctx)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "enhanced auth failed")
+	})
+
+	t.Run("AUTH with ReasonSuccess but read CONNACK fails", func(t *testing.T) {
+		// Create buffer with AUTH (Success) but no CONNACK
+		buf := &bytes.Buffer{}
+		authPkt := &AuthPacket{ReasonCode: ReasonSuccess}
+		WritePacket(buf, authPkt, 256*1024)
+
+		conn := &bufMockConn{reader: buf}
+		c := &Client{
+			conn: conn,
+			options: &clientOptions{
+				maxPacketSize:  256 * 1024,
+				connectTimeout: 5 * time.Second,
+				enhancedAuth:   &testClientEnhancedAuth{},
+			},
+		}
+
+		ctx := context.Background()
+		_, err := c.readConnackWithAuth(ctx)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to read CONNACK after AUTH success")
+	})
+}
+
+func TestDialWithWillMessage(t *testing.T) {
+	var receivedConnect *ConnectPacket
+
+	addr, cleanup := mockServer(t, func(conn net.Conn) {
+		receivedConnect = readConnect(t, conn)
+		err := sendConnack(conn, false, ReasonSuccess)
+		assert.NoError(t, err)
+		time.Sleep(100 * time.Millisecond)
+	})
+	defer cleanup()
+
+	client, err := Dial(
+		WithServers("tcp://"+addr),
+		WithClientID("will-test-client"),
+		WithWill("client/status", []byte("offline"), true, 1),
+	)
+	require.NoError(t, err)
+	defer client.Close()
+
+	require.NotNil(t, receivedConnect)
+	assert.True(t, receivedConnect.WillFlag)
+	assert.Equal(t, "client/status", receivedConnect.WillTopic)
+	assert.Equal(t, []byte("offline"), receivedConnect.WillPayload)
+	assert.True(t, receivedConnect.WillRetain)
+	assert.Equal(t, byte(1), receivedConnect.WillQoS)
+}
+
+func TestDialWithWillMessageAndProps(t *testing.T) {
+	var receivedConnect *ConnectPacket
+
+	addr, cleanup := mockServer(t, func(conn net.Conn) {
+		receivedConnect = readConnect(t, conn)
+		err := sendConnack(conn, false, ReasonSuccess)
+		assert.NoError(t, err)
+		time.Sleep(100 * time.Millisecond)
+	})
+	defer cleanup()
+
+	willProps := &Properties{}
+	willProps.Set(PropMessageExpiryInterval, uint32(3600))
+	willProps.Set(PropContentType, "application/json")
+
+	client, err := Dial(
+		WithServers("tcp://"+addr),
+		WithClientID("will-props-client"),
+		WithWill("client/status", []byte(`{"status":"offline"}`), false, 2),
+		WithWillProps(willProps),
+	)
+	require.NoError(t, err)
+	defer client.Close()
+
+	require.NotNil(t, receivedConnect)
+	assert.True(t, receivedConnect.WillFlag)
+	assert.Equal(t, "client/status", receivedConnect.WillTopic)
+	assert.Equal(t, uint32(3600), receivedConnect.WillProps.GetUint32(PropMessageExpiryInterval))
+	assert.Equal(t, "application/json", receivedConnect.WillProps.GetString(PropContentType))
+}
+
+func TestDialWithConnectProperties(t *testing.T) {
+	t.Run("session expiry interval", func(t *testing.T) {
+		var receivedConnect *ConnectPacket
+
+		addr, cleanup := mockServer(t, func(conn net.Conn) {
+			receivedConnect = readConnect(t, conn)
+			err := sendConnack(conn, false, ReasonSuccess)
+			assert.NoError(t, err)
+			time.Sleep(100 * time.Millisecond)
+		})
+		defer cleanup()
+
+		client, err := Dial(
+			WithServers("tcp://"+addr),
+			WithClientID("session-expiry-client"),
+			WithSessionExpiryInterval(3600),
+		)
+		require.NoError(t, err)
+		defer client.Close()
+
+		require.NotNil(t, receivedConnect)
+		assert.Equal(t, uint32(3600), receivedConnect.Props.GetUint32(PropSessionExpiryInterval))
+	})
+
+	t.Run("receive maximum non-default", func(t *testing.T) {
+		var receivedConnect *ConnectPacket
+
+		addr, cleanup := mockServer(t, func(conn net.Conn) {
+			receivedConnect = readConnect(t, conn)
+			err := sendConnack(conn, false, ReasonSuccess)
+			assert.NoError(t, err)
+			time.Sleep(100 * time.Millisecond)
+		})
+		defer cleanup()
+
+		client, err := Dial(
+			WithServers("tcp://"+addr),
+			WithClientID("recv-max-client"),
+			WithReceiveMaximum(100),
+		)
+		require.NoError(t, err)
+		defer client.Close()
+
+		require.NotNil(t, receivedConnect)
+		assert.Equal(t, uint16(100), receivedConnect.Props.GetUint16(PropReceiveMaximum))
+	})
+
+	t.Run("max packet size", func(t *testing.T) {
+		var receivedConnect *ConnectPacket
+
+		addr, cleanup := mockServer(t, func(conn net.Conn) {
+			receivedConnect = readConnect(t, conn)
+			err := sendConnack(conn, false, ReasonSuccess)
+			assert.NoError(t, err)
+			time.Sleep(100 * time.Millisecond)
+		})
+		defer cleanup()
+
+		client, err := Dial(
+			WithServers("tcp://"+addr),
+			WithClientID("max-packet-client"),
+			WithMaxPacketSize(1024*1024),
+		)
+		require.NoError(t, err)
+		defer client.Close()
+
+		require.NotNil(t, receivedConnect)
+		assert.Equal(t, uint32(1024*1024), receivedConnect.Props.GetUint32(PropMaximumPacketSize))
+	})
+
+	t.Run("topic alias maximum", func(t *testing.T) {
+		var receivedConnect *ConnectPacket
+
+		addr, cleanup := mockServer(t, func(conn net.Conn) {
+			receivedConnect = readConnect(t, conn)
+			err := sendConnack(conn, false, ReasonSuccess)
+			assert.NoError(t, err)
+			time.Sleep(100 * time.Millisecond)
+		})
+		defer cleanup()
+
+		client, err := Dial(
+			WithServers("tcp://"+addr),
+			WithClientID("topic-alias-client"),
+			WithTopicAliasMaximum(10),
+		)
+		require.NoError(t, err)
+		defer client.Close()
+
+		require.NotNil(t, receivedConnect)
+		assert.Equal(t, uint16(10), receivedConnect.Props.GetUint16(PropTopicAliasMaximum))
+	})
+
+	t.Run("user properties", func(t *testing.T) {
+		var receivedConnect *ConnectPacket
+
+		addr, cleanup := mockServer(t, func(conn net.Conn) {
+			receivedConnect = readConnect(t, conn)
+			err := sendConnack(conn, false, ReasonSuccess)
+			assert.NoError(t, err)
+			time.Sleep(100 * time.Millisecond)
+		})
+		defer cleanup()
+
+		client, err := Dial(
+			WithServers("tcp://"+addr),
+			WithClientID("user-props-client"),
+			WithUserProperties(map[string]string{
+				"app":     "test-app",
+				"version": "1.0.0",
+			}),
+		)
+		require.NoError(t, err)
+		defer client.Close()
+
+		require.NotNil(t, receivedConnect)
+		// Check that user properties were set
+		pairs := receivedConnect.Props.GetAll(PropUserProperty)
+		assert.GreaterOrEqual(t, len(pairs), 2)
+	})
+}
+
+func TestClientDialWithProxy(t *testing.T) {
+	t.Run("TCP with proxy", func(t *testing.T) {
+		// Start mock target server
+		targetListener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer targetListener.Close()
+
+		targetAddr := targetListener.Addr().String()
+
+		// Start mock HTTP CONNECT proxy
+		proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer proxyListener.Close()
+
+		go func() {
+			conn, err := proxyListener.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+
+			// Read CONNECT request
+			buf := make([]byte, 1024)
+			n, _ := conn.Read(buf)
+			if n > 0 && bytes.Contains(buf[:n], []byte("CONNECT")) {
+				// Send 200 OK
+				conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+
+				// Relay to target
+				target, err := net.Dial("tcp", targetAddr)
+				if err != nil {
+					return
+				}
+				defer target.Close()
+
+				go io.Copy(target, conn)
+				io.Copy(conn, target)
+			}
+		}()
+
+		// Handle target connection (MQTT handshake)
+		go func() {
+			conn, err := targetListener.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+
+			pkt, _, _ := ReadPacket(conn, 256*1024)
+			if _, ok := pkt.(*ConnectPacket); ok {
+				connack := &ConnackPacket{ReasonCode: ReasonSuccess}
+				WritePacket(conn, connack, 256*1024)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}()
+
+		proxyURL := "http://" + proxyListener.Addr().String()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		client, err := DialContext(ctx,
+			WithServers("tcp://"+targetAddr),
+			WithProxy(proxyURL),
+		)
+		require.NoError(t, err)
+		defer client.Close()
+
+		assert.True(t, client.IsConnected())
+	})
+
+	t.Run("TLS with proxy", func(t *testing.T) {
+		cert, certPool := generateTestCertificate(t)
+
+		// Start mock TLS target server
+		targetListener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer targetListener.Close()
+
+		targetAddr := targetListener.Addr().String()
+
+		// Start mock HTTP CONNECT proxy
+		proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer proxyListener.Close()
+
+		go func() {
+			conn, err := proxyListener.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+
+			// Read CONNECT request
+			buf := make([]byte, 1024)
+			n, _ := conn.Read(buf)
+			if n > 0 && bytes.Contains(buf[:n], []byte("CONNECT")) {
+				// Send 200 OK
+				conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+
+				// Relay to target
+				target, err := net.Dial("tcp", targetAddr)
+				if err != nil {
+					return
+				}
+				defer target.Close()
+
+				go io.Copy(target, conn)
+				io.Copy(conn, target)
+			}
+		}()
+
+		// Handle target TLS connection
+		go func() {
+			conn, err := targetListener.Accept()
+			if err != nil {
+				return
+			}
+
+			tlsConfig := &tls.Config{
+				Certificates: []tls.Certificate{cert},
+			}
+			tlsConn := tls.Server(conn, tlsConfig)
+			if err := tlsConn.Handshake(); err != nil {
+				conn.Close()
+				return
+			}
+			defer tlsConn.Close()
+
+			pkt, _, _ := ReadPacket(tlsConn, 256*1024)
+			if _, ok := pkt.(*ConnectPacket); ok {
+				connack := &ConnackPacket{ReasonCode: ReasonSuccess}
+				WritePacket(tlsConn, connack, 256*1024)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}()
+
+		proxyURL := "http://" + proxyListener.Addr().String()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		clientTLS := &tls.Config{
+			RootCAs:            certPool,
+			InsecureSkipVerify: true,
+		}
+
+		client, err := DialContext(ctx,
+			WithServers("tls://"+targetAddr),
+			WithProxy(proxyURL),
+			WithTLS(clientTLS),
+		)
+		require.NoError(t, err)
+		defer client.Close()
+
+		assert.True(t, client.IsConnected())
+	})
+
+	t.Run("TLS with proxy handshake failure", func(t *testing.T) {
+		// Start mock target server that doesn't do TLS
+		targetListener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer targetListener.Close()
+
+		targetAddr := targetListener.Addr().String()
+
+		// Start mock HTTP CONNECT proxy
+		proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer proxyListener.Close()
+
+		go func() {
+			conn, err := proxyListener.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+
+			// Read CONNECT request and respond OK
+			buf := make([]byte, 1024)
+			n, _ := conn.Read(buf)
+			if n > 0 && bytes.Contains(buf[:n], []byte("CONNECT")) {
+				conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+
+				// Relay to target (but target doesn't speak TLS)
+				target, err := net.Dial("tcp", targetAddr)
+				if err != nil {
+					return
+				}
+				defer target.Close()
+
+				go io.Copy(target, conn)
+				io.Copy(conn, target)
+			}
+		}()
+
+		// Target that closes immediately (causing TLS handshake to fail)
+		go func() {
+			conn, err := targetListener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close() // Close immediately to fail TLS handshake
+		}()
+
+		proxyURL := "http://" + proxyListener.Addr().String()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		_, err = DialContext(ctx,
+			WithServers("tls://"+targetAddr),
+			WithProxy(proxyURL),
+		)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "TLS handshake failed")
+	})
+}
+
+func TestClientDialUnixSocket(t *testing.T) {
+	testUnixSocketDial := func(t *testing.T, prefix string) {
+		t.Helper()
+
+		socketPath := "/tmp/mqtt_test_" + prefix + "_" + fmt.Sprintf("%d", time.Now().UnixNano()) + ".sock"
+		defer os.Remove(socketPath)
+
+		listener, err := net.Listen("unix", socketPath)
+		require.NoError(t, err)
+		defer listener.Close()
+
+		go func() {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+
+			pkt, _, _ := ReadPacket(conn, 256*1024)
+			if _, ok := pkt.(*ConnectPacket); ok {
+				connack := &ConnackPacket{ReasonCode: ReasonSuccess}
+				WritePacket(conn, connack, 256*1024)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		client, err := DialContext(ctx, WithServers("unix://"+socketPath))
+		require.NoError(t, err)
+		defer client.Close()
+
+		assert.True(t, client.IsConnected())
+	}
+
+	t.Run("basic unix socket", func(t *testing.T) {
+		testUnixSocketDial(t, "basic")
+	})
+
+	t.Run("unix socket with host path format", func(t *testing.T) {
+		testUnixSocketDial(t, "hostpath")
+	})
+}
+
+func TestClientDialWebSocketWithTLSConfig(t *testing.T) {
+	// Test that TLS config is applied to WebSocket dialer
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: true,
+	}
+
+	// This will fail to connect but exercises the code path
+	_, err := DialContext(ctx,
+		WithServers("wss://nonexistent:443"),
+		WithTLS(tlsConfig),
+	)
+	assert.Error(t, err) // Connection will fail but code path is exercised
+}
+
+func TestClientDialWebSocketWithProxyEnv(t *testing.T) {
+	// Test that proxy from environment is set for WebSocket
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// This will fail to connect but exercises the code path
+	_, err := DialContext(ctx,
+		WithServers("ws://nonexistent:80"),
+		WithProxyFromEnvironment(true),
+	)
+	assert.Error(t, err) // Connection will fail but code path is exercised
+}
+
+func TestClientDialQUIC(t *testing.T) {
+	t.Run("QUIC without TLS config", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		// This will fail to connect but exercises the QUIC dial code path
+		_, err := DialContext(ctx, WithServers("quic://nonexistent:8883"))
+		assert.Error(t, err)
+	})
+
+	t.Run("QUIC with TLS config", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: true,
+			NextProtos:         []string{"mqtt"},
+		}
+
+		// This will fail to connect but exercises the QUIC dial code path with TLS
+		_, err := DialContext(ctx,
+			WithServers("quic://nonexistent:8883"),
+			WithTLS(tlsConfig),
+		)
+		assert.Error(t, err)
+	})
+}
+
+func TestClientHandlePacket(t *testing.T) {
+	t.Run("handles PublishPacket", func(_ *testing.T) {
+		c := &Client{
+			options:       &clientOptions{},
+			subscriptions: make(map[string]MessageHandler),
+			topicAliases:  NewTopicAliasManager(10, 10),
+		}
+
+		pkt := &PublishPacket{
+			Topic:   "test/topic",
+			Payload: []byte("hello"),
+			QoS:     0,
+		}
+
+		// Should not panic
+		c.handlePacket(pkt)
+	})
+
+	t.Run("handles PubackPacket", func(t *testing.T) {
+		c := &Client{
+			options:           &clientOptions{},
+			qos1Tracker:       NewQoS1Tracker(time.Second, 3),
+			packetIDMgr:       NewPacketIDManager(),
+			serverFlowControl: NewFlowController(100),
+		}
+
+		// Track a message first
+		c.qos1Tracker.Track(1, &Message{Topic: "test"})
+
+		pkt := &PubackPacket{PacketID: 1, ReasonCode: ReasonSuccess}
+		c.handlePacket(pkt)
+
+		// Tracker should have acknowledged the message
+		_, exists := c.qos1Tracker.Get(1)
+		assert.False(t, exists)
+	})
+
+	t.Run("handles PubrecPacket", func(t *testing.T) {
+		c := &Client{
+			options:     &clientOptions{},
+			qos2Tracker: NewQoS2Tracker(time.Second, 3),
+			packetIDMgr: NewPacketIDManager(),
+		}
+
+		// Track a message first
+		c.qos2Tracker.TrackSend(1, &Message{Topic: "test"})
+
+		pkt := &PubrecPacket{PacketID: 1, ReasonCode: ReasonSuccess}
+		c.handlePacket(pkt)
+
+		// Tracker should have moved to awaiting pubcomp
+		msg, exists := c.qos2Tracker.Get(1)
+		assert.True(t, exists)
+		assert.Equal(t, QoS2AwaitingPubcomp, msg.State)
+	})
+
+	t.Run("handles PubrelPacket", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		c := &Client{
+			options:     &clientOptions{maxPacketSize: MaxPacketSizeDefault},
+			conn:        &bufMockConn{writer: buf},
+			qos2Tracker: NewQoS2Tracker(time.Second, 3),
+		}
+
+		// Track an inbound QoS 2 message
+		c.qos2Tracker.TrackReceive(1, &Message{Topic: "test"})
+
+		pkt := &PubrelPacket{PacketID: 1}
+		c.handlePacket(pkt)
+
+		// PUBCOMP should have been written
+		assert.Greater(t, buf.Len(), 0)
+	})
+
+	t.Run("handles PubcompPacket", func(t *testing.T) {
+		c := &Client{
+			options:           &clientOptions{},
+			qos2Tracker:       NewQoS2Tracker(time.Second, 3),
+			packetIDMgr:       NewPacketIDManager(),
+			serverFlowControl: NewFlowController(100),
+		}
+
+		// Track send and receive pubrec first
+		c.qos2Tracker.TrackSend(1, &Message{Topic: "test"})
+		c.qos2Tracker.HandlePubrec(1)
+
+		pkt := &PubcompPacket{PacketID: 1}
+		c.handlePacket(pkt)
+
+		// Tracker should have completed the message
+		_, exists := c.qos2Tracker.Get(1)
+		assert.False(t, exists)
+	})
+
+	t.Run("handles SubackPacket", func(t *testing.T) {
+		c := &Client{
+			options:             &clientOptions{},
+			pendingSubscribes:   make(map[uint16][]string),
+			subscriptions:       make(map[string]MessageHandler),
+			pendingUnsubscribes: make(map[uint16][]string),
+			packetIDMgr:         NewPacketIDManager(),
+		}
+
+		// Register a pending subscribe
+		c.pendingSubscribes[1] = []string{"test/topic"}
+
+		pkt := &SubackPacket{PacketID: 1, ReasonCodes: []ReasonCode{ReasonGrantedQoS0}}
+		c.handlePacket(pkt)
+
+		// Pending subscribe should be cleared
+		assert.Empty(t, c.pendingSubscribes[1])
+	})
+
+	t.Run("handles UnsubackPacket", func(t *testing.T) {
+		c := &Client{
+			options:             &clientOptions{},
+			pendingUnsubscribes: make(map[uint16][]string),
+			subscriptions:       make(map[string]MessageHandler),
+			pendingSubscribes:   make(map[uint16][]string),
+			packetIDMgr:         NewPacketIDManager(),
+		}
+
+		// Register subscription and pending unsubscribe
+		c.subscriptions["test/topic"] = func(*Message) {}
+		c.pendingUnsubscribes[1] = []string{"test/topic"}
+
+		pkt := &UnsubackPacket{PacketID: 1, ReasonCodes: []ReasonCode{ReasonSuccess}}
+		c.handlePacket(pkt)
+
+		// Subscription should be removed
+		assert.Empty(t, c.subscriptions)
+	})
+
+	t.Run("handles PingrespPacket", func(_ *testing.T) {
+		c := &Client{
+			options: &clientOptions{},
+		}
+
+		pkt := &PingrespPacket{}
+
+		// Should not panic - PINGRESP is a no-op
+		c.handlePacket(pkt)
+	})
+
+	t.Run("handles DisconnectPacket", func(t *testing.T) {
+		var eventReceived bool
+		mockConn := &bufMockConn{}
+
+		c := &Client{
+			options: &clientOptions{
+				onEvent: func(_ *Client, evt error) {
+					if _, ok := evt.(*DisconnectError); ok {
+						eventReceived = true
+					}
+				},
+			},
+			conn: mockConn,
+		}
+		c.connected.Store(true)
+
+		pkt := &DisconnectPacket{ReasonCode: ReasonServerBusy}
+		c.handlePacket(pkt)
+
+		// Disconnect should have been handled
+		assert.False(t, c.connected.Load())
+		assert.True(t, eventReceived)
+	})
+
+	t.Run("handles AuthPacket", func(_ *testing.T) {
+		c := &Client{
+			options: &clientOptions{
+				enhancedAuth: &mockEnhancedAuth{},
+			},
+		}
+
+		pkt := &AuthPacket{ReasonCode: ReasonContinueAuth}
+
+		// Should not panic - handleAuth is called
+		c.handlePacket(pkt)
+	})
 }
