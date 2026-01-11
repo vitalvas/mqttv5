@@ -24,6 +24,10 @@ func TestNoOpMetrics(t *testing.T) {
 		metrics.PublishLatency(time.Millisecond)
 		metrics.PacketReceived(PacketCONNECT)
 		metrics.PacketSent(PacketCONNACK)
+		metrics.BridgeForwardedToLocal()
+		metrics.BridgeForwardedToRemote()
+		metrics.BridgeDroppedLoop()
+		metrics.BridgeError()
 	})
 }
 
@@ -114,6 +118,23 @@ func TestMemoryMetrics(t *testing.T) {
 
 		assert.Equal(t, int64(1), m.MessagesReceived(2))
 		assert.Equal(t, int64(1), m.MessagesSent(2))
+	})
+
+	t.Run("bridge metrics", func(t *testing.T) {
+		m := NewMemoryMetrics()
+
+		m.BridgeForwardedToLocal()
+		m.BridgeForwardedToLocal()
+		m.BridgeForwardedToRemote()
+		m.BridgeDroppedLoop()
+		m.BridgeError()
+		m.BridgeError()
+		m.BridgeError()
+
+		assert.Equal(t, int64(2), m.BridgeForwardedToLocalTotal())
+		assert.Equal(t, int64(1), m.BridgeForwardedToRemoteTotal())
+		assert.Equal(t, int64(1), m.BridgeDroppedLoopTotal())
+		assert.Equal(t, int64(3), m.BridgeErrorsTotal())
 	})
 }
 

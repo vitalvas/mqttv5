@@ -271,4 +271,36 @@ func TestServerCapabilityOptions(t *testing.T) {
 		WithSharedSubAvailable(true)(cfg)
 		assert.True(t, cfg.sharedSubAvailable)
 	})
+
+	t.Run("WithLogger sets logger", func(t *testing.T) {
+		cfg := defaultServerConfig()
+		logger := NewStdLogger(nil, LogLevelDebug)
+
+		WithLogger(logger)(cfg)
+		assert.Equal(t, logger, cfg.logger)
+
+		// nil logger should not change the config
+		WithLogger(nil)(cfg)
+		assert.Equal(t, logger, cfg.logger)
+	})
+
+	t.Run("WithTLSIdentityMapper sets mapper", func(t *testing.T) {
+		cfg := defaultServerConfig()
+		mapper := &CommonNameMapper{}
+
+		WithTLSIdentityMapper(mapper)(cfg)
+		assert.NotNil(t, cfg.tlsIdentityMapper)
+	})
+
+	t.Run("WithNamespaceValidator sets validator", func(t *testing.T) {
+		cfg := defaultServerConfig()
+		validator := func(_ string) error { return nil }
+
+		WithNamespaceValidator(validator)(cfg)
+		assert.NotNil(t, cfg.namespaceValidator)
+
+		// nil validator should not change config
+		WithNamespaceValidator(nil)(cfg)
+		assert.NotNil(t, cfg.namespaceValidator)
+	})
 }

@@ -395,3 +395,59 @@ func TestSharedSubscriptions(t *testing.T) {
 		assert.Equal(t, "client2", matches[0].ClientID)
 	})
 }
+
+func TestSubscriptionManagerUnsubscribeAll(t *testing.T) {
+	t.Run("removes all subscriptions for client", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		m.Subscribe("client1", DefaultNamespace, Subscription{TopicFilter: "topic/a", QoS: 1})
+		m.Subscribe("client1", DefaultNamespace, Subscription{TopicFilter: "topic/b", QoS: 1})
+		m.Subscribe("client2", DefaultNamespace, Subscription{TopicFilter: "topic/a", QoS: 1})
+
+		assert.True(t, m.HasSubscription("client1", DefaultNamespace, "topic/a"))
+		assert.True(t, m.HasSubscription("client1", DefaultNamespace, "topic/b"))
+
+		m.UnsubscribeAll("client1", DefaultNamespace)
+
+		assert.False(t, m.HasSubscription("client1", DefaultNamespace, "topic/a"))
+		assert.False(t, m.HasSubscription("client1", DefaultNamespace, "topic/b"))
+		// client2 should still have subscription
+		assert.True(t, m.HasSubscription("client2", DefaultNamespace, "topic/a"))
+	})
+
+	t.Run("removes shared subscriptions", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		m.Subscribe("client1", DefaultNamespace, Subscription{TopicFilter: "$share/group/topic", QoS: 1})
+		m.Subscribe("client2", DefaultNamespace, Subscription{TopicFilter: "$share/group/topic", QoS: 1})
+
+		// Both should match
+		matches := m.MatchForDelivery("topic", "publisher", DefaultNamespace)
+		assert.Len(t, matches, 1) // Round-robin, one client
+
+		m.UnsubscribeAll("client1", DefaultNamespace)
+
+		// Only client2 should remain
+		assert.False(t, m.HasSubscription("client1", DefaultNamespace, "$share/group/topic"))
+		assert.True(t, m.HasSubscription("client2", DefaultNamespace, "$share/group/topic"))
+	})
+
+	t.Run("handles empty subscription list", func(_ *testing.T) {
+		m := NewSubscriptionManager()
+
+		// Should not panic
+		m.UnsubscribeAll("nonexistent", DefaultNamespace)
+	})
+
+	t.Run("cleans up shared group when last member leaves", func(t *testing.T) {
+		m := NewSubscriptionManager()
+
+		m.Subscribe("client1", DefaultNamespace, Subscription{TopicFilter: "$share/group/topic", QoS: 1})
+
+		m.UnsubscribeAll("client1", DefaultNamespace)
+
+		// Shared group should be cleaned up
+		matches := m.MatchForDelivery("topic", "publisher", DefaultNamespace)
+		assert.Empty(t, matches)
+	})
+}

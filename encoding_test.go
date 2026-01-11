@@ -74,6 +74,23 @@ func TestDecodeStringInvalidUTF8(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidUTF8)
 }
 
+func TestEncodeStringInvalidUTF8(t *testing.T) {
+	// Create string with invalid UTF-8 bytes
+	invalidUTF8 := string([]byte{0xFF, 0xFE, 0xFD})
+	var buf bytes.Buffer
+
+	_, err := encodeString(&buf, invalidUTF8)
+	assert.ErrorIs(t, err, ErrInvalidUTF8)
+}
+
+func TestDecodeStringWithNull(t *testing.T) {
+	// Create a buffer with null character in the string
+	buf := bytes.NewBuffer([]byte{0x00, 0x05, 'h', 'e', 0x00, 'l', 'o'})
+
+	_, _, err := decodeString(buf)
+	assert.ErrorIs(t, err, ErrStringContainsNull)
+}
+
 func TestEncodeDecodeBinary(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -170,6 +187,42 @@ func TestEncodeDecodeStringPair(t *testing.T) {
 			assert.Equal(t, tt.input, decoded)
 		})
 	}
+}
+
+func TestEncodeStringPairErrors(t *testing.T) {
+	t.Run("invalid key", func(t *testing.T) {
+		var buf bytes.Buffer
+		pair := StringPair{Key: string([]byte{0xFF, 0xFE}), Value: "valid"}
+
+		_, err := encodeStringPair(&buf, pair)
+		assert.ErrorIs(t, err, ErrInvalidUTF8)
+	})
+
+	t.Run("invalid value", func(t *testing.T) {
+		var buf bytes.Buffer
+		pair := StringPair{Key: "valid", Value: string([]byte{0xFF, 0xFE})}
+
+		_, err := encodeStringPair(&buf, pair)
+		assert.ErrorIs(t, err, ErrInvalidUTF8)
+	})
+}
+
+func TestDecodeStringPairErrors(t *testing.T) {
+	t.Run("truncated key", func(t *testing.T) {
+		// Only length prefix, no key data
+		buf := bytes.NewBuffer([]byte{0x00, 0x05})
+
+		_, _, err := decodeStringPair(buf)
+		assert.Error(t, err)
+	})
+
+	t.Run("truncated value", func(t *testing.T) {
+		// Valid key but truncated value
+		buf := bytes.NewBuffer([]byte{0x00, 0x01, 'k', 0x00, 0x05})
+
+		_, _, err := decodeStringPair(buf)
+		assert.Error(t, err)
+	})
 }
 
 func TestEncodeDecodeVarint(t *testing.T) {

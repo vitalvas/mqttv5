@@ -474,6 +474,74 @@ func BenchmarkValidateTopicFilter(b *testing.B) {
 	}
 }
 
+func TestParseSharedSubscriptionInvalidTopicFilter(t *testing.T) {
+	// Test that ParseSharedSubscription validates the topic filter part
+	_, err := ParseSharedSubscription("$share/group/test#invalid")
+	assert.ErrorIs(t, err, ErrInvalidTopicFilter)
+}
+
+func TestTopicMatcherUnsubscribeNonExistent(t *testing.T) {
+	matcher := NewTopicMatcher()
+
+	t.Run("unsubscribe from non-existent filter", func(t *testing.T) {
+		err := matcher.Unsubscribe("nonexistent/topic", "sub1")
+		require.NoError(t, err)
+	})
+
+	t.Run("unsubscribe non-existent subscriber", func(t *testing.T) {
+		err := matcher.Subscribe("test/topic", "sub1")
+		require.NoError(t, err)
+
+		err = matcher.Unsubscribe("test/topic", "sub2")
+		require.NoError(t, err)
+
+		// sub1 should still be there
+		subs := matcher.Match("test/topic")
+		assert.Len(t, subs, 1)
+		assert.Contains(t, subs, "sub1")
+	})
+}
+
+func TestTopicMatcherWithCustomMatcher(t *testing.T) {
+	matcher := NewTopicMatcher()
+
+	type matchableSub struct {
+		id string
+	}
+
+	sub1 := matchableSub{id: "sub1"}
+	sub2 := matchableSub{id: "sub2"}
+
+	err := matcher.Subscribe("test/topic", sub1)
+	require.NoError(t, err)
+
+	err = matcher.Subscribe("test/topic", sub2)
+	require.NoError(t, err)
+
+	subs := matcher.Match("test/topic")
+	assert.Len(t, subs, 2)
+}
+
+func TestTopicMatcherMatchInvalidTopic(t *testing.T) {
+	matcher := NewTopicMatcher()
+	err := matcher.Subscribe("test/+", "sub1")
+	require.NoError(t, err)
+
+	// Match with invalid topic name should return nil
+	subs := matcher.Match("test/+/invalid")
+	assert.Nil(t, subs)
+
+	subs = matcher.Match("")
+	assert.Nil(t, subs)
+}
+
+func TestTopicMatcherUnsubscribeInvalidFilter(t *testing.T) {
+	matcher := NewTopicMatcher()
+
+	err := matcher.Unsubscribe("test/+invalid", "sub1")
+	assert.ErrorIs(t, err, ErrInvalidTopicFilter)
+}
+
 func BenchmarkTopicMatch(b *testing.B) {
 	filter := "sensor/+/temperature"
 	topic := "sensor/living/temperature"
