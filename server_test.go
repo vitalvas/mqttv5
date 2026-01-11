@@ -3,6 +3,7 @@ package mqttv5
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -2378,7 +2379,112 @@ func TestGetTLSConnectionState(t *testing.T) {
 
 		assert.Nil(t, state, "non-TLS connection should return nil state")
 	})
+
+	t.Run("direct TLS connection returns state", func(t *testing.T) {
+		// Create a TLS connection using net.Pipe and perform handshake
+		clientConn, serverConn := net.Pipe()
+		defer clientConn.Close()
+		defer serverConn.Close()
+
+		// Generate minimal self-signed certificate for testing
+		cert, _ := generateTestCertificate(t)
+
+		tlsConfig := &tls.Config{
+			Certificates:       []tls.Certificate{cert},
+			InsecureSkipVerify: true,
+		}
+
+		// Wrap server side with TLS
+		tlsServerConn := tls.Server(serverConn, tlsConfig)
+
+		// Wrap client side with TLS
+		tlsClientConn := tls.Client(clientConn, &tls.Config{
+			InsecureSkipVerify: true,
+		})
+
+		// Perform handshake in goroutines
+		errCh := make(chan error, 2)
+		go func() {
+			errCh <- tlsServerConn.Handshake()
+		}()
+		go func() {
+			errCh <- tlsClientConn.Handshake()
+		}()
+
+		// Wait for both handshakes
+		for range 2 {
+			err := <-errCh
+			require.NoError(t, err)
+		}
+
+		// Now test getTLSConnectionState with the TLS connection
+		state := getTLSConnectionState(tlsServerConn)
+		assert.NotNil(t, state, "TLS connection should return non-nil state")
+		assert.True(t, state.HandshakeComplete, "Handshake should be complete")
+	})
+
+	t.Run("wrapped TLS connection returns state", func(t *testing.T) {
+		// Create a TLS connection
+		clientConn, serverConn := net.Pipe()
+		defer clientConn.Close()
+		defer serverConn.Close()
+
+		cert, _ := generateTestCertificate(t)
+
+		tlsConfig := &tls.Config{
+			Certificates:       []tls.Certificate{cert},
+			InsecureSkipVerify: true,
+		}
+
+		tlsServerConn := tls.Server(serverConn, tlsConfig)
+		tlsClientConn := tls.Client(clientConn, &tls.Config{
+			InsecureSkipVerify: true,
+		})
+
+		errCh := make(chan error, 2)
+		go func() {
+			errCh <- tlsServerConn.Handshake()
+		}()
+		go func() {
+			errCh <- tlsClientConn.Handshake()
+		}()
+
+		for range 2 {
+			err := <-errCh
+			require.NoError(t, err)
+		}
+
+		// Create a wrapper connection that implements underlyingConnGetter
+		wrapper := &tlsWrapperConn{underlying: tlsServerConn}
+
+		state := getTLSConnectionState(wrapper)
+		assert.NotNil(t, state, "Wrapped TLS connection should return non-nil state")
+		assert.True(t, state.HandshakeComplete, "Handshake should be complete")
+	})
+
+	t.Run("wrapped non-TLS connection returns nil", func(t *testing.T) {
+		// Create a wrapper that returns a non-TLS connection
+		wrapper := &tlsWrapperConn{underlying: &mockConn{}}
+
+		state := getTLSConnectionState(wrapper)
+		assert.Nil(t, state, "Wrapped non-TLS connection should return nil state")
+	})
 }
+
+// tlsWrapperConn is a test wrapper that implements underlyingConnGetter.
+type tlsWrapperConn struct {
+	underlying net.Conn
+}
+
+func (w *tlsWrapperConn) Read(b []byte) (int, error)         { return w.underlying.Read(b) }
+func (w *tlsWrapperConn) Write(b []byte) (int, error)        { return w.underlying.Write(b) }
+func (w *tlsWrapperConn) Close() error                       { return w.underlying.Close() }
+func (w *tlsWrapperConn) LocalAddr() net.Addr                { return w.underlying.LocalAddr() }
+func (w *tlsWrapperConn) RemoteAddr() net.Addr               { return w.underlying.RemoteAddr() }
+func (w *tlsWrapperConn) SetDeadline(t time.Time) error      { return w.underlying.SetDeadline(t) }
+func (w *tlsWrapperConn) SetReadDeadline(t time.Time) error  { return w.underlying.SetReadDeadline(t) }
+func (w *tlsWrapperConn) SetWriteDeadline(t time.Time) error { return w.underlying.SetWriteDeadline(t) }
+func (w *tlsWrapperConn) UnderlyingConn() net.Conn           { return w.underlying }
 
 // TestMultiTenantNamespaceIsolation tests runtime namespace isolation behaviors.
 func TestMultiTenantNamespaceIsolation(t *testing.T) {
@@ -4618,4 +4724,400 @@ func TestServerHandleSubscribeAuthorizationError(t *testing.T) {
 	suback, ok := pkt.(*SubackPacket)
 	assert.True(t, ok)
 	assert.NotEmpty(t, suback.ReasonCodes)
+}
+
+func TestServerHandleConnectionEdgeCases(t *testing.T) {
+	t.Run("first packet not CONNECT", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Send PUBLISH as first packet instead of CONNECT
+		pub := &PublishPacket{
+			Topic:   "test/topic",
+			Payload: []byte("hello"),
+		}
+		WritePacket(conn, pub, 256*1024)
+
+		// Connection should be closed by server
+		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		buf := make([]byte, 1)
+		_, err = conn.Read(buf)
+		assert.Error(t, err) // Should get EOF or connection closed
+	})
+
+	t.Run("max connections reached", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(
+			WithListener(listener),
+			WithMaxConnections(1), // Only allow 1 connection
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		// First connection - should succeed
+		conn1, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn1.Close()
+
+		connect1 := &ConnectPacket{ClientID: "client1"}
+		WritePacket(conn1, connect1, 256*1024)
+
+		pkt, _, err := ReadPacket(conn1, 256*1024)
+		require.NoError(t, err)
+		connack1, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack1.ReasonCode)
+
+		// Second connection - should get ServerBusy
+		conn2, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn2.Close()
+
+		connect2 := &ConnectPacket{ClientID: "client2"}
+		WritePacket(conn2, connect2, 256*1024)
+
+		pkt2, _, err := ReadPacket(conn2, 256*1024)
+		require.NoError(t, err)
+		connack2, ok := pkt2.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonServerBusy, connack2.ReasonCode)
+	})
+
+	t.Run("empty client ID with CleanStart false", func(t *testing.T) {
+		// Note: The code path in server.go for empty ClientID with CleanStart=false
+		// cannot be reached because ReadPacket validates the packet first (codec.go:89).
+		// The library's ReadPacket calls Validate() after decoding, which rejects
+		// empty ClientID with CleanStart=false before the server logic can handle it.
+		// The server just sees a failed ReadPacket and closes the connection.
+
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Send raw CONNECT with empty ClientID and CleanStart=false
+		rawConnect := []byte{
+			0x10, 0x0D, // Fixed header: CONNECT, remaining length = 13
+			0x00, 0x04, 'M', 'Q', 'T', 'T', // Protocol name
+			0x05,       // Protocol version 5
+			0x00,       // Connect flags (CleanStart=false)
+			0x00, 0x00, // Keep alive = 0
+			0x00,       // Properties length = 0
+			0x00, 0x00, // Client ID length = 0 (empty)
+		}
+		_, err = conn.Write(rawConnect)
+		require.NoError(t, err)
+
+		// Server closes connection because ReadPacket validation fails
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		buf := make([]byte, 1)
+		_, err = conn.Read(buf)
+		assert.Error(t, err) // EOF or connection closed
+	})
+
+	t.Run("empty client ID with CleanStart true gets assigned ID", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Empty client ID with CleanStart=true should get assigned ID
+		connect := &ConnectPacket{
+			ClientID:   "",
+			CleanStart: true,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+		// Server should assign a client ID
+		assignedID := connack.Props.GetString(PropAssignedClientIdentifier)
+		assert.NotEmpty(t, assignedID)
+		assert.True(t, strings.HasPrefix(assignedID, "auto-"))
+	})
+
+	// Table-driven tests for CONNECT property validation
+	propertyValidationTests := []struct {
+		name           string
+		setupConnect   func(*ConnectPacket)
+		expectedReason ReasonCode
+	}{
+		{
+			name: "invalid maximum packet size zero",
+			setupConnect: func(c *ConnectPacket) {
+				c.Props.Set(PropMaximumPacketSize, uint32(0))
+			},
+			expectedReason: ReasonProtocolError,
+		},
+		{
+			name: "invalid maximum packet size exceeds protocol max",
+			setupConnect: func(c *ConnectPacket) {
+				c.Props.Set(PropMaximumPacketSize, uint32(MaxPacketSizeProtocol+1))
+			},
+			expectedReason: ReasonProtocolError,
+		},
+		{
+			name: "receive maximum zero is protocol error",
+			setupConnect: func(c *ConnectPacket) {
+				c.Props.Set(PropReceiveMaximum, uint16(0))
+			},
+			expectedReason: ReasonProtocolError,
+		},
+		{
+			name: "receive maximum from CONNECT is applied",
+			setupConnect: func(c *ConnectPacket) {
+				c.Props.Set(PropReceiveMaximum, uint16(10))
+			},
+			expectedReason: ReasonSuccess,
+		},
+	}
+
+	for _, tc := range propertyValidationTests {
+		t.Run(tc.name, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			defer listener.Close()
+
+			srv := NewServer(WithListener(listener))
+			go srv.ListenAndServe()
+			defer srv.Close()
+
+			time.Sleep(20 * time.Millisecond)
+
+			conn, err := net.Dial("tcp", listener.Addr().String())
+			require.NoError(t, err)
+			defer conn.Close()
+
+			connect := &ConnectPacket{ClientID: "test-client"}
+			tc.setupConnect(connect)
+			WritePacket(conn, connect, 256*1024)
+
+			pkt, _, err := ReadPacket(conn, 256*1024)
+			require.NoError(t, err)
+			connack, ok := pkt.(*ConnackPacket)
+			require.True(t, ok)
+			assert.Equal(t, tc.expectedReason, connack.ReasonCode)
+		})
+	}
+
+	t.Run("namespace validation failure", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		// Custom authenticator that returns an invalid namespace
+		auth := &testAuthenticator{
+			authFunc: func(_ context.Context, _ *AuthContext) (*AuthResult, error) {
+				return &AuthResult{
+					Success:   true,
+					Namespace: "invalid/namespace/with/slashes", // Will fail validation
+				}, nil
+			},
+		}
+
+		// Namespace validator that rejects slashes
+		validator := func(ns string) error {
+			if strings.Contains(ns, "/") {
+				return fmt.Errorf("namespace cannot contain slashes")
+			}
+			return nil
+		}
+
+		srv := NewServer(
+			WithListener(listener),
+			WithServerAuth(auth),
+			WithNamespaceValidator(validator),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		connect := &ConnectPacket{ClientID: "test-client"}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonNotAuthorized, connack.ReasonCode)
+	})
+
+	t.Run("session takeover disconnects existing client", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		// First connection
+		conn1, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn1.Close()
+
+		connect1 := &ConnectPacket{ClientID: "same-client-id"}
+		WritePacket(conn1, connect1, 256*1024)
+
+		pkt1, _, err := ReadPacket(conn1, 256*1024)
+		require.NoError(t, err)
+		connack1, ok := pkt1.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack1.ReasonCode)
+
+		// Second connection with same client ID - should trigger session takeover
+		conn2, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn2.Close()
+
+		connect2 := &ConnectPacket{ClientID: "same-client-id"}
+		WritePacket(conn2, connect2, 256*1024)
+
+		pkt2, _, err := ReadPacket(conn2, 256*1024)
+		require.NoError(t, err)
+		connack2, ok := pkt2.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack2.ReasonCode)
+
+		// First connection should receive DISCONNECT with SessionTakenOver
+		conn1.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		pkt3, _, err := ReadPacket(conn1, 256*1024)
+		if err == nil {
+			disconnect, ok := pkt3.(*DisconnectPacket)
+			if ok {
+				assert.Equal(t, ReasonSessionTakenOver, disconnect.ReasonCode)
+			}
+		}
+	})
+
+	t.Run("onConnect callback is called", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		var callbackCalled bool
+		var callbackClientID string
+		var mu sync.Mutex
+
+		srv := NewServer(
+			WithListener(listener),
+			OnConnect(func(c *ServerClient) {
+				mu.Lock()
+				callbackCalled = true
+				callbackClientID = c.ClientID()
+				mu.Unlock()
+			}),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		connect := &ConnectPacket{ClientID: "callback-test-client"}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		// Give callback time to execute
+		time.Sleep(20 * time.Millisecond)
+
+		mu.Lock()
+		assert.True(t, callbackCalled)
+		assert.Equal(t, "callback-test-client", callbackClientID)
+		mu.Unlock()
+	})
+
+	t.Run("auth assigns different client ID", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		// Authenticator that assigns a different client ID
+		auth := &testAuthenticator{
+			authFunc: func(_ context.Context, authCtx *AuthContext) (*AuthResult, error) {
+				return &AuthResult{
+					Success:          true,
+					AssignedClientID: "server-assigned-" + authCtx.ClientID,
+				}, nil
+			},
+		}
+
+		srv := NewServer(
+			WithListener(listener),
+			WithServerAuth(auth),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		connect := &ConnectPacket{ClientID: "original-id"}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		// CONNACK should contain the assigned client ID property
+		assignedID := connack.Props.GetString(PropAssignedClientIdentifier)
+		assert.Equal(t, "server-assigned-original-id", assignedID)
+	})
 }

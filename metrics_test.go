@@ -118,6 +118,18 @@ func TestMemoryMetrics(t *testing.T) {
 
 		assert.Equal(t, int64(1), m.MessagesReceived(2))
 		assert.Equal(t, int64(1), m.MessagesSent(2))
+
+		// Test getter bounds
+		assert.Equal(t, int64(1), m.MessagesReceived(5)) // should cap to qos 2
+		assert.Equal(t, int64(1), m.MessagesSent(10))    // should cap to qos 2
+	})
+
+	t.Run("packet metrics non-existent type", func(t *testing.T) {
+		m := NewMemoryMetrics()
+
+		// Query for packet types that were never recorded
+		assert.Equal(t, int64(0), m.PacketsReceived(PacketDISCONNECT))
+		assert.Equal(t, int64(0), m.PacketsSent(PacketAUTH))
 	})
 
 	t.Run("bridge metrics", func(t *testing.T) {
@@ -255,5 +267,33 @@ func TestExpvarMetrics(t *testing.T) {
 		// Counters should be created and incremented
 		assert.NotNil(t, m.packetsReceived[PacketCONNECT])
 		assert.NotNil(t, m.packetsSent[PacketCONNACK])
+	})
+
+	t.Run("bridge metrics", func(t *testing.T) {
+		initialLocal := m.bridgeForwardedToLocal.Value()
+		initialRemote := m.bridgeForwardedToRemote.Value()
+		initialLoop := m.bridgeDroppedLoop.Value()
+		initialErrors := m.bridgeErrors.Value()
+
+		m.BridgeForwardedToLocal()
+		m.BridgeForwardedToRemote()
+		m.BridgeDroppedLoop()
+		m.BridgeError()
+
+		assert.Equal(t, initialLocal+1, m.bridgeForwardedToLocal.Value())
+		assert.Equal(t, initialRemote+1, m.bridgeForwardedToRemote.Value())
+		assert.Equal(t, initialLoop+1, m.bridgeDroppedLoop.Value())
+		assert.Equal(t, initialErrors+1, m.bridgeErrors.Value())
+	})
+
+	t.Run("qos bounds", func(t *testing.T) {
+		initialQoS2Recv := m.messagesReceived[2].Value()
+		initialQoS2Sent := m.messagesSent[2].Value()
+
+		m.MessageReceived(5) // should be capped to 2
+		m.MessageSent(10)    // should be capped to 2
+
+		assert.Equal(t, initialQoS2Recv+1, m.messagesReceived[2].Value())
+		assert.Equal(t, initialQoS2Sent+1, m.messagesSent[2].Value())
 	})
 }
