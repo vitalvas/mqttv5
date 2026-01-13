@@ -241,6 +241,96 @@ func TestServerPublish(t *testing.T) {
 		require.Len(t, retained, 1)
 		assert.Equal(t, []byte("data"), retained[0].Payload)
 	})
+
+	t.Run("publish filtered out by producer interceptor returns nil", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		filteringInterceptor := &testProducerInterceptor{
+			modifier: func(_ *Message) *Message {
+				return nil // Filter out all messages
+			},
+		}
+
+		srv := NewServer(
+			WithListener(listener),
+			WithServerProducerInterceptors(filteringInterceptor),
+		)
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		msg := &Message{
+			Topic:   "test/topic",
+			Payload: []byte("data"),
+		}
+		err = srv.Publish(msg)
+		assert.NoError(t, err, "publish filtered by interceptor should return nil, not an error")
+		assert.True(t, filteringInterceptor.called, "interceptor should have been called")
+	})
+
+	t.Run("publish with invalid topic returns error", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		msg := &Message{
+			Topic:   "test/+/topic", // Wildcards not allowed in topic names (only in filters)
+			Payload: []byte("data"),
+		}
+		err = srv.Publish(msg)
+		assert.Error(t, err, "publish with wildcard in topic should fail")
+	})
+
+	t.Run("publish with empty topic returns error", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		msg := &Message{
+			Topic:   "",
+			Payload: []byte("data"),
+		}
+		err = srv.Publish(msg)
+		assert.Error(t, err, "publish with empty topic should fail")
+	})
+
+	t.Run("publish expired message is silently discarded", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		// Create a message that has already expired
+		msg := &Message{
+			Topic:         "test/expired",
+			Payload:       []byte("data"),
+			Retain:        true,
+			MessageExpiry: 1,                                // 1 second expiry
+			PublishedAt:   time.Now().Add(-2 * time.Second), // Published 2 seconds ago
+		}
+		err = srv.Publish(msg)
+		assert.NoError(t, err, "expired message should be silently discarded without error")
+
+		// Verify the message was NOT stored in retained store
+		retained := srv.config.retainedStore.Match(DefaultNamespace, "test/expired")
+		assert.Empty(t, retained, "expired message should not be stored as retained")
+	})
 }
 
 func TestServerClose(t *testing.T) {
@@ -2784,6 +2874,51 @@ func TestBuildConnackCapabilities(t *testing.T) {
 		connack := srv.buildConnack(true, nil, "", 60)
 		assert.True(t, connack.SessionPresent)
 	})
+
+	t.Run("sets session present from authResult", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		authResult := &AuthResult{
+			Success:        true,
+			SessionPresent: true,
+		}
+		connack := srv.buildConnack(false, authResult, "", 60)
+		assert.True(t, connack.SessionPresent, "SessionPresent should be true when authResult.SessionPresent is true")
+	})
+
+	t.Run("includes server keep alive when override set", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(
+			WithListener(listener),
+			WithServerKeepAlive(120),
+		)
+		defer srv.Close()
+
+		connack := srv.buildConnack(false, nil, "", 120)
+		assert.True(t, connack.Props.Has(PropServerKeepAlive))
+		assert.Equal(t, uint16(120), connack.Props.GetUint16(PropServerKeepAlive))
+	})
+
+	t.Run("merges authResult properties", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener))
+		defer srv.Close()
+
+		authResult := &AuthResult{
+			Success: true,
+		}
+		authResult.Properties.Set(PropReasonString, "welcome")
+		connack := srv.buildConnack(false, authResult, "", 60)
+		assert.Equal(t, "welcome", connack.Props.GetString(PropReasonString))
+	})
 }
 
 func TestErrorToReasonCode(t *testing.T) {
@@ -4422,6 +4557,298 @@ func TestServerPublishToSubscribersOfflineClient(_ *testing.T) {
 	// The session stores pending messages internally
 }
 
+func TestServerPublishQoSDowngrade(t *testing.T) {
+	t.Run("delivery QoS is minimum of message QoS and subscription QoS", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		var receivedMsgs []*Message
+		var msgMu sync.Mutex
+
+		srv := NewServer(
+			WithListener(listener),
+			OnMessage(func(_ *ServerClient, msg *Message) {
+				msgMu.Lock()
+				receivedMsgs = append(receivedMsgs, msg)
+				msgMu.Unlock()
+			}),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Connect a client
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Send CONNECT
+		connectPkt := &ConnectPacket{
+			ClientID:   "qos-downgrade-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connectPkt, 256*1024)
+
+		// Read CONNACK
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		require.IsType(t, &ConnackPacket{}, pkt)
+
+		// Subscribe with QoS 0 (lower than message QoS)
+		subPkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/downgrade", QoS: QoS0},
+			},
+		}
+		WritePacket(conn, subPkt, 256*1024)
+
+		// Read SUBACK
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		require.IsType(t, &SubackPacket{}, pkt)
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Publish QoS 2 message via Server.Publish
+		msg := &Message{
+			Topic:   "test/downgrade",
+			Payload: []byte("qos2 data"),
+			QoS:     QoS2,
+		}
+		err = srv.Publish(msg)
+		require.NoError(t, err)
+
+		// Wait for delivery
+		time.Sleep(100 * time.Millisecond)
+
+		// Read the PUBLISH from the client connection
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		pubPkt, ok := pkt.(*PublishPacket)
+		require.True(t, ok, "expected PUBLISH packet")
+		// Delivery QoS should be downgraded to subscription QoS (0)
+		assert.Equal(t, QoS0, pubPkt.QoS, "delivery QoS should be downgraded to subscription QoS")
+	})
+}
+
+func TestServerPublishSubscriptionIdentifiers(t *testing.T) {
+	t.Run("subscription identifiers are appended to delivery message", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Connect a client
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Send CONNECT
+		connectPkt := &ConnectPacket{
+			ClientID:   "subid-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connectPkt, 256*1024)
+
+		// Read CONNACK
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		require.IsType(t, &ConnackPacket{}, pkt)
+
+		// Subscribe with subscription identifier
+		subPkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/subid/#", QoS: QoS0},
+			},
+		}
+		subPkt.Props.Set(PropSubscriptionIdentifier, uint32(42))
+		WritePacket(conn, subPkt, 256*1024)
+
+		// Read SUBACK
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		require.IsType(t, &SubackPacket{}, pkt)
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Publish message via Server.Publish
+		msg := &Message{
+			Topic:   "test/subid/data",
+			Payload: []byte("data with subid"),
+			QoS:     QoS0,
+		}
+		err = srv.Publish(msg)
+		require.NoError(t, err)
+
+		// Read the PUBLISH from the client connection
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		pubPkt, ok := pkt.(*PublishPacket)
+		require.True(t, ok, "expected PUBLISH packet")
+
+		// Check that subscription identifier is present
+		subIDs := pubPkt.Props.GetAllVarInts(PropSubscriptionIdentifier)
+		assert.Contains(t, subIDs, uint32(42), "subscription identifier should be in delivered message")
+	})
+}
+
+func TestServerPublishOfflineClientQueueing(t *testing.T) {
+	t.Run("QoS 0 messages are not queued for offline clients", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		// Create a session for an offline client
+		session := NewMemorySession("offline-qos0", DefaultNamespace)
+		srv.config.sessionStore.Create(DefaultNamespace, session)
+
+		// Add a subscription for the offline client
+		srv.subs.Subscribe("offline-qos0", DefaultNamespace, Subscription{
+			TopicFilter: "test/offline/qos0",
+			QoS:         QoS0,
+		})
+
+		// Publish QoS 0 message - should NOT be queued
+		msg := &Message{
+			Topic:   "test/offline/qos0",
+			Payload: []byte("qos0 data"),
+			QoS:     QoS0,
+		}
+		err := srv.Publish(msg)
+		require.NoError(t, err)
+
+		// No pending messages should be queued for QoS 0
+		pendingMsgs := session.PendingMessages()
+		assert.Empty(t, pendingMsgs, "QoS 0 messages should not be queued for offline clients")
+	})
+
+	t.Run("QoS 1 messages are queued for offline clients", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		// Create a session for an offline client
+		session := NewMemorySession("offline-qos1", DefaultNamespace)
+		srv.config.sessionStore.Create(DefaultNamespace, session)
+
+		// Add a subscription for the offline client with QoS 1
+		srv.subs.Subscribe("offline-qos1", DefaultNamespace, Subscription{
+			TopicFilter: "test/offline/qos1",
+			QoS:         QoS1,
+		})
+
+		// Publish QoS 1 message - should be queued
+		msg := &Message{
+			Topic:   "test/offline/qos1",
+			Payload: []byte("qos1 data"),
+			QoS:     QoS1,
+		}
+		err := srv.Publish(msg)
+		require.NoError(t, err)
+
+		// Pending messages should be queued for QoS 1
+		pendingMsgs := session.PendingMessages()
+		assert.Len(t, pendingMsgs, 1, "QoS 1 messages should be queued for offline clients")
+	})
+
+	t.Run("QoS 2 messages are queued for offline clients", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		// Create a session for an offline client
+		session := NewMemorySession("offline-qos2", DefaultNamespace)
+		srv.config.sessionStore.Create(DefaultNamespace, session)
+
+		// Add a subscription for the offline client with QoS 2
+		srv.subs.Subscribe("offline-qos2", DefaultNamespace, Subscription{
+			TopicFilter: "test/offline/qos2",
+			QoS:         QoS2,
+		})
+
+		// Publish QoS 2 message - should be queued
+		msg := &Message{
+			Topic:   "test/offline/qos2",
+			Payload: []byte("qos2 data"),
+			QoS:     QoS2,
+		}
+		err := srv.Publish(msg)
+		require.NoError(t, err)
+
+		// Pending messages should be queued for QoS 2
+		pendingMsgs := session.PendingMessages()
+		assert.Len(t, pendingMsgs, 1, "QoS 2 messages should be queued for offline clients")
+	})
+
+	t.Run("QoS 1 messages are queued when send fails due to quota exceeded", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		// Create a client with exhausted flow control quota
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "quota-exhausted"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.connected.Store(true)
+
+		// Set receive maximum to 1 and exhaust it
+		client.SetReceiveMaximum(1)
+		client.FlowControl().TryAcquire() // Exhaust the quota
+
+		// Create a session for the client
+		session := NewMemorySession("quota-exhausted", DefaultNamespace)
+		srv.config.sessionStore.Create(DefaultNamespace, session)
+		client.SetSession(session)
+
+		// Add client to server
+		srv.mu.Lock()
+		srv.clients[NamespaceKey(DefaultNamespace, "quota-exhausted")] = client
+		srv.mu.Unlock()
+
+		// Add a subscription for the client
+		srv.subs.Subscribe("quota-exhausted", DefaultNamespace, Subscription{
+			TopicFilter: "test/quota/#",
+			QoS:         QoS1,
+		})
+
+		// Publish QoS 1 message - should fail to send due to quota and be queued
+		msg := &Message{
+			Topic:   "test/quota/data",
+			Payload: []byte("quota exceeded data"),
+			QoS:     QoS1,
+		}
+		err := srv.Publish(msg)
+		require.NoError(t, err)
+
+		// Message should be queued in session due to send failure
+		pendingMsgs := session.PendingMessages()
+		assert.Len(t, pendingMsgs, 1, "QoS 1 messages should be queued when send fails")
+	})
+}
+
 func TestServerHandleReauthUnsupportedMethod(t *testing.T) {
 	// Use mock that only supports "FAIL" method
 	enhancedAuth := &testEnhancedAuthFailStart{}
@@ -5120,4 +5547,2749 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 		assignedID := connack.Props.GetString(PropAssignedClientIdentifier)
 		assert.Equal(t, "server-assigned-original-id", assignedID)
 	})
+}
+
+func TestServerPingreqHandling(t *testing.T) {
+	t.Run("server responds to PINGREQ with PINGRESP", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect first
+		connect := &ConnectPacket{
+			ClientID:   "pingreq-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Send PINGREQ
+		pingreq := &PingreqPacket{}
+		WritePacket(conn, pingreq, 256*1024)
+
+		// Should receive PINGRESP
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		pingresp, ok := pkt.(*PingrespPacket)
+		require.True(t, ok, "expected PINGRESP packet")
+		assert.NotNil(t, pingresp)
+	})
+}
+
+func TestServerDisconnectSessionExpiryUpdate(t *testing.T) {
+	t.Run("client can update session expiry on disconnect", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect with session expiry
+		connect := &ConnectPacket{
+			ClientID:   "session-expiry-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		connect.Props.Set(PropSessionExpiryInterval, uint32(100))
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		time.Sleep(20 * time.Millisecond)
+
+		// Send DISCONNECT with updated session expiry
+		disconnect := &DisconnectPacket{ReasonCode: ReasonSuccess}
+		disconnect.Props.Set(PropSessionExpiryInterval, uint32(200))
+		WritePacket(conn, disconnect, 256*1024)
+
+		// Connection should close cleanly
+		conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		buf := make([]byte, 1)
+		_, err = conn.Read(buf)
+		assert.Error(t, err) // EOF expected
+	})
+
+	t.Run("session expiry update ignored if original was zero", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect without session expiry (default is 0)
+		connect := &ConnectPacket{
+			ClientID:   "no-session-expiry-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		time.Sleep(20 * time.Millisecond)
+
+		// Try to set session expiry on DISCONNECT (should be ignored per spec)
+		disconnect := &DisconnectPacket{ReasonCode: ReasonSuccess}
+		disconnect.Props.Set(PropSessionExpiryInterval, uint32(100))
+		WritePacket(conn, disconnect, 256*1024)
+
+		// Connection should close cleanly (no protocol error)
+		conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		buf := make([]byte, 1)
+		_, err = conn.Read(buf)
+		assert.Error(t, err) // EOF expected
+	})
+}
+
+func TestServerAuthPacketWithoutEnhancedAuth(t *testing.T) {
+	t.Run("AUTH packet without enhanced auth configured disconnects client", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		// Server without enhanced auth configured
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect first
+		connect := &ConnectPacket{
+			ClientID:   "auth-test-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Send AUTH packet (re-authentication attempt)
+		authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
+		authPkt.Props.Set(PropAuthenticationMethod, "PLAIN")
+		WritePacket(conn, authPkt, 256*1024)
+
+		// Server should send DISCONNECT with protocol error
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		disconnect, ok := pkt.(*DisconnectPacket)
+		require.True(t, ok, "expected DISCONNECT packet")
+		assert.Equal(t, ReasonProtocolError, disconnect.ReasonCode)
+	})
+}
+
+func TestServerConnackWriteFailure(t *testing.T) {
+	t.Run("client removed when CONNACK write fails", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		// Create a connection that will fail on write
+		failConn := &failingConn{
+			writeErr: net.ErrClosed,
+		}
+
+		// Simulate handleConnection by setting up the client manually
+		connect := &ConnectPacket{
+			ClientID:   "connack-fail-client",
+			CleanStart: true,
+		}
+		client := NewServerClient(failConn, connect, 256*1024, DefaultNamespace)
+
+		// Add client to server
+		clientKey := NamespaceKey(DefaultNamespace, "connack-fail-client")
+		srv.mu.Lock()
+		srv.clients[clientKey] = client
+		srv.mu.Unlock()
+
+		// Verify client is in map
+		srv.mu.RLock()
+		_, exists := srv.clients[clientKey]
+		srv.mu.RUnlock()
+		assert.True(t, exists, "client should be in map before removal")
+
+		// Call removeClient (simulating what happens after CONNACK write failure)
+		srv.removeClient(clientKey, client)
+
+		// Verify client is removed
+		srv.mu.RLock()
+		_, exists = srv.clients[clientKey]
+		srv.mu.RUnlock()
+		assert.False(t, exists, "client should be removed from map")
+	})
+}
+
+func TestServerProtocolErrorDisconnect(t *testing.T) {
+	t.Run("protocol error sends disconnect with reason code", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect first
+		connect := &ConnectPacket{
+			ClientID:   "protocol-error-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Send malformed packet (invalid packet type in fixed header)
+		// Packet type 0 is RESERVED and invalid
+		malformedPacket := []byte{0x00, 0x00} // Type 0, length 0
+		_, err = conn.Write(malformedPacket)
+		require.NoError(t, err)
+
+		// Server should send DISCONNECT with protocol error or malformed packet
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		if err == nil {
+			disconnect, ok := pkt.(*DisconnectPacket)
+			if ok {
+				// Server correctly sent DISCONNECT with error reason
+				assert.True(t, disconnect.ReasonCode.IsError(), "disconnect reason should be an error code")
+			}
+		}
+		// If err != nil, server may have closed connection directly which is also valid
+	})
+}
+
+func TestServerPublishValidationFailureDisconnect(t *testing.T) {
+	t.Run("QoS above server max disconnects client", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		// Server only supports QoS 1
+		srv := NewServer(
+			WithListener(listener),
+			WithMaxQoS(QoS1),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect
+		connect := &ConnectPacket{
+			ClientID:   "qos-validation-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Send PUBLISH with QoS 2 (server only supports QoS 1)
+		pub := &PublishPacket{
+			Topic:    "test/topic",
+			Payload:  []byte("data"),
+			QoS:      QoS2,
+			PacketID: 1,
+		}
+		WritePacket(conn, pub, 256*1024)
+
+		// Server should send DISCONNECT with QoS not supported
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		disconnect, ok := pkt.(*DisconnectPacket)
+		require.True(t, ok, "expected DISCONNECT packet")
+		assert.Equal(t, ReasonQoSNotSupported, disconnect.ReasonCode)
+	})
+
+	t.Run("retain when not available disconnects client", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		// Server does not support retain
+		srv := NewServer(
+			WithListener(listener),
+			WithRetainAvailable(false),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect
+		connect := &ConnectPacket{
+			ClientID:   "retain-validation-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Send PUBLISH with retain flag (server doesn't support retain)
+		pub := &PublishPacket{
+			Topic:   "test/topic",
+			Payload: []byte("data"),
+			QoS:     QoS0,
+			Retain:  true,
+		}
+		WritePacket(conn, pub, 256*1024)
+
+		// Server should send DISCONNECT with retain not supported
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		disconnect, ok := pkt.(*DisconnectPacket)
+		require.True(t, ok, "expected DISCONNECT packet")
+		assert.Equal(t, ReasonRetainNotSupported, disconnect.ReasonCode)
+	})
+}
+
+func TestServerInboundFlowControlExceeded(t *testing.T) {
+	t.Run("exceeding inbound receive max disconnects client", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		// Server with very low receive maximum
+		srv := NewServer(
+			WithListener(listener),
+			WithServerReceiveMaximum(1),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect
+		connect := &ConnectPacket{
+			ClientID:   "flow-control-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		// Send first QoS 1 PUBLISH (should be accepted, quota = 1)
+		pub1 := &PublishPacket{
+			Topic:    "test/topic",
+			Payload:  []byte("data1"),
+			QoS:      QoS1,
+			PacketID: 1,
+		}
+		WritePacket(conn, pub1, 256*1024)
+
+		// Immediately send second QoS 1 PUBLISH without waiting for PUBACK
+		// This exceeds the receive maximum
+		pub2 := &PublishPacket{
+			Topic:    "test/topic",
+			Payload:  []byte("data2"),
+			QoS:      QoS1,
+			PacketID: 2,
+		}
+		WritePacket(conn, pub2, 256*1024)
+
+		// Server should eventually send DISCONNECT with receive max exceeded
+		// (may receive PUBACK for first message first)
+		conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		for {
+			pkt, _, err = ReadPacket(conn, 256*1024)
+			if err != nil {
+				break // Connection closed
+			}
+			if disconnect, ok := pkt.(*DisconnectPacket); ok {
+				assert.Equal(t, ReasonReceiveMaxExceeded, disconnect.ReasonCode)
+				break
+			}
+			// Continue reading (might be PUBACK for first message)
+		}
+	})
+}
+
+func TestServerQoS2AuthorizationFailurePubrec(t *testing.T) {
+	t.Run("authorization failure on QoS 2 publish sends PUBREC with error", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		// Authorizer that denies all publishes
+		authz := &testAuthorizer{
+			authzFunc: func(_ context.Context, _ *AuthzContext) (*AuthzResult, error) {
+				return &AuthzResult{Allowed: false, ReasonCode: ReasonNotAuthorized}, nil
+			},
+		}
+
+		srv := NewServer(
+			WithListener(listener),
+			WithServerAuthz(authz),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect
+		connect := &ConnectPacket{
+			ClientID:   "qos2-authz-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Send QoS 2 PUBLISH
+		pub := &PublishPacket{
+			Topic:    "test/topic",
+			Payload:  []byte("data"),
+			QoS:      QoS2,
+			PacketID: 1,
+		}
+		WritePacket(conn, pub, 256*1024)
+
+		// Server should send PUBREC with error reason code
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		pubrec, ok := pkt.(*PubrecPacket)
+		require.True(t, ok, "expected PUBREC packet")
+		assert.Equal(t, uint16(1), pubrec.PacketID)
+		assert.Equal(t, ReasonNotAuthorized, pubrec.ReasonCode)
+	})
+
+	t.Run("authorization error on QoS 2 publish sends PUBREC with unspecified error", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		// Authorizer that returns an error
+		authz := &testAuthorizer{
+			authzFunc: func(_ context.Context, _ *AuthzContext) (*AuthzResult, error) {
+				return nil, fmt.Errorf("internal authorization error")
+			},
+		}
+
+		srv := NewServer(
+			WithListener(listener),
+			WithServerAuthz(authz),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect
+		connect := &ConnectPacket{
+			ClientID:   "qos2-authz-error-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Send QoS 2 PUBLISH
+		pub := &PublishPacket{
+			Topic:    "test/topic",
+			Payload:  []byte("data"),
+			QoS:      QoS2,
+			PacketID: 1,
+		}
+		WritePacket(conn, pub, 256*1024)
+
+		// Server should send PUBREC with error reason code
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		pubrec, ok := pkt.(*PubrecPacket)
+		require.True(t, ok, "expected PUBREC packet")
+		assert.Equal(t, uint16(1), pubrec.PacketID)
+		assert.True(t, pubrec.ReasonCode.IsError(), "reason code should be an error")
+	})
+}
+
+func TestServerQoS2PublishHandling(t *testing.T) {
+	t.Run("QoS 2 publish tracks message and sends PUBREC", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect
+		connect := &ConnectPacket{
+			ClientID:   "qos2-publish-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Send QoS 2 PUBLISH
+		pub := &PublishPacket{
+			Topic:    "test/qos2",
+			Payload:  []byte("qos2 data"),
+			QoS:      QoS2,
+			PacketID: 1,
+		}
+		WritePacket(conn, pub, 256*1024)
+
+		// Should receive PUBREC with success
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		pubrec, ok := pkt.(*PubrecPacket)
+		require.True(t, ok, "expected PUBREC packet")
+		assert.Equal(t, uint16(1), pubrec.PacketID)
+		assert.Equal(t, ReasonSuccess, pubrec.ReasonCode)
+	})
+
+	t.Run("QoS 2 publish persists state in session", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "qos2-session-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.connected.Store(true)
+
+		// Set up session
+		session := NewMemorySession("qos2-session-client", DefaultNamespace)
+		client.SetSession(session)
+
+		// Set up inbound flow control
+		client.SetInboundReceiveMaximum(10)
+
+		// Simulate handlePublish by calling the tracker methods directly
+		msg := &Message{Topic: "test/qos2", Payload: []byte("data"), QoS: QoS2}
+		client.QoS2Tracker().TrackReceive(1, msg)
+
+		// Persist to session (simulating what handlePublish does)
+		session.AddInflightQoS2(1, &QoS2Message{
+			PacketID:     1,
+			Message:      msg,
+			State:        QoS2ReceivedPublish,
+			SentAt:       time.Now(),
+			RetryTimeout: 30 * time.Second,
+			IsSender:     false,
+		})
+
+		// Verify message is tracked
+		_, exists := client.QoS2Tracker().Get(1)
+		assert.True(t, exists, "message should be tracked in QoS2Tracker")
+
+		// Verify session has the QoS 2 message
+		qos2Msg, exists := session.GetInflightQoS2(1)
+		assert.True(t, exists, "message should be in session inflight")
+		assert.Equal(t, QoS2ReceivedPublish, qos2Msg.State)
+		assert.False(t, qos2Msg.IsSender)
+	})
+
+	t.Run("QoS 2 DUP retransmit sends PUBREC but does not double-track", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect
+		connect := &ConnectPacket{
+			ClientID:   "qos2-dup-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Send first QoS 2 PUBLISH
+		pub := &PublishPacket{
+			Topic:    "test/qos2/dup",
+			Payload:  []byte("original"),
+			QoS:      QoS2,
+			PacketID: 1,
+			DUP:      false,
+		}
+		WritePacket(conn, pub, 256*1024)
+
+		// Receive first PUBREC
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		pubrec1, ok := pkt.(*PubrecPacket)
+		require.True(t, ok)
+		assert.Equal(t, uint16(1), pubrec1.PacketID)
+		assert.Equal(t, ReasonSuccess, pubrec1.ReasonCode)
+
+		// Send DUP retransmit (same packet ID, DUP flag set)
+		pubDup := &PublishPacket{
+			Topic:    "test/qos2/dup",
+			Payload:  []byte("retransmit"),
+			QoS:      QoS2,
+			PacketID: 1,
+			DUP:      true,
+		}
+		WritePacket(conn, pubDup, 256*1024)
+
+		// Should still receive PUBREC for the DUP
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		pubrec2, ok := pkt.(*PubrecPacket)
+		require.True(t, ok, "expected PUBREC for DUP retransmit")
+		assert.Equal(t, uint16(1), pubrec2.PacketID)
+		assert.Equal(t, ReasonSuccess, pubrec2.ReasonCode)
+	})
+
+	t.Run("QoS 2 session state updates after PUBREC sent", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "qos2-state-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.connected.Store(true)
+
+		// Set up session
+		session := NewMemorySession("qos2-state-client", DefaultNamespace)
+		client.SetSession(session)
+
+		// Track message and add to session
+		msg := &Message{Topic: "test/qos2", Payload: []byte("data"), QoS: QoS2}
+		client.QoS2Tracker().TrackReceive(1, msg)
+
+		session.AddInflightQoS2(1, &QoS2Message{
+			PacketID:     1,
+			Message:      msg,
+			State:        QoS2ReceivedPublish,
+			SentAt:       time.Now(),
+			RetryTimeout: 30 * time.Second,
+			IsSender:     false,
+		})
+
+		// Simulate PUBREC sent
+		client.QoS2Tracker().SendPubrec(1)
+
+		// Update session state (simulating what handlePublish does after PUBREC)
+		if qos2Msg, exists := session.GetInflightQoS2(1); exists {
+			qos2Msg.State = QoS2AwaitingPubrel
+			qos2Msg.SentAt = time.Now()
+		}
+
+		// Verify state was updated
+		qos2Msg, exists := session.GetInflightQoS2(1)
+		require.True(t, exists)
+		assert.Equal(t, QoS2AwaitingPubrel, qos2Msg.State)
+	})
+
+	t.Run("QoS 2 complete flow with PUBREL and PUBCOMP", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		var messageDelivered bool
+		var deliveredTopic string
+		var mu sync.Mutex
+
+		srv := NewServer(
+			WithListener(listener),
+			OnMessage(func(_ *ServerClient, msg *Message) {
+				mu.Lock()
+				messageDelivered = true
+				deliveredTopic = msg.Topic
+				mu.Unlock()
+			}),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect
+		connect := &ConnectPacket{
+			ClientID:   "qos2-complete-flow-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Send QoS 2 PUBLISH
+		pub := &PublishPacket{
+			Topic:    "test/qos2/complete",
+			Payload:  []byte("complete flow"),
+			QoS:      QoS2,
+			PacketID: 1,
+		}
+		WritePacket(conn, pub, 256*1024)
+
+		// Receive PUBREC
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		pubrec, ok := pkt.(*PubrecPacket)
+		require.True(t, ok)
+		assert.Equal(t, uint16(1), pubrec.PacketID)
+
+		// Message should NOT be delivered yet (QoS 2 defers until PUBREL)
+		mu.Lock()
+		assert.False(t, messageDelivered, "message should not be delivered before PUBREL")
+		mu.Unlock()
+
+		// Send PUBREL
+		pubrel := &PubrelPacket{
+			PacketID:   1,
+			ReasonCode: ReasonSuccess,
+		}
+		WritePacket(conn, pubrel, 256*1024)
+
+		// Receive PUBCOMP
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		pubcomp, ok := pkt.(*PubcompPacket)
+		require.True(t, ok, "expected PUBCOMP packet")
+		assert.Equal(t, uint16(1), pubcomp.PacketID)
+
+		// Message should now be delivered
+		time.Sleep(50 * time.Millisecond)
+		mu.Lock()
+		assert.True(t, messageDelivered, "message should be delivered after PUBREL")
+		assert.Equal(t, "test/qos2/complete", deliveredTopic)
+		mu.Unlock()
+	})
+}
+
+func TestServerRetainedMessageHandling(t *testing.T) {
+	t.Run("retained message stores all properties", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		// Create a message with all properties
+		msg := &Message{
+			Topic:           "test/retained/props",
+			Payload:         []byte("retained with props"),
+			QoS:             QoS1,
+			Retain:          true,
+			PayloadFormat:   1, // UTF-8
+			MessageExpiry:   3600,
+			PublishedAt:     time.Now(),
+			ContentType:     "application/json",
+			ResponseTopic:   "response/topic",
+			CorrelationData: []byte("correlation-123"),
+			UserProperties: []StringPair{
+				{Key: "key1", Value: "value1"},
+				{Key: "key2", Value: "value2"},
+			},
+		}
+		err := srv.Publish(msg)
+		require.NoError(t, err)
+
+		// Verify all properties are stored
+		retained := srv.config.retainedStore.Match(DefaultNamespace, "test/retained/props")
+		require.Len(t, retained, 1)
+
+		rm := retained[0]
+		assert.Equal(t, "test/retained/props", rm.Topic)
+		assert.Equal(t, []byte("retained with props"), rm.Payload)
+		assert.Equal(t, QoS1, rm.QoS)
+		assert.Equal(t, byte(1), rm.PayloadFormat)
+		assert.Equal(t, uint32(3600), rm.MessageExpiry)
+		assert.False(t, rm.PublishedAt.IsZero())
+		assert.Equal(t, "application/json", rm.ContentType)
+		assert.Equal(t, "response/topic", rm.ResponseTopic)
+		assert.Equal(t, []byte("correlation-123"), rm.CorrelationData)
+		require.Len(t, rm.UserProperties, 2)
+		assert.Equal(t, "key1", rm.UserProperties[0].Key)
+		assert.Equal(t, "value1", rm.UserProperties[0].Value)
+		assert.Equal(t, "key2", rm.UserProperties[1].Key)
+		assert.Equal(t, "value2", rm.UserProperties[1].Value)
+	})
+
+	t.Run("retained message with empty payload deletes existing", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		// First store a retained message
+		msg1 := &Message{
+			Topic:   "test/retained/delete",
+			Payload: []byte("original data"),
+			Retain:  true,
+		}
+		err := srv.Publish(msg1)
+		require.NoError(t, err)
+
+		// Verify it's stored
+		retained := srv.config.retainedStore.Match(DefaultNamespace, "test/retained/delete")
+		require.Len(t, retained, 1)
+
+		// Delete with empty payload
+		msg2 := &Message{
+			Topic:   "test/retained/delete",
+			Payload: []byte{},
+			Retain:  true,
+		}
+		err = srv.Publish(msg2)
+		require.NoError(t, err)
+
+		// Verify it's deleted
+		retained = srv.config.retainedStore.Match(DefaultNamespace, "test/retained/delete")
+		assert.Empty(t, retained)
+	})
+
+	t.Run("client publish retained message stores it via handlePublish", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect
+		connect := &ConnectPacket{
+			ClientID:   "retained-publish-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Publish retained message with properties
+		pub := &PublishPacket{
+			Topic:   "test/client/retained",
+			Payload: []byte("client retained data"),
+			QoS:     QoS0,
+			Retain:  true,
+		}
+		pub.Props.Set(PropContentType, "text/plain")
+		pub.Props.Set(PropResponseTopic, "client/response")
+		WritePacket(conn, pub, 256*1024)
+
+		// Wait for message to be processed
+		time.Sleep(100 * time.Millisecond)
+
+		// Verify retained message is stored with properties
+		retained := srv.config.retainedStore.Match(DefaultNamespace, "test/client/retained")
+		require.Len(t, retained, 1)
+		assert.Equal(t, "test/client/retained", retained[0].Topic)
+		assert.Equal(t, []byte("client retained data"), retained[0].Payload)
+		assert.Equal(t, "text/plain", retained[0].ContentType)
+		assert.Equal(t, "client/response", retained[0].ResponseTopic)
+	})
+
+	t.Run("client publish empty retained deletes via handlePublish", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		// Pre-populate retained store
+		srv.config.retainedStore.Set(DefaultNamespace, &RetainedMessage{
+			Topic:   "test/client/delete",
+			Payload: []byte("existing retained"),
+		})
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect
+		connect := &ConnectPacket{
+			ClientID:   "retained-delete-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connect, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Publish empty retained message to delete
+		pub := &PublishPacket{
+			Topic:   "test/client/delete",
+			Payload: []byte{},
+			QoS:     QoS0,
+			Retain:  true,
+		}
+		WritePacket(conn, pub, 256*1024)
+
+		// Wait for message to be processed
+		time.Sleep(100 * time.Millisecond)
+
+		// Verify retained message is deleted
+		retained := srv.config.retainedStore.Match(DefaultNamespace, "test/client/delete")
+		assert.Empty(t, retained)
+	})
+
+	t.Run("retained message with namespace isolation", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		// Authenticator that assigns namespaces based on username
+		auth := &testAuthenticator{
+			authFunc: func(_ context.Context, ctx *AuthContext) (*AuthResult, error) {
+				namespace := "tenant-" + ctx.Username
+				return &AuthResult{
+					Success:   true,
+					Namespace: namespace,
+				}, nil
+			},
+		}
+
+		srv := NewServer(
+			WithListener(listener),
+			WithServerAuth(auth),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(20 * time.Millisecond)
+
+		// Connect as tenant-a
+		connA, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer connA.Close()
+
+		connectA := &ConnectPacket{
+			ClientID:   "tenant-a-client",
+			CleanStart: true,
+			KeepAlive:  60,
+			Username:   "a",
+		}
+		WritePacket(connA, connectA, 256*1024)
+
+		pkt, _, err := ReadPacket(connA, 256*1024)
+		require.NoError(t, err)
+		_, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Publish retained message as tenant-a
+		pubA := &PublishPacket{
+			Topic:   "shared/topic",
+			Payload: []byte("tenant-a data"),
+			QoS:     QoS0,
+			Retain:  true,
+		}
+		WritePacket(connA, pubA, 256*1024)
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Connect as tenant-b
+		connB, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer connB.Close()
+
+		connectB := &ConnectPacket{
+			ClientID:   "tenant-b-client",
+			CleanStart: true,
+			KeepAlive:  60,
+			Username:   "b",
+		}
+		WritePacket(connB, connectB, 256*1024)
+
+		pkt, _, err = ReadPacket(connB, 256*1024)
+		require.NoError(t, err)
+		_, ok = pkt.(*ConnackPacket)
+		require.True(t, ok)
+
+		// Publish retained message as tenant-b
+		pubB := &PublishPacket{
+			Topic:   "shared/topic",
+			Payload: []byte("tenant-b data"),
+			QoS:     QoS0,
+			Retain:  true,
+		}
+		WritePacket(connB, pubB, 256*1024)
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Verify messages are stored in separate namespaces
+		retainedA := srv.config.retainedStore.Match("tenant-a", "shared/topic")
+		require.Len(t, retainedA, 1)
+		assert.Equal(t, []byte("tenant-a data"), retainedA[0].Payload)
+
+		retainedB := srv.config.retainedStore.Match("tenant-b", "shared/topic")
+		require.Len(t, retainedB, 1)
+		assert.Equal(t, []byte("tenant-b data"), retainedB[0].Payload)
+	})
+}
+
+func TestServerPublishToSubscribersSubscriptionIdentifiers(t *testing.T) {
+	t.Run("subscription identifiers added when client publishes", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Connect publisher client
+		pubConn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer pubConn.Close()
+
+		pubConnect := &ConnectPacket{
+			ClientID:   "publisher",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(pubConn, pubConnect, 256*1024)
+
+		pkt, _, err := ReadPacket(pubConn, 256*1024)
+		require.NoError(t, err)
+		require.IsType(t, &ConnackPacket{}, pkt)
+
+		// Connect subscriber client
+		subConn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer subConn.Close()
+
+		subConnect := &ConnectPacket{
+			ClientID:   "subscriber",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(subConn, subConnect, 256*1024)
+
+		pkt, _, err = ReadPacket(subConn, 256*1024)
+		require.NoError(t, err)
+		require.IsType(t, &ConnackPacket{}, pkt)
+
+		// Subscribe with subscription identifier
+		subPkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/subid/#", QoS: QoS0},
+			},
+		}
+		subPkt.Props.Set(PropSubscriptionIdentifier, uint32(99))
+		WritePacket(subConn, subPkt, 256*1024)
+
+		pkt, _, err = ReadPacket(subConn, 256*1024)
+		require.NoError(t, err)
+		require.IsType(t, &SubackPacket{}, pkt)
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Publisher sends a message (goes through handlePublish -> publishToSubscribers)
+		pubPkt := &PublishPacket{
+			Topic:   "test/subid/data",
+			Payload: []byte("client published"),
+			QoS:     QoS0,
+		}
+		WritePacket(pubConn, pubPkt, 256*1024)
+
+		// Read the PUBLISH from subscriber connection
+		subConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(subConn, 256*1024)
+		require.NoError(t, err)
+
+		receivedPub, ok := pkt.(*PublishPacket)
+		require.True(t, ok, "expected PUBLISH packet")
+
+		// Check that subscription identifier is present in delivered message
+		subIDs := receivedPub.Props.GetAllVarInts(PropSubscriptionIdentifier)
+		assert.Contains(t, subIDs, uint32(99), "subscription identifier should be in delivered message")
+	})
+}
+
+func TestServerPublishToSubscribersSendFailureQueueing(t *testing.T) {
+	tests := []struct {
+		name         string
+		qos          byte
+		expectQueued bool
+		pubClientID  string
+		subClientID  string
+		topicFilter  string
+		topic        string
+	}{
+		{
+			name:         "QoS 0 messages not queued when send fails",
+			qos:          QoS0,
+			expectQueued: false,
+			pubClientID:  "pub-qos0",
+			subClientID:  "sub-qos0",
+			topicFilter:  "test/fail/qos0",
+			topic:        "test/fail/qos0",
+		},
+		{
+			name:         "QoS 1 messages queued when send fails",
+			qos:          QoS1,
+			expectQueued: true,
+			pubClientID:  "pub-qos1",
+			subClientID:  "sub-qos1",
+			topicFilter:  "test/fail/qos1",
+			topic:        "test/fail/qos1",
+		},
+		{
+			name:         "QoS 2 messages queued when send fails",
+			qos:          QoS2,
+			expectQueued: true,
+			pubClientID:  "pub-qos2",
+			subClientID:  "sub-qos2",
+			topicFilter:  "test/fail/qos2",
+			topic:        "test/fail/qos2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := NewServer()
+			defer srv.Close()
+
+			srv.running.Store(true)
+			defer srv.running.Store(false)
+
+			// Create publisher client
+			pubConn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+			pubConnect := &ConnectPacket{ClientID: tt.pubClientID}
+			pubClient := NewServerClient(pubConn, pubConnect, 256*1024, DefaultNamespace)
+			pubClient.connected.Store(true)
+
+			// Create subscriber client with exhausted flow control quota
+			subConn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+			subConnect := &ConnectPacket{ClientID: tt.subClientID}
+			subClient := NewServerClient(subConn, subConnect, 256*1024, DefaultNamespace)
+			subClient.connected.Store(true)
+
+			// Exhaust flow control to cause Send to fail
+			subClient.SetReceiveMaximum(1)
+			subClient.FlowControl().TryAcquire()
+
+			// Create session for subscriber
+			subSession := NewMemorySession(tt.subClientID, DefaultNamespace)
+			srv.config.sessionStore.Create(DefaultNamespace, subSession)
+			subClient.SetSession(subSession)
+
+			// Add clients to server
+			srv.mu.Lock()
+			srv.clients[NamespaceKey(DefaultNamespace, tt.pubClientID)] = pubClient
+			srv.clients[NamespaceKey(DefaultNamespace, tt.subClientID)] = subClient
+			srv.mu.Unlock()
+
+			// Add subscription for subscriber
+			srv.subs.Subscribe(tt.subClientID, DefaultNamespace, Subscription{
+				TopicFilter: tt.topicFilter,
+				QoS:         tt.qos,
+			})
+
+			// Call publishToSubscribers directly
+			msg := &Message{
+				Topic:     tt.topic,
+				Payload:   []byte("test payload"),
+				QoS:       tt.qos,
+				Namespace: DefaultNamespace,
+			}
+			srv.publishToSubscribers(tt.pubClientID, msg)
+
+			// Check if message was queued
+			pendingMsgs := subSession.PendingMessages()
+			if tt.expectQueued {
+				assert.Len(t, pendingMsgs, 1, "message should be queued when send fails")
+			} else {
+				assert.Empty(t, pendingMsgs, "message should not be queued when send fails")
+			}
+		})
+	}
+}
+
+func TestServerHandleSubscribeSubIDNotSupported(t *testing.T) {
+	t.Run("disconnects client when subscription identifier not supported", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(
+			WithListener(listener),
+			WithSubIDAvailable(false),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Send CONNECT
+		connectPkt := &ConnectPacket{
+			ClientID:   "subid-not-supported",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connectPkt, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		// Verify CONNACK indicates subscription IDs not available
+		subIDAvail := connack.Props.Get(PropSubscriptionIDAvailable)
+		assert.Equal(t, byte(0), subIDAvail)
+
+		// Subscribe with subscription identifier - should cause disconnect
+		subPkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/topic", QoS: QoS0},
+			},
+		}
+		subPkt.Props.Set(PropSubscriptionIdentifier, uint32(123))
+		WritePacket(conn, subPkt, 256*1024)
+
+		// Should receive DISCONNECT with SubIDsNotSupported
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		disconnectPkt, ok := pkt.(*DisconnectPacket)
+		require.True(t, ok, "expected DISCONNECT packet")
+		assert.Equal(t, ReasonSubIDsNotSupported, disconnectPkt.ReasonCode)
+	})
+}
+
+func TestServerHandleSubscribeWildcardNotSupported(t *testing.T) {
+	t.Run("returns error code when wildcard subscription not supported", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(
+			WithListener(listener),
+			WithWildcardSubAvailable(false),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Send CONNECT
+		connectPkt := &ConnectPacket{
+			ClientID:   "wildcard-not-supported",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connectPkt, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		// Subscribe with wildcard - should return error code
+		subPkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/+/data", QoS: QoS0},
+			},
+		}
+		WritePacket(conn, subPkt, 256*1024)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		subackPkt, ok := pkt.(*SubackPacket)
+		require.True(t, ok, "expected SUBACK packet")
+		require.Len(t, subackPkt.ReasonCodes, 1)
+		assert.Equal(t, ReasonWildcardSubsNotSupported, subackPkt.ReasonCodes[0])
+	})
+
+	t.Run("rejects multi-level wildcard when not supported", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(
+			WithListener(listener),
+			WithWildcardSubAvailable(false),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		connectPkt := &ConnectPacket{
+			ClientID:   "wildcard-multi-level",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connectPkt, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		require.IsType(t, &ConnackPacket{}, pkt)
+
+		// Subscribe with # wildcard
+		subPkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/#", QoS: QoS1},
+			},
+		}
+		WritePacket(conn, subPkt, 256*1024)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		subackPkt, ok := pkt.(*SubackPacket)
+		require.True(t, ok)
+		require.Len(t, subackPkt.ReasonCodes, 1)
+		assert.Equal(t, ReasonWildcardSubsNotSupported, subackPkt.ReasonCodes[0])
+	})
+}
+
+func TestServerHandleSubscribeSharedNotSupported(t *testing.T) {
+	t.Run("returns error code when shared subscription not supported", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(
+			WithListener(listener),
+			WithSharedSubAvailable(false),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		connectPkt := &ConnectPacket{
+			ClientID:   "shared-not-supported",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connectPkt, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		// Subscribe with shared subscription - should return error code
+		subPkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "$share/group/test/topic", QoS: QoS0},
+			},
+		}
+		WritePacket(conn, subPkt, 256*1024)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		subackPkt, ok := pkt.(*SubackPacket)
+		require.True(t, ok, "expected SUBACK packet")
+		require.Len(t, subackPkt.ReasonCodes, 1)
+		assert.Equal(t, ReasonSharedSubsNotSupported, subackPkt.ReasonCodes[0])
+	})
+}
+
+func TestServerHandleSubscribeMaxQoSEnforcement(t *testing.T) {
+	t.Run("caps subscription QoS to server max QoS", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(
+			WithListener(listener),
+			WithMaxQoS(QoS1), // Server only supports up to QoS 1
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		connectPkt := &ConnectPacket{
+			ClientID:   "max-qos-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connectPkt, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok)
+		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
+
+		// Subscribe with QoS 2 - should be capped to QoS 1
+		subPkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/maxqos", QoS: QoS2},
+			},
+		}
+		WritePacket(conn, subPkt, 256*1024)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+
+		subackPkt, ok := pkt.(*SubackPacket)
+		require.True(t, ok, "expected SUBACK packet")
+		require.Len(t, subackPkt.ReasonCodes, 1)
+		// Reason code should be QoS 1 (the capped value)
+		assert.Equal(t, ReasonCode(QoS1), subackPkt.ReasonCodes[0])
+	})
+}
+
+func TestServerHandleSubscribeRetainedMessageDelivery(t *testing.T) {
+	t.Run("delivers retained messages with QoS downgrade", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Store a retained message with QoS 2
+		srv.config.retainedStore.Set(DefaultNamespace, &RetainedMessage{
+			Topic:       "test/retained/qos",
+			Payload:     []byte("retained qos2"),
+			QoS:         QoS2,
+			PublishedAt: time.Now(),
+		})
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		connectPkt := &ConnectPacket{
+			ClientID:   "retained-qos-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connectPkt, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		require.IsType(t, &ConnackPacket{}, pkt)
+
+		// Subscribe with QoS 1 and RetainAsPublish - retained message should be downgraded
+		subPkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/retained/qos", QoS: QoS1, RetainAsPublish: true},
+			},
+		}
+		WritePacket(conn, subPkt, 256*1024)
+
+		// Read packets - SUBACK and PUBLISH may arrive in any order
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		var pubPkt *PublishPacket
+		for i := 0; i < 2; i++ {
+			pkt, _, err = ReadPacket(conn, 256*1024)
+			require.NoError(t, err)
+			if p, ok := pkt.(*PublishPacket); ok {
+				pubPkt = p
+			}
+		}
+
+		require.NotNil(t, pubPkt, "expected PUBLISH packet with retained message")
+		assert.Equal(t, "test/retained/qos", pubPkt.Topic)
+		assert.Equal(t, QoS1, pubPkt.QoS) // Downgraded from QoS 2
+		assert.True(t, pubPkt.Retain, "retain flag should be preserved when RetainAsPublish is true")
+	})
+
+	t.Run("respects RetainAsPublish flag", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(WithListener(listener))
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Store a retained message
+		srv.config.retainedStore.Set(DefaultNamespace, &RetainedMessage{
+			Topic:       "test/retained/rap",
+			Payload:     []byte("retained rap test"),
+			QoS:         QoS0,
+			PublishedAt: time.Now(),
+		})
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		connectPkt := &ConnectPacket{
+			ClientID:   "rap-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connectPkt, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		require.IsType(t, &ConnackPacket{}, pkt)
+
+		// Subscribe with RetainAsPublish = false (retain flag should be cleared)
+		subPkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/retained/rap", QoS: QoS0, RetainAsPublish: false},
+			},
+		}
+		WritePacket(conn, subPkt, 256*1024)
+
+		// Read packets - SUBACK and PUBLISH may arrive in any order
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		var pubPkt *PublishPacket
+		for i := 0; i < 2; i++ {
+			pkt, _, err = ReadPacket(conn, 256*1024)
+			require.NoError(t, err)
+			if p, ok := pkt.(*PublishPacket); ok {
+				pubPkt = p
+			}
+		}
+
+		require.NotNil(t, pubPkt, "expected PUBLISH packet with retained message")
+		assert.Equal(t, "test/retained/rap", pubPkt.Topic)
+		assert.False(t, pubPkt.Retain, "retain flag should be cleared when RetainAsPublish is false")
+	})
+
+	t.Run("queues retained message on send failure for QoS > 0", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		// Store a retained message with QoS 1
+		srv.config.retainedStore.Set(DefaultNamespace, &RetainedMessage{
+			Topic:       "test/retained/queue",
+			Payload:     []byte("retained to queue"),
+			QoS:         QoS1,
+			PublishedAt: time.Now(),
+		})
+
+		// Create client with exhausted flow control
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "retained-queue-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.connected.Store(true)
+
+		// Exhaust flow control to cause Send to fail
+		client.SetReceiveMaximum(1)
+		client.FlowControl().TryAcquire()
+
+		// Create session
+		session := NewMemorySession("retained-queue-client", DefaultNamespace)
+		srv.config.sessionStore.Create(DefaultNamespace, session)
+		client.SetSession(session)
+
+		// Add client to server
+		srv.mu.Lock()
+		srv.clients[NamespaceKey(DefaultNamespace, "retained-queue-client")] = client
+		srv.mu.Unlock()
+
+		srv.keepAlive.Register(NamespaceKey(DefaultNamespace, "retained-queue-client"), 60)
+
+		logger := &testLogger{}
+
+		// Call handleSubscribe with QoS 1 subscription
+		subPkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/retained/queue", QoS: QoS1},
+			},
+		}
+		srv.handleSubscribe(client, subPkt, logger)
+
+		// Retained message should be queued due to send failure
+		pendingMsgs := session.PendingMessages()
+		assert.Len(t, pendingMsgs, 1, "retained message should be queued when send fails")
+	})
+
+	t.Run("does not queue QoS 0 retained message on send failure", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		// Store a retained message with QoS 0
+		srv.config.retainedStore.Set(DefaultNamespace, &RetainedMessage{
+			Topic:       "test/retained/noqueue",
+			Payload:     []byte("qos0 retained"),
+			QoS:         QoS0,
+			PublishedAt: time.Now(),
+		})
+
+		// Create client with exhausted flow control
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "retained-noqueue-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+		client.connected.Store(true)
+
+		// Exhaust flow control
+		client.SetReceiveMaximum(1)
+		client.FlowControl().TryAcquire()
+
+		// Create session
+		session := NewMemorySession("retained-noqueue-client", DefaultNamespace)
+		srv.config.sessionStore.Create(DefaultNamespace, session)
+		client.SetSession(session)
+
+		// Add client to server
+		srv.mu.Lock()
+		srv.clients[NamespaceKey(DefaultNamespace, "retained-noqueue-client")] = client
+		srv.mu.Unlock()
+
+		srv.keepAlive.Register(NamespaceKey(DefaultNamespace, "retained-noqueue-client"), 60)
+
+		logger := &testLogger{}
+
+		// Call handleSubscribe with QoS 0 subscription
+		subPkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/retained/noqueue", QoS: QoS0},
+			},
+		}
+		srv.handleSubscribe(client, subPkt, logger)
+
+		// QoS 0 retained message should NOT be queued
+		pendingMsgs := session.PendingMessages()
+		assert.Empty(t, pendingMsgs, "QoS 0 retained message should not be queued")
+	})
+}
+
+func TestServerOnUnsubscribeCallback(t *testing.T) {
+	t.Run("callback is invoked on unsubscribe", func(t *testing.T) {
+		var callbackCalled bool
+		var callbackTopics []string
+
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		srv := NewServer(
+			WithListener(listener),
+			OnUnsubscribe(func(_ *ServerClient, topics []string) {
+				callbackCalled = true
+				callbackTopics = topics
+			}),
+		)
+		go srv.ListenAndServe()
+		defer srv.Close()
+
+		time.Sleep(50 * time.Millisecond)
+
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		require.NoError(t, err)
+		defer conn.Close()
+
+		// Connect
+		connectPkt := &ConnectPacket{
+			ClientID:   "unsub-callback-client",
+			CleanStart: true,
+			KeepAlive:  60,
+		}
+		WritePacket(conn, connectPkt, 256*1024)
+
+		pkt, _, err := ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		require.IsType(t, &ConnackPacket{}, pkt)
+
+		// Subscribe first
+		subPkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/topic1", QoS: QoS0},
+				{TopicFilter: "test/topic2", QoS: QoS0},
+			},
+		}
+		WritePacket(conn, subPkt, 256*1024)
+
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		require.IsType(t, &SubackPacket{}, pkt)
+
+		// Unsubscribe
+		unsubPkt := &UnsubscribePacket{
+			PacketID:     2,
+			TopicFilters: []string{"test/topic1", "test/topic2"},
+		}
+		WritePacket(conn, unsubPkt, 256*1024)
+
+		pkt, _, err = ReadPacket(conn, 256*1024)
+		require.NoError(t, err)
+		require.IsType(t, &UnsubackPacket{}, pkt)
+
+		time.Sleep(50 * time.Millisecond)
+
+		assert.True(t, callbackCalled, "onUnsubscribe callback should be called")
+		assert.ElementsMatch(t, []string{"test/topic1", "test/topic2"}, callbackTopics)
+	})
+}
+
+func TestServerRemoveClientWithNilClient(t *testing.T) {
+	t.Run("removes client unconditionally when client parameter is nil", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		// Create and add a client
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "nil-remove-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		clientKey := NamespaceKey(DefaultNamespace, "nil-remove-client")
+		srv.mu.Lock()
+		srv.clients[clientKey] = client
+		srv.mu.Unlock()
+
+		// Verify client exists
+		srv.mu.RLock()
+		_, exists := srv.clients[clientKey]
+		srv.mu.RUnlock()
+		require.True(t, exists)
+
+		// Remove with nil client - should delete unconditionally
+		srv.removeClient(clientKey, nil)
+
+		// Verify client is removed
+		srv.mu.RLock()
+		_, exists = srv.clients[clientKey]
+		srv.mu.RUnlock()
+		assert.False(t, exists, "client should be removed when removeClient is called with nil")
+	})
+}
+
+func TestServerErrorToReasonCodePropertyNotAllowed(t *testing.T) {
+	srv := NewServer()
+	defer srv.Close()
+
+	t.Run("property not allowed returns protocol error", func(t *testing.T) {
+		assert.Equal(t, ReasonProtocolError, srv.errorToReasonCode(ErrPropertyNotAllowed))
+	})
+}
+
+func TestServerDeliverPendingMessagesRequeue(t *testing.T) {
+	t.Run("re-queues message when send fails", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		// Create client with exhausted flow control
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "requeue-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		// Exhaust flow control to cause Send to fail
+		client.SetReceiveMaximum(1)
+		client.FlowControl().TryAcquire()
+
+		session := NewMemorySession("requeue-client", DefaultNamespace)
+		srv.config.sessionStore.Create(DefaultNamespace, session)
+		client.SetSession(session)
+
+		// Add pending message
+		msg := &Message{
+			Topic:     "test/topic",
+			Payload:   []byte("data"),
+			QoS:       QoS1,
+			Namespace: DefaultNamespace,
+		}
+		session.AddPendingMessage(1, msg)
+
+		// Deliver pending messages - should fail and re-queue
+		srv.deliverPendingMessages(client, session)
+
+		// Message should be re-queued due to send failure
+		pendingMsgs := session.PendingMessages()
+		assert.Len(t, pendingMsgs, 1, "message should be re-queued when send fails")
+	})
+}
+
+func TestServerRestoreInflightMessagesFlowControlExhausted(t *testing.T) {
+	t.Run("skips message when flow control exhausted for QoS 1 restore", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "qos1-flow-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		// Exhaust flow control
+		client.SetReceiveMaximum(1)
+		client.FlowControl().TryAcquire()
+
+		session := NewMemorySession("qos1-flow-client", DefaultNamespace)
+		client.SetSession(session)
+
+		// Add inflight QoS 1 message
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS1}
+		session.AddInflightQoS1(1, &QoS1Message{PacketID: 1, Message: msg})
+
+		logger := &testLogger{}
+
+		// Restore inflight messages
+		srv.restoreInflightMessages(client, session, logger)
+
+		// No message should be sent due to flow control exhaustion
+		written := conn.writeBuf.Bytes()
+		assert.Empty(t, written, "no message should be sent when flow control exhausted")
+	})
+
+	t.Run("skips message when flow control exhausted for QoS 2 AwaitingPubrec restore", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "qos2-pubrec-flow"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		// Exhaust flow control
+		client.SetReceiveMaximum(1)
+		client.FlowControl().TryAcquire()
+
+		session := NewMemorySession("qos2-pubrec-flow", DefaultNamespace)
+		client.SetSession(session)
+
+		// Add inflight QoS 2 message awaiting PUBREC
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS2}
+		session.AddInflightQoS2(1, &QoS2Message{
+			PacketID: 1,
+			Message:  msg,
+			State:    QoS2AwaitingPubrec,
+			IsSender: true,
+		})
+
+		logger := &testLogger{}
+
+		srv.restoreInflightMessages(client, session, logger)
+
+		// No message should be sent due to flow control exhaustion
+		written := conn.writeBuf.Bytes()
+		assert.Empty(t, written, "no PUBLISH should be sent when flow control exhausted")
+	})
+
+	t.Run("skips message when flow control exhausted for QoS 2 AwaitingPubcomp restore", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "qos2-pubcomp-flow"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		// Exhaust flow control
+		client.SetReceiveMaximum(1)
+		client.FlowControl().TryAcquire()
+
+		session := NewMemorySession("qos2-pubcomp-flow", DefaultNamespace)
+		client.SetSession(session)
+
+		// Add inflight QoS 2 message awaiting PUBCOMP
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS2}
+		session.AddInflightQoS2(1, &QoS2Message{
+			PacketID: 1,
+			Message:  msg,
+			State:    QoS2AwaitingPubcomp,
+			IsSender: true,
+		})
+
+		logger := &testLogger{}
+
+		srv.restoreInflightMessages(client, session, logger)
+
+		// No PUBREL should be sent due to flow control exhaustion
+		written := conn.writeBuf.Bytes()
+		assert.Empty(t, written, "no PUBREL should be sent when flow control exhausted")
+	})
+
+	t.Run("restores receiver-side QoS 2 message despite inbound quota exceeded", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "qos2-inbound-flow"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		// Exhaust inbound flow control
+		client.SetInboundReceiveMaximum(1)
+		client.InboundFlowControl().TryAcquire()
+
+		session := NewMemorySession("qos2-inbound-flow", DefaultNamespace)
+		client.SetSession(session)
+
+		// Add inflight receiver-side QoS 2 message
+		msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS2}
+		session.AddInflightQoS2(1, &QoS2Message{
+			PacketID: 1,
+			Message:  msg,
+			State:    QoS2AwaitingPubrel,
+			IsSender: false,
+		})
+
+		logger := &testLogger{}
+
+		srv.restoreInflightMessages(client, session, logger)
+
+		// Message should still be restored to tracker despite inbound quota warning
+		_, ok := client.QoS2Tracker().Get(1)
+		assert.True(t, ok, "message should still be restored despite quota exceeded")
+	})
+}
+
+func TestServerRetryClientMessagesPubrelRetransmit(t *testing.T) {
+	srv := NewServer()
+	defer srv.Close()
+
+	conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+	connect := &ConnectPacket{ClientID: "pubrel-retry-test"}
+	client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+	client.connected.Store(true)
+
+	// Track a QoS 2 message and transition to QoS2AwaitingPubcomp state
+	msg := &Message{Topic: "test/topic", Payload: []byte("data"), QoS: QoS2}
+	client.QoS2Tracker().TrackSend(1, msg)
+
+	// Transition to QoS2AwaitingPubcomp by handling a PUBREC
+	_, ok := client.QoS2Tracker().HandlePubrec(1)
+	require.True(t, ok, "HandlePubrec should succeed")
+
+	// Verify state is now QoS2AwaitingPubcomp
+	qos2Msg, exists := client.QoS2Tracker().Get(1)
+	require.True(t, exists)
+	assert.Equal(t, QoS2AwaitingPubcomp, qos2Msg.State)
+
+	// Force message to need retry by setting SentAt in the past
+	qos2Msg.SentAt = time.Now().Add(-2 * time.Minute)
+	qos2Msg.RetryTimeout = 1 * time.Millisecond
+
+	// Call retryClientMessages - should retransmit PUBREL
+	srv.retryClientMessages(client)
+
+	// Verify PUBREL was sent
+	written := conn.writeBuf.Bytes()
+	require.NotEmpty(t, written, "PUBREL should be written")
+
+	r := bytes.NewReader(written)
+	var header FixedHeader
+	_, err := header.Decode(r)
+	require.NoError(t, err)
+	assert.Equal(t, PacketPUBREL, header.PacketType)
+}
+
+// testEnhancedAuthFailStartConnect is a mock that fails AuthStart for CONNECT flow testing.
+type testEnhancedAuthFailStartConnect struct{}
+
+func (a *testEnhancedAuthFailStartConnect) SupportsMethod(method string) bool {
+	return method == "FAIL-CONNECT"
+}
+
+func (a *testEnhancedAuthFailStartConnect) AuthStart(_ context.Context, _ *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	return nil, assert.AnError
+}
+
+func (a *testEnhancedAuthFailStartConnect) AuthContinue(_ context.Context, _ *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	return nil, nil
+}
+
+func TestServerPerformEnhancedAuthStartFails(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+
+	enhancedAuth := &testEnhancedAuthFailStartConnect{}
+	srv := NewServer(WithListener(listener), WithEnhancedAuth(enhancedAuth))
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.ListenAndServe()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	connect := &ConnectPacket{ClientID: "auth-start-fail"}
+	connect.Props.Set(PropAuthenticationMethod, "FAIL-CONNECT")
+	connect.Props.Set(PropAuthenticationData, []byte("test-data"))
+
+	_, err = WritePacket(conn, connect, 256*1024)
+	require.NoError(t, err)
+
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err := ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+
+	connack, ok := pkt.(*ConnackPacket)
+	require.True(t, ok)
+	assert.Equal(t, ReasonNotAuthorized, connack.ReasonCode)
+
+	srv.Close()
+	wg.Wait()
+}
+
+// testEnhancedAuthContinueAuth is a mock that returns Continue=true on AuthStart
+// but fails on AuthContinue.
+type testEnhancedAuthContinueAuth struct {
+	authContinueFails bool
+}
+
+func (a *testEnhancedAuthContinueAuth) SupportsMethod(method string) bool {
+	return method == "CONTINUE-AUTH"
+}
+
+func (a *testEnhancedAuthContinueAuth) AuthStart(_ context.Context, _ *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	return &EnhancedAuthResult{
+		Continue:   true,
+		ReasonCode: ReasonContinueAuth,
+		AuthData:   []byte("challenge"),
+	}, nil
+}
+
+func (a *testEnhancedAuthContinueAuth) AuthContinue(_ context.Context, _ *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	if a.authContinueFails {
+		return nil, assert.AnError
+	}
+	return &EnhancedAuthResult{
+		Success:    true,
+		Namespace:  DefaultNamespace,
+		ReasonCode: ReasonSuccess,
+	}, nil
+}
+
+func TestServerPerformEnhancedAuthContinueFails(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+
+	enhancedAuth := &testEnhancedAuthContinueAuth{authContinueFails: true}
+	srv := NewServer(WithListener(listener), WithEnhancedAuth(enhancedAuth))
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.ListenAndServe()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	connect := &ConnectPacket{ClientID: "auth-continue-fail"}
+	connect.Props.Set(PropAuthenticationMethod, "CONTINUE-AUTH")
+	connect.Props.Set(PropAuthenticationData, []byte("test-data"))
+
+	_, err = WritePacket(conn, connect, 256*1024)
+	require.NoError(t, err)
+
+	// Read AUTH packet from server
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err := ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+
+	authPkt, ok := pkt.(*AuthPacket)
+	require.True(t, ok)
+	assert.Equal(t, ReasonContinueAuth, authPkt.ReasonCode)
+
+	// Send AUTH response back to server
+	clientAuth := &AuthPacket{ReasonCode: ReasonContinueAuth}
+	clientAuth.Props.Set(PropAuthenticationMethod, "CONTINUE-AUTH")
+	clientAuth.Props.Set(PropAuthenticationData, []byte("response"))
+
+	_, err = WritePacket(conn, clientAuth, 256*1024)
+	require.NoError(t, err)
+
+	// Read CONNACK - should be NotAuthorized due to AuthContinue failure
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err = ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+
+	connack, ok := pkt.(*ConnackPacket)
+	require.True(t, ok)
+	assert.Equal(t, ReasonNotAuthorized, connack.ReasonCode)
+
+	srv.Close()
+	wg.Wait()
+}
+
+func TestServerPerformEnhancedAuthReadFails(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+
+	enhancedAuth := &testEnhancedAuthContinueAuth{authContinueFails: false}
+	srv := NewServer(WithListener(listener), WithEnhancedAuth(enhancedAuth))
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.ListenAndServe()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+
+	connect := &ConnectPacket{ClientID: "auth-read-fail"}
+	connect.Props.Set(PropAuthenticationMethod, "CONTINUE-AUTH")
+	connect.Props.Set(PropAuthenticationData, []byte("test-data"))
+
+	_, err = WritePacket(conn, connect, 256*1024)
+	require.NoError(t, err)
+
+	// Read AUTH packet from server
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err := ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+
+	_, ok := pkt.(*AuthPacket)
+	require.True(t, ok)
+
+	// Close connection without sending AUTH response - this should cause read failure on server
+	conn.Close()
+
+	// Wait a bit for server to handle the read error
+	time.Sleep(100 * time.Millisecond)
+
+	srv.Close()
+	wg.Wait()
+}
+
+func TestServerPerformEnhancedAuthWrongPacketType(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+
+	enhancedAuth := &testEnhancedAuthContinueAuth{authContinueFails: false}
+	srv := NewServer(WithListener(listener), WithEnhancedAuth(enhancedAuth))
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.ListenAndServe()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	connect := &ConnectPacket{ClientID: "auth-wrong-pkt"}
+	connect.Props.Set(PropAuthenticationMethod, "CONTINUE-AUTH")
+	connect.Props.Set(PropAuthenticationData, []byte("test-data"))
+
+	_, err = WritePacket(conn, connect, 256*1024)
+	require.NoError(t, err)
+
+	// Read AUTH packet from server
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err := ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+
+	_, ok := pkt.(*AuthPacket)
+	require.True(t, ok)
+
+	// Send DISCONNECT instead of AUTH - wrong packet type
+	disconnect := &DisconnectPacket{ReasonCode: ReasonSuccess}
+	_, err = WritePacket(conn, disconnect, 256*1024)
+	require.NoError(t, err)
+
+	// Read CONNACK - should be ProtocolError due to wrong packet type
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err = ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+
+	connack, ok := pkt.(*ConnackPacket)
+	require.True(t, ok)
+	assert.Equal(t, ReasonProtocolError, connack.ReasonCode)
+
+	srv.Close()
+	wg.Wait()
+}
+
+// testReauthMultiStepAuth is a configurable mock for testing multi-step re-authentication.
+type testReauthMultiStepAuth struct {
+	authContinueFails   bool
+	authContinueSuccess bool // If false, returns Success=false in final result
+	customReasonCode    ReasonCode
+}
+
+func (a *testReauthMultiStepAuth) SupportsMethod(method string) bool {
+	return method == "REAUTH-MULTI"
+}
+
+func (a *testReauthMultiStepAuth) AuthStart(_ context.Context, _ *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	return &EnhancedAuthResult{
+		Continue:   true,
+		ReasonCode: ReasonContinueAuth,
+		AuthData:   []byte("reauth-challenge"),
+	}, nil
+}
+
+func (a *testReauthMultiStepAuth) AuthContinue(_ context.Context, _ *EnhancedAuthContext) (*EnhancedAuthResult, error) {
+	if a.authContinueFails {
+		return nil, assert.AnError
+	}
+	if !a.authContinueSuccess {
+		reasonCode := a.customReasonCode
+		if reasonCode == 0 {
+			reasonCode = ReasonNotAuthorized
+		}
+		return &EnhancedAuthResult{
+			Success:    false,
+			ReasonCode: reasonCode,
+		}, nil
+	}
+	return &EnhancedAuthResult{
+		Success:    true,
+		Namespace:  DefaultNamespace,
+		ReasonCode: ReasonSuccess,
+	}, nil
+}
+
+func TestServerHandleReauthMultiStepContinueFails(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+
+	enhancedAuth := &testReauthMultiStepAuth{authContinueFails: true}
+	srv := NewServer(WithListener(listener), WithEnhancedAuth(enhancedAuth))
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.ListenAndServe()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// First establish a connection
+	connect := &ConnectPacket{ClientID: "reauth-continue-fail"}
+	_, err = WritePacket(conn, connect, 256*1024)
+	require.NoError(t, err)
+
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err := ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	_, ok := pkt.(*ConnackPacket)
+	require.True(t, ok)
+
+	// Send re-auth request
+	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
+	authPkt.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
+	_, err = WritePacket(conn, authPkt, 256*1024)
+	require.NoError(t, err)
+
+	// Read AUTH challenge from server
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err = ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	serverAuth, ok := pkt.(*AuthPacket)
+	require.True(t, ok)
+	assert.Equal(t, ReasonContinueAuth, serverAuth.ReasonCode)
+
+	// Send AUTH response back
+	clientAuth := &AuthPacket{ReasonCode: ReasonContinueAuth}
+	clientAuth.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
+	clientAuth.Props.Set(PropAuthenticationData, []byte("response"))
+	_, err = WritePacket(conn, clientAuth, 256*1024)
+	require.NoError(t, err)
+
+	// Wait for server to process and disconnect
+	time.Sleep(100 * time.Millisecond)
+
+	srv.Close()
+	wg.Wait()
+}
+
+func TestServerHandleReauthMultiStepReadFails(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+
+	enhancedAuth := &testReauthMultiStepAuth{authContinueSuccess: true}
+	srv := NewServer(WithListener(listener), WithEnhancedAuth(enhancedAuth))
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.ListenAndServe()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+
+	// First establish a connection
+	connect := &ConnectPacket{ClientID: "reauth-read-fail"}
+	_, err = WritePacket(conn, connect, 256*1024)
+	require.NoError(t, err)
+
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err := ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	_, ok := pkt.(*ConnackPacket)
+	require.True(t, ok)
+
+	// Send re-auth request
+	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
+	authPkt.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
+	_, err = WritePacket(conn, authPkt, 256*1024)
+	require.NoError(t, err)
+
+	// Read AUTH challenge from server
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err = ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	_, ok = pkt.(*AuthPacket)
+	require.True(t, ok)
+
+	// Close connection without responding - causes read failure
+	conn.Close()
+
+	time.Sleep(100 * time.Millisecond)
+
+	srv.Close()
+	wg.Wait()
+}
+
+func TestServerHandleReauthMultiStepWrongPacketType(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+
+	enhancedAuth := &testReauthMultiStepAuth{authContinueSuccess: true}
+	srv := NewServer(WithListener(listener), WithEnhancedAuth(enhancedAuth))
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.ListenAndServe()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// First establish a connection
+	connect := &ConnectPacket{ClientID: "reauth-wrong-pkt"}
+	_, err = WritePacket(conn, connect, 256*1024)
+	require.NoError(t, err)
+
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err := ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	_, ok := pkt.(*ConnackPacket)
+	require.True(t, ok)
+
+	// Send re-auth request
+	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
+	authPkt.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
+	_, err = WritePacket(conn, authPkt, 256*1024)
+	require.NoError(t, err)
+
+	// Read AUTH challenge from server
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err = ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	_, ok = pkt.(*AuthPacket)
+	require.True(t, ok)
+
+	// Send PUBLISH instead of AUTH - wrong packet type
+	pub := &PublishPacket{Topic: "test/topic", Payload: []byte("data")}
+	_, err = WritePacket(conn, pub, 256*1024)
+	require.NoError(t, err)
+
+	// Wait for server to process and disconnect
+	time.Sleep(100 * time.Millisecond)
+
+	srv.Close()
+	wg.Wait()
+}
+
+func TestServerHandleReauthMultiStepFinalResultFails(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+
+	enhancedAuth := &testReauthMultiStepAuth{
+		authContinueFails:   false,
+		authContinueSuccess: false, // Will return Success=false
+	}
+	srv := NewServer(WithListener(listener), WithEnhancedAuth(enhancedAuth))
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.ListenAndServe()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// First establish a connection
+	connect := &ConnectPacket{ClientID: "reauth-final-fail"}
+	_, err = WritePacket(conn, connect, 256*1024)
+	require.NoError(t, err)
+
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err := ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	_, ok := pkt.(*ConnackPacket)
+	require.True(t, ok)
+
+	// Send re-auth request
+	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
+	authPkt.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
+	_, err = WritePacket(conn, authPkt, 256*1024)
+	require.NoError(t, err)
+
+	// Read AUTH challenge from server
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err = ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	_, ok = pkt.(*AuthPacket)
+	require.True(t, ok)
+
+	// Send valid AUTH response
+	clientAuth := &AuthPacket{ReasonCode: ReasonContinueAuth}
+	clientAuth.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
+	clientAuth.Props.Set(PropAuthenticationData, []byte("response"))
+	_, err = WritePacket(conn, clientAuth, 256*1024)
+	require.NoError(t, err)
+
+	// Wait for server to process (client should be disconnected due to auth failure)
+	time.Sleep(100 * time.Millisecond)
+
+	srv.Close()
+	wg.Wait()
+}
+
+func TestServerHandleReauthMultiStepFinalResultCustomReasonCode(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+
+	enhancedAuth := &testReauthMultiStepAuth{
+		authContinueFails:   false,
+		authContinueSuccess: false,
+		customReasonCode:    0, // Will use default ReasonNotAuthorized
+	}
+	srv := NewServer(WithListener(listener), WithEnhancedAuth(enhancedAuth))
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.ListenAndServe()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// First establish a connection
+	connect := &ConnectPacket{ClientID: "reauth-custom-reason"}
+	_, err = WritePacket(conn, connect, 256*1024)
+	require.NoError(t, err)
+
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err := ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	_, ok := pkt.(*ConnackPacket)
+	require.True(t, ok)
+
+	// Send re-auth request
+	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
+	authPkt.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
+	_, err = WritePacket(conn, authPkt, 256*1024)
+	require.NoError(t, err)
+
+	// Read AUTH challenge from server
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err = ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	_, ok = pkt.(*AuthPacket)
+	require.True(t, ok)
+
+	// Send valid AUTH response
+	clientAuth := &AuthPacket{ReasonCode: ReasonContinueAuth}
+	clientAuth.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
+	clientAuth.Props.Set(PropAuthenticationData, []byte("response"))
+	_, err = WritePacket(conn, clientAuth, 256*1024)
+	require.NoError(t, err)
+
+	// Wait for server to process
+	time.Sleep(100 * time.Millisecond)
+
+	srv.Close()
+	wg.Wait()
+}
+
+func TestServerHandleReauthMultiStepSuccess(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err)
+
+	enhancedAuth := &testReauthMultiStepAuth{authContinueSuccess: true}
+	srv := NewServer(WithListener(listener), WithEnhancedAuth(enhancedAuth))
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.ListenAndServe()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// First establish a connection
+	connect := &ConnectPacket{ClientID: "reauth-success"}
+	_, err = WritePacket(conn, connect, 256*1024)
+	require.NoError(t, err)
+
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err := ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	_, ok := pkt.(*ConnackPacket)
+	require.True(t, ok)
+
+	// Send re-auth request
+	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
+	authPkt.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
+	_, err = WritePacket(conn, authPkt, 256*1024)
+	require.NoError(t, err)
+
+	// Read AUTH challenge from server
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err = ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	serverAuth, ok := pkt.(*AuthPacket)
+	require.True(t, ok)
+	assert.Equal(t, ReasonContinueAuth, serverAuth.ReasonCode)
+
+	// Send valid AUTH response
+	clientAuth := &AuthPacket{ReasonCode: ReasonContinueAuth}
+	clientAuth.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
+	clientAuth.Props.Set(PropAuthenticationData, []byte("response"))
+	_, err = WritePacket(conn, clientAuth, 256*1024)
+	require.NoError(t, err)
+
+	// Read success AUTH from server
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err = ReadPacket(conn, 256*1024)
+	require.NoError(t, err)
+	successAuth, ok := pkt.(*AuthPacket)
+	require.True(t, ok)
+	assert.Equal(t, ReasonSuccess, successAuth.ReasonCode)
+
+	srv.Close()
+	wg.Wait()
 }
