@@ -176,6 +176,28 @@ func TestServerPublish(t *testing.T) {
 		assert.Empty(t, retained)
 	})
 
+	t.Run("publish retained when retain disabled returns error", func(t *testing.T) {
+		listener, err := net.Listen("tcp", ":0")
+		require.NoError(t, err)
+
+		srv := NewServer(
+			WithListener(listener),
+			WithRetainedStore(nil),
+		)
+		defer srv.Close()
+
+		srv.running.Store(true)
+		defer srv.running.Store(false)
+
+		msg := &Message{
+			Topic:   "test/retained",
+			Payload: []byte("data"),
+			Retain:  true,
+		}
+		err = srv.Publish(msg)
+		assert.ErrorIs(t, err, ErrRetainNotSupported)
+	})
+
 	t.Run("publish with invalid namespace rejected", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -2353,6 +2375,110 @@ func TestServerOnSubscribeCallbackFiltering(t *testing.T) {
 		assert.Len(t, callbackSubs, 2, "callback should only have successful subscriptions")
 		assert.Equal(t, "valid/topic", callbackSubs[0].TopicFilter)
 		assert.Equal(t, "another/valid", callbackSubs[1].TopicFilter)
+	})
+}
+
+func TestServerSubscribeHelpers(t *testing.T) {
+	t.Run("validateSubscriptionSupport checks wildcard and shared availability", func(t *testing.T) {
+		srv := NewServer(
+			WithWildcardSubAvailable(false),
+			WithSharedSubAvailable(false),
+		)
+		defer srv.Close()
+
+		discardLogger := NewStdLogger(io.Discard, LogLevelNone)
+
+		wildcardSub := Subscription{TopicFilter: "test/#", QoS: QoS0}
+		reason := srv.validateSubscriptionSupport(wildcardSub, discardLogger)
+		assert.Equal(t, ReasonWildcardSubsNotSupported, reason)
+
+		sharedSub := Subscription{TopicFilter: "$share/group/topic", QoS: QoS0}
+		reason = srv.validateSubscriptionSupport(sharedSub, discardLogger)
+		assert.Equal(t, ReasonSharedSubsNotSupported, reason)
+
+		normalSub := Subscription{TopicFilter: "test/topic", QoS: QoS0}
+		reason = srv.validateSubscriptionSupport(normalSub, discardLogger)
+		assert.Equal(t, ReasonSuccess, reason)
+	})
+
+	t.Run("applyMaxSubscriptionQoS caps subscription QoS", func(t *testing.T) {
+		srv := NewServer(WithMaxQoS(QoS1))
+		defer srv.Close()
+
+		sub := Subscription{TopicFilter: "test/topic", QoS: QoS2}
+		capped := srv.applyMaxSubscriptionQoS(sub)
+		assert.Equal(t, QoS1, capped.QoS)
+
+		sub = Subscription{TopicFilter: "test/topic", QoS: QoS0}
+		capped = srv.applyMaxSubscriptionQoS(sub)
+		assert.Equal(t, QoS0, capped.QoS)
+	})
+
+	t.Run("authorizeSubscribe handles allowed and denied results", func(t *testing.T) {
+		authz := &testAuthorizer{
+			authzFunc: func(_ context.Context, _ *AuthzContext) (*AuthzResult, error) {
+				return &AuthzResult{Allowed: true, MaxQoS: QoS0}, nil
+			},
+		}
+
+		srv := NewServer(WithServerAuthz(authz))
+		defer srv.Close()
+
+		conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+		connect := &ConnectPacket{ClientID: "test-client", Username: "user"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		discardLogger := NewStdLogger(io.Discard, LogLevelNone)
+		sub := Subscription{TopicFilter: "test/topic", QoS: QoS1}
+		updated, reason, allowed := srv.authorizeSubscribe(client, sub, discardLogger)
+		assert.True(t, allowed)
+		assert.Equal(t, ReasonSuccess, reason)
+		assert.Equal(t, QoS0, updated.QoS)
+
+		authz.authzFunc = func(_ context.Context, _ *AuthzContext) (*AuthzResult, error) {
+			return &AuthzResult{Allowed: false, ReasonCode: ReasonNotAuthorized}, nil
+		}
+
+		_, reason, allowed = srv.authorizeSubscribe(client, sub, discardLogger)
+		assert.False(t, allowed)
+		assert.Equal(t, ReasonNotAuthorized, reason)
+	})
+
+	t.Run("deliverRetainedMessages respects RetainAsPublish", func(t *testing.T) {
+		srv := NewServer()
+		defer srv.Close()
+
+		retained := &RetainedMessage{
+			Topic:       "test/retained",
+			Payload:     []byte("payload"),
+			QoS:         QoS0,
+			PublishedAt: time.Now(),
+		}
+		srv.config.retainedStore.Set(DefaultNamespace, retained)
+
+		writeBuf := &bytes.Buffer{}
+		conn := &mockServerConn{writeBuf: writeBuf}
+		connect := &ConnectPacket{ClientID: "test-client"}
+		client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+
+		sub := Subscription{TopicFilter: "test/retained", QoS: QoS0, RetainAsPublish: false}
+		srv.deliverRetainedMessages(client, sub, DefaultNamespace, "test-client")
+
+		pkt, _, err := ReadPacket(bytes.NewReader(writeBuf.Bytes()), 256*1024)
+		require.NoError(t, err)
+		pub, ok := pkt.(*PublishPacket)
+		require.True(t, ok)
+		assert.False(t, pub.Retain)
+
+		writeBuf.Reset()
+		sub = Subscription{TopicFilter: "test/retained", QoS: QoS0, RetainAsPublish: true}
+		srv.deliverRetainedMessages(client, sub, DefaultNamespace, "test-client")
+
+		pkt, _, err = ReadPacket(bytes.NewReader(writeBuf.Bytes()), 256*1024)
+		require.NoError(t, err)
+		pub, ok = pkt.(*PublishPacket)
+		require.True(t, ok)
+		assert.True(t, pub.Retain)
 	})
 }
 

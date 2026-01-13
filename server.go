@@ -430,6 +430,11 @@ func (s *Server) Publish(msg *Message) error {
 		return ErrServerClosed
 	}
 
+	retainSupported := s.config.retainAvailable && s.config.retainedStore != nil
+	if msg.Retain && !retainSupported {
+		return ErrRetainNotSupported
+	}
+
 	// Apply producer interceptors
 	msg = applyProducerInterceptors(s.config.producerInterceptors, msg)
 	if msg == nil {
@@ -461,7 +466,7 @@ func (s *Server) Publish(msg *Message) error {
 	}
 
 	// Handle retained messages
-	if msg.Retain {
+	if retainSupported && msg.Retain {
 		if len(msg.Payload) == 0 {
 			s.config.retainedStore.Delete(namespace, msg.Topic)
 		} else {
@@ -1297,6 +1302,7 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 	}
 
 	namespace := msg.Namespace
+	retainSupported := s.config.retainAvailable && s.config.retainedStore != nil
 
 	// Check if message has expired before delivery
 	if msg.IsExpired() {
@@ -1304,7 +1310,7 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 	}
 
 	// Handle retained messages
-	if msg.Retain {
+	if retainSupported && msg.Retain {
 		if len(msg.Payload) == 0 {
 			s.config.retainedStore.Delete(namespace, msg.Topic)
 		} else {
@@ -1344,11 +1350,15 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 		// Create delivery message
 		// IMPORTANT: When setting a new MessageExpiry, reset PublishedAt to now
 		// to prevent double-decrementing when RemainingExpiry() is called again
+		deliveryRetain := false
+		if retainSupported {
+			deliveryRetain = GetDeliveryRetain(entry.Subscription, msg.Retain)
+		}
 		deliveryMsg := &Message{
 			Topic:           msg.Topic,
 			Payload:         msg.Payload,
 			QoS:             deliveryQoS,
-			Retain:          GetDeliveryRetain(entry.Subscription, msg.Retain),
+			Retain:          deliveryRetain,
 			PayloadFormat:   msg.PayloadFormat,
 			MessageExpiry:   remainingExpiry, // Use remaining expiry, not original
 			PublishedAt:     time.Now(),      // Reset to now to match new MessageExpiry
@@ -1401,6 +1411,7 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 	clientID := client.ClientID()
 	namespace := client.Namespace()
 	session := client.Session()
+	retainSupported := s.config.retainAvailable && s.config.retainedStore != nil
 
 	// Check subscription identifier support
 	if sub.Props.Has(PropSubscriptionIdentifier) && !s.config.subIDAvailable {
@@ -1412,63 +1423,22 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 	reasonCodes := make([]ReasonCode, len(sub.Subscriptions))
 
 	for i, subscription := range sub.Subscriptions {
-		// Check wildcard subscription support
-		if !s.config.wildcardSubAvail && containsWildcard(subscription.TopicFilter) {
-			logger.Warn("wildcard subscriptions not supported", LogFields{
-				LogFieldTopic: subscription.TopicFilter,
-			})
-			reasonCodes[i] = ReasonWildcardSubsNotSupported
+		if reason := s.validateSubscriptionSupport(subscription, logger); reason != ReasonSuccess {
+			reasonCodes[i] = reason
 			continue
 		}
 
-		// Check shared subscription support
-		if !s.config.sharedSubAvailable && isSharedSubscription(subscription.TopicFilter) {
-			logger.Warn("shared subscriptions not supported", LogFields{
-				LogFieldTopic: subscription.TopicFilter,
-			})
-			reasonCodes[i] = ReasonSharedSubsNotSupported
+		subscription = s.applyMaxSubscriptionQoS(subscription)
+		sub.Subscriptions[i] = subscription
+
+		var reason ReasonCode
+		var allowed bool
+		subscription, reason, allowed = s.authorizeSubscribe(client, subscription, logger)
+		if !allowed {
+			reasonCodes[i] = reason
 			continue
 		}
-
-		// Enforce server's Maximum QoS - cap subscription QoS to what server supports
-		if subscription.QoS > s.config.maxQoS {
-			subscription.QoS = s.config.maxQoS
-			sub.Subscriptions[i] = subscription
-		}
-
-		// Authorization
-		if s.config.authz != nil {
-			azCtx := &AuthzContext{
-				ClientID:           clientID,
-				Namespace:          namespace,
-				Username:           client.Username(),
-				Topic:              subscription.TopicFilter,
-				Action:             AuthzActionSubscribe,
-				QoS:                subscription.QoS,
-				RemoteAddr:         client.Conn().RemoteAddr(),
-				LocalAddr:          client.Conn().LocalAddr(),
-				TLSConnectionState: client.TLSConnectionState(),
-				TLSIdentity:        client.TLSIdentity(),
-			}
-			result, err := s.config.authz.Authorize(authCtx, azCtx)
-			if err != nil || result == nil || !result.Allowed {
-				reasonCode := ReasonNotAuthorized
-				if result != nil {
-					reasonCode = result.ReasonCode
-				}
-				logger.Warn("subscribe authorization failed", LogFields{
-					LogFieldTopic:      subscription.TopicFilter,
-					LogFieldReasonCode: reasonCode.String(),
-				})
-				reasonCodes[i] = reasonCode
-				continue
-			}
-			// Apply MaxQoS downgrade if authorizer specified a lower QoS
-			if result.MaxQoS < subscription.QoS {
-				subscription.QoS = result.MaxQoS
-				sub.Subscriptions[i] = subscription
-			}
-		}
+		sub.Subscriptions[i] = subscription
 
 		// Check if this is a new subscription (without removing the existing one)
 		// Subscribe() handles removal of existing subscription atomically after validation
@@ -1498,45 +1468,8 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 		reasonCodes[i] = ReasonCode(subscription.QoS)
 
 		// Send retained messages
-		if ShouldSendRetained(subscription.RetainHandling, isNew) {
-			retained := s.config.retainedStore.Match(namespace, subscription.TopicFilter)
-			for _, retMsg := range retained {
-				deliveryQoS := retMsg.QoS
-				if subscription.QoS < deliveryQoS {
-					deliveryQoS = subscription.QoS
-				}
-
-				// Per MQTT v5 spec, retain flag respects RetainAsPublish subscription option
-				retainFlag := true
-				if !subscription.RetainAsPublish {
-					retainFlag = false
-				}
-
-				// Calculate remaining expiry for delivery
-				remainingExpiry := retMsg.RemainingExpiry()
-
-				// IMPORTANT: When setting a new MessageExpiry, reset PublishedAt to now
-				// to prevent double-decrementing when RemainingExpiry() is called again
-				deliveryMsg := &Message{
-					Topic:           retMsg.Topic,
-					Payload:         retMsg.Payload,
-					QoS:             deliveryQoS,
-					Retain:          retainFlag,
-					PayloadFormat:   retMsg.PayloadFormat,
-					MessageExpiry:   remainingExpiry,
-					PublishedAt:     time.Now(), // Reset to now to match new MessageExpiry
-					ContentType:     retMsg.ContentType,
-					ResponseTopic:   retMsg.ResponseTopic,
-					CorrelationData: retMsg.CorrelationData,
-					UserProperties:  retMsg.UserProperties,
-				}
-
-				// Handle send failures for QoS > 0 retained messages
-				if err := client.Send(deliveryMsg); err != nil && deliveryQoS > QoS0 {
-					// Queue for later delivery if quota exceeded or connection issue
-					s.queueOfflineMessage(namespace, clientID, deliveryMsg)
-				}
-			}
+		if retainSupported && ShouldSendRetained(subscription.RetainHandling, isNew) {
+			s.deliverRetainedMessages(client, subscription, namespace, clientID)
 		}
 	}
 
@@ -1561,6 +1494,112 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 	if n, err := WritePacket(client.Conn(), suback, client.MaxPacketSize()); err == nil {
 		s.config.metrics.BytesSent(n)
 		s.config.metrics.PacketSent(PacketSUBACK)
+	}
+}
+
+func (s *Server) validateSubscriptionSupport(subscription Subscription, logger Logger) ReasonCode {
+	// Check wildcard subscription support
+	if !s.config.wildcardSubAvail && containsWildcard(subscription.TopicFilter) {
+		logger.Warn("wildcard subscriptions not supported", LogFields{
+			LogFieldTopic: subscription.TopicFilter,
+		})
+		return ReasonWildcardSubsNotSupported
+	}
+
+	// Check shared subscription support
+	if !s.config.sharedSubAvailable && isSharedSubscription(subscription.TopicFilter) {
+		logger.Warn("shared subscriptions not supported", LogFields{
+			LogFieldTopic: subscription.TopicFilter,
+		})
+		return ReasonSharedSubsNotSupported
+	}
+
+	return ReasonSuccess
+}
+
+func (s *Server) applyMaxSubscriptionQoS(subscription Subscription) Subscription {
+	// Enforce server's Maximum QoS - cap subscription QoS to what server supports
+	if subscription.QoS > s.config.maxQoS {
+		subscription.QoS = s.config.maxQoS
+	}
+	return subscription
+}
+
+func (s *Server) authorizeSubscribe(client *ServerClient, subscription Subscription, logger Logger) (Subscription, ReasonCode, bool) {
+	if s.config.authz == nil {
+		return subscription, ReasonSuccess, true
+	}
+
+	azCtx := &AuthzContext{
+		ClientID:           client.ClientID(),
+		Namespace:          client.Namespace(),
+		Username:           client.Username(),
+		Topic:              subscription.TopicFilter,
+		Action:             AuthzActionSubscribe,
+		QoS:                subscription.QoS,
+		RemoteAddr:         client.Conn().RemoteAddr(),
+		LocalAddr:          client.Conn().LocalAddr(),
+		TLSConnectionState: client.TLSConnectionState(),
+		TLSIdentity:        client.TLSIdentity(),
+	}
+	result, err := s.config.authz.Authorize(authCtx, azCtx)
+	if err != nil || result == nil || !result.Allowed {
+		reasonCode := ReasonNotAuthorized
+		if result != nil {
+			reasonCode = result.ReasonCode
+		}
+		logger.Warn("subscribe authorization failed", LogFields{
+			LogFieldTopic:      subscription.TopicFilter,
+			LogFieldReasonCode: reasonCode.String(),
+		})
+		return subscription, reasonCode, false
+	}
+
+	// Apply MaxQoS downgrade if authorizer specified a lower QoS
+	if result.MaxQoS < subscription.QoS {
+		subscription.QoS = result.MaxQoS
+	}
+	return subscription, ReasonSuccess, true
+}
+
+func (s *Server) deliverRetainedMessages(client *ServerClient, subscription Subscription, namespace, clientID string) {
+	retained := s.config.retainedStore.Match(namespace, subscription.TopicFilter)
+	for _, retMsg := range retained {
+		deliveryQoS := retMsg.QoS
+		if subscription.QoS < deliveryQoS {
+			deliveryQoS = subscription.QoS
+		}
+
+		// Per MQTT v5 spec, retain flag respects RetainAsPublish subscription option
+		retainFlag := true
+		if !subscription.RetainAsPublish {
+			retainFlag = false
+		}
+
+		// Calculate remaining expiry for delivery
+		remainingExpiry := retMsg.RemainingExpiry()
+
+		// IMPORTANT: When setting a new MessageExpiry, reset PublishedAt to now
+		// to prevent double-decrementing when RemainingExpiry() is called again
+		deliveryMsg := &Message{
+			Topic:           retMsg.Topic,
+			Payload:         retMsg.Payload,
+			QoS:             deliveryQoS,
+			Retain:          retainFlag,
+			PayloadFormat:   retMsg.PayloadFormat,
+			MessageExpiry:   remainingExpiry,
+			PublishedAt:     time.Now(), // Reset to now to match new MessageExpiry
+			ContentType:     retMsg.ContentType,
+			ResponseTopic:   retMsg.ResponseTopic,
+			CorrelationData: retMsg.CorrelationData,
+			UserProperties:  retMsg.UserProperties,
+		}
+
+		// Handle send failures for QoS > 0 retained messages
+		if err := client.Send(deliveryMsg); err != nil && deliveryQoS > QoS0 {
+			// Queue for later delivery if quota exceeded or connection issue
+			s.queueOfflineMessage(namespace, clientID, deliveryMsg)
+		}
 	}
 }
 

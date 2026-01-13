@@ -358,10 +358,11 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	c.connected.Store(true)
 	c.lastPacket.Store(time.Now().UnixNano())
 
-	// Start background goroutines
-	go c.readLoop()
-	go c.keepAliveLoop()
-	go c.qosRetryLoop()
+	// Start background goroutines with this connection's context
+	ctx = c.ctx
+	go c.readLoop(ctx)
+	go c.keepAliveLoop(ctx)
+	go c.qosRetryLoop(ctx)
 
 	// Emit connected event
 	c.emit(NewConnectedEvent(connack.SessionPresent, connack.Properties()))
@@ -923,12 +924,12 @@ func (c *Client) emit(event error) {
 }
 
 // readLoop reads packets from the connection.
-func (c *Client) readLoop() {
+func (c *Client) readLoop(ctx context.Context) {
 	defer close(c.readDone)
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-ctx.Done():
 			return
 		default:
 		}
@@ -1397,7 +1398,7 @@ func (c *Client) handleAuth(pkt *AuthPacket) {
 }
 
 // keepAliveLoop sends PINGREQ packets to keep the connection alive.
-func (c *Client) keepAliveLoop() {
+func (c *Client) keepAliveLoop(ctx context.Context) {
 	if c.options.keepAlive == 0 {
 		return
 	}
@@ -1408,7 +1409,7 @@ func (c *Client) keepAliveLoop() {
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			if !c.connected.Load() {
@@ -1427,13 +1428,13 @@ func (c *Client) keepAliveLoop() {
 }
 
 // qosRetryLoop handles retransmission of unacknowledged QoS 1/2 messages.
-func (c *Client) qosRetryLoop() {
+func (c *Client) qosRetryLoop(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			if !c.connected.Load() {
@@ -1687,14 +1688,14 @@ func (c *Client) reconnectLoop() {
 			// never arrive. The packet IDs must be released to prevent exhaustion.
 			c.clearPendingOperations()
 
-			// Only restore subscriptions and resend inflight messages if session was NOT
-			// present. If session is present, the server has already stored our subscriptions
-			// and inflight messages, so resending would cause duplicates.
-			if !sessionPresent {
-				// Reset inflight state since server has no session for us
+			if sessionPresent {
+				// Session present: resending in-flight QoS 1/2 messages is required
+				// to complete any unfinished exchanges after reconnect.
+				c.resendInflightMessages()
+			} else {
+				// No session: clear inflight state and resubscribe.
 				c.resetInflightState()
 				c.restoreSubscriptions()
-				c.resendInflightMessages()
 			}
 			return // Successfully reconnected
 		}

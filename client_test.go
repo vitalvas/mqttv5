@@ -3061,6 +3061,140 @@ func TestClientReconnectLoop(t *testing.T) {
 		assert.True(t, client.IsConnected())
 	})
 
+	t.Run("resends inflight messages when session present", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		defer listener.Close()
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		defer wg.Wait()
+
+		firstPublishCh := make(chan *PublishPacket, 1)
+		resendCh := make(chan *PublishPacket, 1)
+		errCh := make(chan error, 1)
+
+		readConnectPacket := func(conn net.Conn) (*ConnectPacket, error) {
+			pkt, _, err := ReadPacket(conn, 256*1024)
+			if err != nil {
+				return nil, err
+			}
+			connectPkt, ok := pkt.(*ConnectPacket)
+			if !ok {
+				return nil, fmt.Errorf("expected CONNECT packet, got %T", pkt)
+			}
+			return connectPkt, nil
+		}
+
+		go func() {
+			defer wg.Done()
+
+			conn, err := listener.Accept()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			_, err = readConnectPacket(conn)
+			if err != nil {
+				errCh <- err
+				conn.Close()
+				return
+			}
+			if err := sendConnack(conn, false, ReasonSuccess); err != nil {
+				errCh <- err
+				conn.Close()
+				return
+			}
+
+			pkt, _, err := ReadPacket(conn, 256*1024)
+			if err != nil {
+				errCh <- err
+				conn.Close()
+				return
+			}
+			pub, ok := pkt.(*PublishPacket)
+			if !ok {
+				errCh <- fmt.Errorf("expected PUBLISH packet, got %T", pkt)
+				conn.Close()
+				return
+			}
+			firstPublishCh <- pub
+			conn.Close()
+
+			conn, err = listener.Accept()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			_, err = readConnectPacket(conn)
+			if err != nil {
+				errCh <- err
+				conn.Close()
+				return
+			}
+			if err := sendConnack(conn, true, ReasonSuccess); err != nil {
+				errCh <- err
+				conn.Close()
+				return
+			}
+
+			pkt, _, err = ReadPacket(conn, 256*1024)
+			if err != nil {
+				errCh <- err
+				conn.Close()
+				return
+			}
+			pub, ok = pkt.(*PublishPacket)
+			if !ok {
+				errCh <- fmt.Errorf("expected PUBLISH packet, got %T", pkt)
+				conn.Close()
+				return
+			}
+			resendCh <- pub
+			conn.Close()
+		}()
+
+		client, err := Dial(
+			WithServers("tcp://"+listener.Addr().String()),
+			WithAutoReconnect(true),
+			WithReconnectBackoff(10*time.Millisecond),
+			WithConnectTimeout(100*time.Millisecond),
+		)
+		require.NoError(t, err)
+		defer client.Close()
+
+		err = client.Publish(&Message{
+			Topic:   "test/reconnect",
+			Payload: []byte("data"),
+			QoS:     QoS1,
+		})
+		require.NoError(t, err)
+
+		var firstPub *PublishPacket
+		select {
+		case firstPub = <-firstPublishCh:
+		case err := <-errCh:
+			require.NoError(t, err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for initial publish")
+		}
+
+		var resendPub *PublishPacket
+		select {
+		case resendPub = <-resendCh:
+		case err := <-errCh:
+			require.NoError(t, err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for resend publish")
+		}
+
+		require.NotNil(t, firstPub)
+		require.NotNil(t, resendPub)
+		assert.Equal(t, QoS1, resendPub.QoS)
+		assert.True(t, resendPub.DUP)
+		assert.Equal(t, firstPub.PacketID, resendPub.PacketID)
+	})
+
 	t.Run("respects max reconnect attempts", func(t *testing.T) {
 		failedAttempts := 0
 		var lastErr error
@@ -3750,7 +3884,7 @@ func TestClientQoSRetryLoop(t *testing.T) {
 			cancel()
 		}()
 
-		c.qosRetryLoop()
+		c.qosRetryLoop(ctx)
 
 		// No messages should be written when not connected
 	})
@@ -3781,7 +3915,7 @@ func TestClientQoSRetryLoop(t *testing.T) {
 			cancel()
 		}()
 
-		c.qosRetryLoop()
+		c.qosRetryLoop(ctx)
 	})
 }
 
@@ -3939,7 +4073,7 @@ func TestClientKeepAliveLoop(t *testing.T) {
 		}
 
 		// Should return immediately
-		c.keepAliveLoop()
+		c.keepAliveLoop(context.Background())
 	})
 
 	t.Run("sends PINGREQ when idle", func(t *testing.T) {
@@ -3962,7 +4096,7 @@ func TestClientKeepAliveLoop(t *testing.T) {
 			cancel()
 		}()
 
-		c.keepAliveLoop()
+		c.keepAliveLoop(ctx)
 
 		// Should have sent PINGREQ
 		if writeBuf.Len() > 0 {
@@ -4065,7 +4199,7 @@ func TestClientQoSRetryLoopContextCancel(t *testing.T) {
 
 		done := make(chan struct{})
 		go func() {
-			c.qosRetryLoop()
+			c.qosRetryLoop(ctx)
 			close(done)
 		}()
 
@@ -4253,7 +4387,7 @@ func TestClientKeepAliveLoopNotConnected(_ *testing.T) {
 		cancel()
 	}()
 
-	c.keepAliveLoop()
+	c.keepAliveLoop(ctx)
 }
 
 func TestReadConnackWithAuthEdgeCases(t *testing.T) {
@@ -5293,7 +5427,7 @@ func TestClientQoSRetryLoopTickerExecution(t *testing.T) {
 		// Run the loop in a goroutine and wait for ticker to fire
 		done := make(chan struct{})
 		go func() {
-			c.qosRetryLoop()
+			c.qosRetryLoop(ctx)
 			close(done)
 		}()
 
