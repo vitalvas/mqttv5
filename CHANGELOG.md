@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/vitalvas/mqttv5/compare/v0.1.0...v0.1.1) (2026-01-14)
+
+
+### Bug Fixes
+
+* add license ([5617ab6](https://github.com/vitalvas/mqttv5/commit/5617ab6455237153b40b9e4e9d94712cf49b586a))
+
 ## [0.1.0](https://github.com/vitalvas/mqttv5/compare/v0.1.0...v0.1.0) (2026-01-13)
 
 
