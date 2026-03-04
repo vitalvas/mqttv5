@@ -721,3 +721,35 @@ func TestPublishPacketRetransmissionPreservesProperties(t *testing.T) {
 		assert.Equal(t, []byte("correlation"), correlationData)
 	})
 }
+
+func TestPublishPacketEdgeCases(t *testing.T) {
+	t.Run("QoS 0 publish has no packet ID requirement", func(t *testing.T) {
+		pkt := &PublishPacket{
+			Topic:    "test/topic",
+			QoS:      0,
+			PacketID: 0,
+		}
+		err := pkt.Validate()
+		assert.NoError(t, err)
+	})
+
+	t.Run("QoS 1 publish requires packet ID", func(t *testing.T) {
+		pkt := &PublishPacket{
+			Topic:    "test/topic",
+			QoS:      1,
+			PacketID: 0,
+		}
+		err := pkt.Validate()
+		assert.Error(t, err, "QoS 1 without packet ID should be invalid")
+	})
+
+	t.Run("QoS 2 publish requires packet ID", func(t *testing.T) {
+		pkt := &PublishPacket{
+			Topic:    "test/topic",
+			QoS:      2,
+			PacketID: 0,
+		}
+		err := pkt.Validate()
+		assert.Error(t, err, "QoS 2 without packet ID should be invalid")
+	})
+}

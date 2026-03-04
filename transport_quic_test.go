@@ -169,7 +169,7 @@ func TestQUICRoundTrip(t *testing.T) {
 	// Test deadlines
 	err = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	assert.NoError(t, err)
-	err = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	err = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	assert.NoError(t, err)
 	err = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	assert.NoError(t, err)
@@ -329,7 +329,7 @@ func TestQUICDialerEmptyALPN(t *testing.T) {
 		conn, err := listener.Accept(ctx)
 		if err == nil {
 			// Keep connection open briefly then close
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(5 * time.Millisecond)
 			conn.Close()
 		}
 	}()

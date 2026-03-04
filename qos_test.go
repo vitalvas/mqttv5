@@ -160,7 +160,7 @@ func TestQoS1Tracker(t *testing.T) {
 		pending := tracker.GetPendingRetries()
 		assert.Len(t, pending, 0)
 
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(15 * time.Millisecond)
 
 		pending = tracker.GetPendingRetries()
 		assert.Len(t, pending, 1)
@@ -266,7 +266,7 @@ func TestQoS2Tracker(t *testing.T) {
 		pending := tracker.GetPendingRetries()
 		assert.Len(t, pending, 0)
 
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(15 * time.Millisecond)
 
 		pending = tracker.GetPendingRetries()
 		assert.Len(t, pending, 1)
@@ -438,7 +438,7 @@ func TestQoS2TrackerCleanupCompleted(t *testing.T) {
 		tracker.SendPubrec(1)
 		tracker.HandlePubrel(1) // This marks it as completed
 
-		// Wait for cleanup threshold
+		// Wait for cleanup threshold (retryTimeout * 2 = 20ms)
 		time.Sleep(25 * time.Millisecond)
 
 		// Cleanup should remove the completed entry

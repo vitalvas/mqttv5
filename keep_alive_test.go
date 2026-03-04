@@ -63,7 +63,7 @@ func TestKeepAliveManager(t *testing.T) {
 
 		deadline1, _ := m.GetDeadline("client1")
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 		m.UpdateActivity("client1")
 
 		deadline2, _ := m.GetDeadline("client1")

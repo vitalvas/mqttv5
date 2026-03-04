@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/vitalvas/kasper/websocket"
 )
 
 const (
@@ -188,16 +188,34 @@ func NewWSDialer() *WSDialer {
 			Subprotocols:    []string{WebSocketSubprotocol},
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
+			HTTPClient: &http.Client{
+				Transport: &http.Transport{
+					DialContext: (&net.Dialer{}).DialContext,
+				},
+			},
 		},
 	}
 }
 
 // SetProxyFromEnvironment configures the dialer to use proxy from environment variables.
 // Uses HTTP_PROXY, HTTPS_PROXY, and NO_PROXY environment variables.
+// Preserves existing HTTPClient and Transport settings (e.g. TLS config).
 func (d *WSDialer) SetProxyFromEnvironment() {
-	if d.Dialer != nil {
-		d.Dialer.Proxy = http.ProxyFromEnvironment
+	if d.Dialer == nil {
+		return
 	}
+
+	if d.Dialer.HTTPClient == nil {
+		d.Dialer.HTTPClient = &http.Client{}
+	}
+
+	transport, _ := d.Dialer.HTTPClient.Transport.(*http.Transport)
+	if transport == nil {
+		transport = &http.Transport{}
+	}
+
+	transport.Proxy = http.ProxyFromEnvironment
+	d.Dialer.HTTPClient.Transport = transport
 }
 
 // WSHandler is an HTTP handler that upgrades connections to WebSocket for MQTT.

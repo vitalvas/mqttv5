@@ -11,6 +11,7 @@ import (
 )
 
 func TestNewBridgeManager(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -22,6 +23,7 @@ func TestNewBridgeManager(t *testing.T) {
 }
 
 func TestBridgeManagerAdd(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -72,6 +74,7 @@ func TestBridgeManagerAdd(t *testing.T) {
 }
 
 func TestBridgeManagerRemove(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -102,6 +105,7 @@ func TestBridgeManagerRemove(t *testing.T) {
 }
 
 func TestBridgeManagerGet(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -134,6 +138,7 @@ func TestBridgeManagerGet(t *testing.T) {
 }
 
 func TestBridgeManagerList(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -171,6 +176,7 @@ func TestBridgeManagerList(t *testing.T) {
 }
 
 func TestBridgeManagerStartStop(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -189,6 +195,7 @@ func TestBridgeManagerStartStop(t *testing.T) {
 }
 
 func TestBridgeManagerP2MPIntegration(t *testing.T) {
+	t.Parallel()
 	t.Run("forwards to multiple brokers based on topic", func(t *testing.T) {
 		// Start two remote brokers
 		remote1Listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -216,7 +223,7 @@ func TestBridgeManagerP2MPIntegration(t *testing.T) {
 		go localServer.ListenAndServe()
 		defer localServer.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 		// Create bridge manager
 		manager := NewBridgeManager(localServer)
@@ -250,7 +257,7 @@ func TestBridgeManagerP2MPIntegration(t *testing.T) {
 
 		assert.Equal(t, 2, manager.RunningCount())
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 		// Subscribe to local broker
 		var receivedMsgs []*Message
@@ -268,7 +275,7 @@ func TestBridgeManagerP2MPIntegration(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 		// Publish to remote1 (sensors)
 		remote1Client, err := Dial(WithServers("tcp://"+remote1Listener.Addr().String()),
@@ -299,7 +306,7 @@ func TestBridgeManagerP2MPIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for messages
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Verify messages
 		mu.Lock()
@@ -318,6 +325,7 @@ func TestBridgeManagerP2MPIntegration(t *testing.T) {
 }
 
 func TestBridgeManagerMetrics(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -426,6 +434,7 @@ func BenchmarkBridgeManagerList(b *testing.B) {
 }
 
 func TestBridgeManagerForwardToRemote(t *testing.T) {
+	t.Parallel()
 	t.Run("forwards to matching bridges", func(t *testing.T) {
 		// Create remote server
 		remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -445,7 +454,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 		go localServer.ListenAndServe()
 		defer localServer.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 		// Create bridge manager
 		manager := NewBridgeManager(localServer)
@@ -465,7 +474,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 		require.NoError(t, err)
 		defer manager.StopAll()
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 		// Subscribe on remote server to receive forwarded messages
 		var receivedMsgs []*Message
@@ -485,7 +494,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 		// Call ForwardToRemote directly
 		manager.ForwardToRemote(&Message{
@@ -494,7 +503,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 			QoS:     1,
 		})
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 		// Verify message was forwarded
 		mu.Lock()
@@ -531,7 +540,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 		go localServer.ListenAndServe()
 		defer localServer.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 		// Create bridge manager with two bridges that both match "sensors"
 		manager := NewBridgeManager(localServer)
@@ -559,7 +568,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 		require.NoError(t, err)
 		defer manager.StopAll()
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 		// Subscribe on both remotes
 		var msgs1, msgs2 []*Message
@@ -587,7 +596,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 		// Forward message
 		manager.ForwardToRemote(&Message{
@@ -596,7 +605,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 			QoS:     1,
 		})
 
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(30 * time.Millisecond)
 
 		// Both remotes should receive the message
 		mu.Lock()
@@ -692,6 +701,7 @@ func BenchmarkBridgeManagerForwardToRemoteParallel(b *testing.B) {
 }
 
 func TestBridgeManagerConcurrency(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 

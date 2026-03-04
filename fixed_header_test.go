@@ -415,3 +415,64 @@ func FuzzFixedHeaderDecode(f *testing.F) {
 		_, _ = h.Decode(bytes.NewReader(data))
 	})
 }
+
+func TestPacketTypeValues(t *testing.T) {
+	t.Run("packet type values", func(t *testing.T) {
+		assert.Equal(t, PacketType(1), PacketCONNECT)
+		assert.Equal(t, PacketType(2), PacketCONNACK)
+		assert.Equal(t, PacketType(3), PacketPUBLISH)
+		assert.Equal(t, PacketType(4), PacketPUBACK)
+		assert.Equal(t, PacketType(5), PacketPUBREC)
+		assert.Equal(t, PacketType(6), PacketPUBREL)
+		assert.Equal(t, PacketType(7), PacketPUBCOMP)
+		assert.Equal(t, PacketType(8), PacketSUBSCRIBE)
+		assert.Equal(t, PacketType(9), PacketSUBACK)
+		assert.Equal(t, PacketType(10), PacketUNSUBSCRIBE)
+		assert.Equal(t, PacketType(11), PacketUNSUBACK)
+		assert.Equal(t, PacketType(12), PacketPINGREQ)
+		assert.Equal(t, PacketType(13), PacketPINGRESP)
+		assert.Equal(t, PacketType(14), PacketDISCONNECT)
+		assert.Equal(t, PacketType(15), PacketAUTH)
+	})
+
+	t.Run("packet type string representation", func(t *testing.T) {
+		types := []PacketType{
+			PacketCONNECT, PacketCONNACK, PacketPUBLISH, PacketPUBACK,
+			PacketPUBREC, PacketPUBREL, PacketPUBCOMP, PacketSUBSCRIBE,
+			PacketSUBACK, PacketUNSUBSCRIBE, PacketUNSUBACK, PacketPINGREQ,
+			PacketPINGRESP, PacketDISCONNECT, PacketAUTH,
+		}
+
+		for _, pt := range types {
+			str := pt.String()
+			assert.NotEmpty(t, str, "Packet type %d should have string representation", pt)
+			assert.NotEqual(t, "UNKNOWN", str, "Packet type %d should have known string", pt)
+		}
+	})
+}
+
+func TestZeroAllocPaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fixed header encoding has minimal allocs", func(t *testing.T) {
+		t.Parallel()
+		header := FixedHeader{
+			PacketType:      PacketPUBLISH,
+			Flags:           0x00,
+			RemainingLength: 100,
+		}
+		buf := &bytes.Buffer{}
+
+		result := testing.Benchmark(func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				buf.Reset()
+				_, _ = header.Encode(buf)
+			}
+		})
+
+		allocsPerOp := result.AllocsPerOp()
+		assert.LessOrEqual(t, allocsPerOp, int64(3),
+			"Fixed header encoding should have at most 3 allocs, got %d", allocsPerOp)
+	})
+}

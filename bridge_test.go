@@ -11,6 +11,7 @@ import (
 )
 
 func TestNewBridge(t *testing.T) {
+	t.Parallel()
 	t.Run("creates bridge with valid config", func(t *testing.T) {
 		listener, _ := net.Listen("tcp", "127.0.0.1:0")
 		defer listener.Close()
@@ -67,6 +68,7 @@ func TestNewBridge(t *testing.T) {
 }
 
 func TestBridgeTopicRemap(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -135,6 +137,7 @@ func TestBridgeTopicRemap(t *testing.T) {
 }
 
 func TestBridgeCustomTopicRemapper(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -201,6 +204,7 @@ func TestBridgeCustomTopicRemapper(t *testing.T) {
 }
 
 func TestBridgeTopicMatchesPrefix(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -238,6 +242,7 @@ func TestBridgeTopicMatchesPrefix(t *testing.T) {
 }
 
 func TestBridgeLoopDetection(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -286,6 +291,7 @@ func TestBridgeLoopDetection(t *testing.T) {
 }
 
 func TestBridgeAddBridgeProperty(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -319,6 +325,7 @@ func TestBridgeAddBridgeProperty(t *testing.T) {
 }
 
 func TestBridgeStartStop(t *testing.T) {
+	t.Parallel()
 	t.Run("stop without start returns error", func(t *testing.T) {
 		listener, _ := net.Listen("tcp", "127.0.0.1:0")
 		defer listener.Close()
@@ -496,6 +503,7 @@ func BenchmarkBridgeAddBridgeProperty(b *testing.B) {
 }
 
 func TestBridgeIntegration(t *testing.T) {
+	t.Parallel()
 	t.Run("forwards messages between brokers", func(t *testing.T) {
 		// Start remote broker
 		remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -515,7 +523,7 @@ func TestBridgeIntegration(t *testing.T) {
 		go localServer.ListenAndServe()
 		defer localServer.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 		// Connect a subscriber to local broker to receive forwarded messages
 		var receivedMsg *Message
@@ -533,7 +541,7 @@ func TestBridgeIntegration(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 		// Create and start bridge
 		config := BridgeConfig{
@@ -553,7 +561,7 @@ func TestBridgeIntegration(t *testing.T) {
 
 		assert.True(t, bridge.IsRunning())
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 
 		// Publish to remote broker
 		remoteClient, err := Dial(WithServers("tcp://"+remoteListener.Addr().String()),
@@ -570,7 +578,7 @@ func TestBridgeIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for message to be forwarded
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Verify message was forwarded to local
 		mu.Lock()
@@ -582,6 +590,7 @@ func TestBridgeIntegration(t *testing.T) {
 }
 
 func TestBridgeHandleClientEvent(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -617,6 +626,7 @@ func TestBridgeHandleClientEvent(t *testing.T) {
 }
 
 func TestBridgeNamespace(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -651,6 +661,7 @@ func TestBridgeNamespace(t *testing.T) {
 }
 
 func TestBridgeForwardToRemote(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -704,6 +715,7 @@ func TestBridgeForwardToRemote(t *testing.T) {
 }
 
 func TestBridgeStartAlreadyRunning(t *testing.T) {
+	t.Parallel()
 	// Start two brokers
 	remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -721,7 +733,7 @@ func TestBridgeStartAlreadyRunning(t *testing.T) {
 	go localServer.ListenAndServe()
 	defer localServer.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	config := BridgeConfig{
 		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
@@ -744,6 +756,7 @@ func TestBridgeStartAlreadyRunning(t *testing.T) {
 }
 
 func TestBridgeCleanPrefix(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -765,6 +778,7 @@ func TestBridgeCleanPrefix(t *testing.T) {
 }
 
 func TestBridgeWithCredentials(t *testing.T) {
+	t.Parallel()
 	// Start remote broker
 	remoteListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -782,7 +796,7 @@ func TestBridgeWithCredentials(t *testing.T) {
 	go localServer.ListenAndServe()
 	defer localServer.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	config := BridgeConfig{
 		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
@@ -807,6 +821,7 @@ func TestBridgeWithCredentials(t *testing.T) {
 }
 
 func TestBridgeDirectionFiltering(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -834,6 +849,7 @@ func TestBridgeDirectionFiltering(t *testing.T) {
 }
 
 func TestBridgeForwardToRemoteSuccess(t *testing.T) {
+	t.Parallel()
 	// Create local and remote servers
 	localListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -851,7 +867,7 @@ func TestBridgeForwardToRemoteSuccess(t *testing.T) {
 	go remoteSrv.ListenAndServe()
 	defer remoteSrv.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Create a subscriber on remote to verify messages arrive
 	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
@@ -864,7 +880,7 @@ func TestBridgeForwardToRemoteSuccess(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Create bridge with OUT direction
 	config := BridgeConfig{
@@ -882,7 +898,7 @@ func TestBridgeForwardToRemoteSuccess(t *testing.T) {
 	require.NoError(t, err)
 	defer bridge.Stop()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Forward a message
 	msg := &Message{
@@ -912,6 +928,7 @@ func TestBridgeForwardToRemoteSuccess(t *testing.T) {
 }
 
 func TestBridgeForwardToRemoteWithBothDirection(t *testing.T) {
+	t.Parallel()
 	localListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer localListener.Close()
@@ -928,7 +945,7 @@ func TestBridgeForwardToRemoteWithBothDirection(t *testing.T) {
 	go remoteSrv.ListenAndServe()
 	defer remoteSrv.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
 	require.NoError(t, err)
@@ -940,7 +957,7 @@ func TestBridgeForwardToRemoteWithBothDirection(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Create bridge with BOTH direction
 	config := BridgeConfig{
@@ -958,7 +975,7 @@ func TestBridgeForwardToRemoteWithBothDirection(t *testing.T) {
 	require.NoError(t, err)
 	defer bridge.Stop()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Forward a message - should work with BridgeDirectionBoth
 	msg := &Message{
@@ -977,6 +994,7 @@ func TestBridgeForwardToRemoteWithBothDirection(t *testing.T) {
 }
 
 func TestBridgeForwardToRemoteTopicMismatch(t *testing.T) {
+	t.Parallel()
 	localListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer localListener.Close()
@@ -993,7 +1011,7 @@ func TestBridgeForwardToRemoteTopicMismatch(t *testing.T) {
 	go remoteSrv.ListenAndServe()
 	defer remoteSrv.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
 	require.NoError(t, err)
@@ -1005,7 +1023,7 @@ func TestBridgeForwardToRemoteTopicMismatch(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	config := BridgeConfig{
 		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
@@ -1022,7 +1040,7 @@ func TestBridgeForwardToRemoteTopicMismatch(t *testing.T) {
 	require.NoError(t, err)
 	defer bridge.Stop()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Forward a message that doesn't match the configured prefix
 	msg := &Message{
@@ -1041,6 +1059,7 @@ func TestBridgeForwardToRemoteTopicMismatch(t *testing.T) {
 }
 
 func TestBridgeForwardToRemoteWithTopicRemapper(t *testing.T) {
+	t.Parallel()
 	localListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer localListener.Close()
@@ -1057,7 +1076,7 @@ func TestBridgeForwardToRemoteWithTopicRemapper(t *testing.T) {
 	go remoteSrv.ListenAndServe()
 	defer remoteSrv.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
 	require.NoError(t, err)
@@ -1069,7 +1088,7 @@ func TestBridgeForwardToRemoteWithTopicRemapper(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Create bridge with custom topic remapper
 	config := BridgeConfig{
@@ -1093,7 +1112,7 @@ func TestBridgeForwardToRemoteWithTopicRemapper(t *testing.T) {
 	require.NoError(t, err)
 	defer bridge.Stop()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	msg := &Message{
 		Topic:   "local/test",
@@ -1112,6 +1131,7 @@ func TestBridgeForwardToRemoteWithTopicRemapper(t *testing.T) {
 }
 
 func TestBridgeForwardToRemoteEmptyNamespace(t *testing.T) {
+	t.Parallel()
 	localListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer localListener.Close()
@@ -1128,7 +1148,7 @@ func TestBridgeForwardToRemoteEmptyNamespace(t *testing.T) {
 	go remoteSrv.ListenAndServe()
 	defer remoteSrv.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
 	require.NoError(t, err)
@@ -1140,7 +1160,7 @@ func TestBridgeForwardToRemoteEmptyNamespace(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Bridge with default namespace (empty = DefaultNamespace)
 	config := BridgeConfig{
@@ -1158,7 +1178,7 @@ func TestBridgeForwardToRemoteEmptyNamespace(t *testing.T) {
 	require.NoError(t, err)
 	defer bridge.Stop()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Message with empty namespace should default to DefaultNamespace and match
 	msg := &Message{
@@ -1177,6 +1197,7 @@ func TestBridgeForwardToRemoteEmptyNamespace(t *testing.T) {
 }
 
 func TestBridgeForwardToRemotePublishError(t *testing.T) {
+	t.Parallel()
 	localListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer localListener.Close()
@@ -1195,7 +1216,7 @@ func TestBridgeForwardToRemotePublishError(t *testing.T) {
 	go remoteSrv.ListenAndServe()
 	defer remoteSrv.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	config := BridgeConfig{
 		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
@@ -1211,7 +1232,7 @@ func TestBridgeForwardToRemotePublishError(t *testing.T) {
 	err = bridge.Start()
 	require.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Close the client to simulate publish error
 	bridge.client.Close()

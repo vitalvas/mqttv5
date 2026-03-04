@@ -686,3 +686,36 @@ func TestIsSharedSubscription(t *testing.T) {
 		assert.False(t, isSharedSubscription("share/group/topic"))
 	})
 }
+
+func TestTopicEdgeCases(t *testing.T) {
+	t.Run("topic filter with wildcards", func(t *testing.T) {
+		assert.NoError(t, ValidateTopicFilter("sensor/+/temp"))
+		assert.NoError(t, ValidateTopicFilter("sensor/#"))
+		assert.NoError(t, ValidateTopicFilter("+/+/+"))
+		assert.NoError(t, ValidateTopicFilter("#"))
+	})
+
+	t.Run("topic name without wildcards", func(t *testing.T) {
+		assert.NoError(t, ValidateTopicName("sensor/1/temp"))
+		assert.Error(t, ValidateTopicName("sensor/+/temp"), "Topic name should not contain wildcards")
+		assert.Error(t, ValidateTopicName("sensor/#"), "Topic name should not contain wildcards")
+	})
+
+	t.Run("shared subscription parsing", func(t *testing.T) {
+		ss, err := ParseSharedSubscription("$share/group1/sensor/+/temp")
+		require.NoError(t, err)
+		assert.Equal(t, "group1", ss.ShareName)
+		assert.Equal(t, "sensor/+/temp", ss.TopicFilter)
+	})
+
+	t.Run("system topic matching", func(t *testing.T) {
+		assert.True(t, IsSystemTopic("$SYS/broker/uptime"))
+		assert.False(t, IsSystemTopic("sensor/temp"))
+
+		// # should not match system topics
+		assert.False(t, TopicMatch("#", "$SYS/broker/uptime"))
+
+		// Explicit $SYS/# should match
+		assert.True(t, TopicMatch("$SYS/#", "$SYS/broker/uptime"))
+	})
+}

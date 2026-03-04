@@ -103,7 +103,7 @@ func TestRequestResponse(t *testing.T) {
 		require.NoError(t, err)
 
 		// Give time for subscription to be processed
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 
 		// Make RPC request
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -189,7 +189,7 @@ func TestMultipleSequentialRequests(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	// Send multiple sequential requests
 	numRequests := 5
@@ -247,7 +247,7 @@ func TestCallWithHeaders(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	// Make RPC call with headers
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -471,7 +471,7 @@ func TestCallWithNilRequest(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -752,7 +752,7 @@ func BenchmarkRequestResponse(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	b.ResetTimer()
 	for range b.N {

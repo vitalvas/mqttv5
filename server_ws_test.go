@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vitalvas/kasper/websocket"
 )
 
 // encodePacket encodes an MQTT packet to bytes for WebSocket testing
@@ -22,7 +22,21 @@ func encodePacket(pkt Packet) []byte {
 	return buf.Bytes()
 }
 
+// testWSDialer returns a websocket.Dialer with proper transport configuration
+// to ensure kasper uses dialWithTransport path (preserving net.Conn for deadlines).
+func testWSDialer() websocket.Dialer {
+	return websocket.Dialer{
+		Subprotocols: []string{"mqtt"},
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{}).DialContext,
+			},
+		},
+	}
+}
+
 func TestNewWSServer(t *testing.T) {
+	t.Parallel()
 	t.Run("creates ws server with defaults", func(t *testing.T) {
 		srv := NewWSServer()
 		require.NotNil(t, srv)
@@ -62,6 +76,7 @@ func TestNewWSServer(t *testing.T) {
 }
 
 func TestWSServerStart(t *testing.T) {
+	t.Parallel()
 	t.Run("starts background tasks", func(t *testing.T) {
 		srv := NewWSServer()
 		defer srv.Close()
@@ -84,6 +99,7 @@ func TestWSServerStart(t *testing.T) {
 }
 
 func TestWSServerServeHTTP(t *testing.T) {
+	t.Parallel()
 	t.Run("serves http requests", func(t *testing.T) {
 		srv := NewWSServer()
 		defer srv.Close()
@@ -103,6 +119,7 @@ func TestWSServerServeHTTP(t *testing.T) {
 }
 
 func TestWSServerClose(t *testing.T) {
+	t.Parallel()
 	t.Run("close stops server", func(t *testing.T) {
 		srv := NewWSServer()
 		srv.Start()
@@ -139,13 +156,14 @@ func TestWSServerClose(t *testing.T) {
 		select {
 		case <-done:
 			// Success
-		case <-time.After(5 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("Close did not complete within timeout")
 		}
 	})
 }
 
 func TestWSServerPublish(t *testing.T) {
+	t.Parallel()
 	t.Run("publish when not running", func(t *testing.T) {
 		srv := NewWSServer()
 		defer srv.Close()
@@ -168,6 +186,7 @@ func TestWSServerPublish(t *testing.T) {
 }
 
 func TestWSServerClientManagement(t *testing.T) {
+	t.Parallel()
 	t.Run("client count starts at zero", func(t *testing.T) {
 		srv := NewWSServer()
 		defer srv.Close()
@@ -209,6 +228,7 @@ func TestWSServerConcurrency(_ *testing.T) {
 }
 
 func TestWSServerWithHTTPMux(t *testing.T) {
+	t.Parallel()
 	t.Run("can be mounted on http mux", func(t *testing.T) {
 		srv := NewWSServer()
 		defer srv.Close()
@@ -225,7 +245,6 @@ func TestWSServerWithHTTPMux(t *testing.T) {
 		// Make a regular HTTP request (not WebSocket)
 		resp, err := http.Get(ts.URL + "/mqtt")
 		require.NoError(t, err)
-		resp.Body.Close()
 
 		// Should get some response (likely error since not WebSocket)
 		assert.True(t, resp.StatusCode >= 200)
@@ -233,6 +252,7 @@ func TestWSServerWithHTTPMux(t *testing.T) {
 }
 
 func TestWSServerHandleWSConnection(t *testing.T) {
+	t.Parallel()
 	t.Run("rejects connection when server not running", func(t *testing.T) {
 		srv := NewWSServer()
 		// Don't call Start() - server is not running
@@ -262,18 +282,13 @@ func TestWSServerHandleWSConnection(t *testing.T) {
 
 		// Connect via WebSocket
 		wsURL := "ws" + ts.URL[4:] + "/mqtt"
-		dialer := websocket.Dialer{
-			Subprotocols: []string{"mqtt"},
-		}
+		dialer := testWSDialer()
 
-		conn, resp, err := dialer.Dial(wsURL, nil)
+		conn, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed: %v", err)
-		}
-		if resp != nil {
-			resp.Body.Close()
 		}
 
 		// Send CONNECT packet
@@ -282,7 +297,7 @@ func TestWSServerHandleWSConnection(t *testing.T) {
 		require.NoError(t, err)
 
 		// Read CONNACK
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, data, err := conn.ReadMessage()
 		require.NoError(t, err)
 
@@ -295,7 +310,7 @@ func TestWSServerHandleWSConnection(t *testing.T) {
 		select {
 		case <-connectReceived:
 			// Success
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("connect callback not received")
 		}
 
@@ -308,6 +323,7 @@ func TestWSServerHandleWSConnection(t *testing.T) {
 }
 
 func TestWSServerHandleWSConn(t *testing.T) {
+	t.Parallel()
 	t.Run("handles full MQTT connection lifecycle", func(t *testing.T) {
 		var connectedClient *ServerClient
 		var disconnectedClient *ServerClient
@@ -332,18 +348,13 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		ts := httptest.NewServer(mux)
 
 		wsURL := "ws" + ts.URL[4:] + "/mqtt"
-		dialer := websocket.Dialer{
-			Subprotocols: []string{"mqtt"},
-		}
+		dialer := testWSDialer()
 
-		conn, resp, err := dialer.Dial(wsURL, nil)
+		conn, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed: %v", err)
-		}
-		if resp != nil {
-			resp.Body.Close()
 		}
 
 		// Send CONNECT
@@ -352,7 +363,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		require.NoError(t, err)
 
 		// Read CONNACK
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, data, err := conn.ReadMessage()
 		require.NoError(t, err)
 
@@ -362,7 +373,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		// Wait for connect
 		select {
 		case <-connectDone:
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("connect callback not received")
 		}
 
@@ -380,7 +391,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		// Wait for disconnect
 		select {
 		case <-disconnectDone:
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("disconnect callback not received")
 		}
 
@@ -404,19 +415,14 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		ts := httptest.NewServer(mux)
 
 		wsURL := "ws" + ts.URL[4:] + "/mqtt"
-		dialer := websocket.Dialer{
-			Subprotocols: []string{"mqtt"},
-		}
+		dialer := testWSDialer()
 
 		// First connection should succeed
-		conn1, resp1, err := dialer.Dial(wsURL, nil)
+		conn1, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed: %v", err)
-		}
-		if resp1 != nil {
-			resp1.Body.Close()
 		}
 
 		// Send CONNECT for first client
@@ -425,22 +431,19 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		require.NoError(t, err)
 
 		// Read CONNACK
-		conn1.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, data, err := conn1.ReadMessage()
 		require.NoError(t, err)
 		header := data[0] >> 4
 		assert.Equal(t, uint8(PacketCONNACK), header)
 
 		// Second connection should fail with ServerBusy
-		conn2, resp2, err := dialer.Dial(wsURL, nil)
+		conn2, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			conn1.Close()
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed for second connection: %v", err)
-		}
-		if resp2 != nil {
-			resp2.Body.Close()
 		}
 
 		// Send CONNECT for second client
@@ -449,7 +452,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		require.NoError(t, err)
 
 		// Read CONNACK - should be ReasonServerBusy
-		conn2.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn2.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, data, err = conn2.ReadMessage()
 		require.NoError(t, err)
 
@@ -480,18 +483,13 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		ts := httptest.NewServer(mux)
 
 		wsURL := "ws" + ts.URL[4:] + "/mqtt"
-		dialer := websocket.Dialer{
-			Subprotocols: []string{"mqtt"},
-		}
+		dialer := testWSDialer()
 
-		conn, resp, err := dialer.Dial(wsURL, nil)
+		conn, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed: %v", err)
-		}
-		if resp != nil {
-			resp.Body.Close()
 		}
 
 		// CONNECT
@@ -499,7 +497,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		err = conn.WriteMessage(websocket.BinaryMessage, encodePacket(connect))
 		require.NoError(t, err)
 
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, _, err = conn.ReadMessage() // CONNACK
 		require.NoError(t, err)
 
@@ -563,16 +561,13 @@ func TestWSServerHandleWSConn(t *testing.T) {
 			ts := httptest.NewServer(mux)
 
 			wsURL := "ws" + ts.URL[4:] + "/mqtt"
-			dialer := websocket.Dialer{Subprotocols: []string{"mqtt"}}
+			dialer := testWSDialer()
 
-			conn, resp, err := dialer.Dial(wsURL, nil)
+			conn, _, err := dialer.Dial(wsURL, nil)
 			if err != nil {
 				ts.Close()
 				srv.Close()
 				t.Skipf("WebSocket dial failed: %v", err)
-			}
-			if resp != nil {
-				resp.Body.Close()
 			}
 
 			connect := &ConnectPacket{ClientID: tc.clientID}
@@ -580,7 +575,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 			err = conn.WriteMessage(websocket.BinaryMessage, encodePacket(connect))
 			require.NoError(t, err)
 
-			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 			_, data, err := conn.ReadMessage()
 			require.NoError(t, err)
 
@@ -607,18 +602,13 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		ts := httptest.NewServer(mux)
 
 		wsURL := "ws" + ts.URL[4:] + "/mqtt"
-		dialer := websocket.Dialer{
-			Subprotocols: []string{"mqtt"},
-		}
+		dialer := testWSDialer()
 
-		conn, resp, err := dialer.Dial(wsURL, nil)
+		conn, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed: %v", err)
-		}
-		if resp != nil {
-			resp.Body.Close()
 		}
 
 		// CONNECT with empty client ID and CleanStart=false (invalid per MQTT spec)
@@ -663,18 +653,13 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		ts := httptest.NewServer(mux)
 
 		wsURL := "ws" + ts.URL[4:] + "/mqtt"
-		dialer := websocket.Dialer{
-			Subprotocols: []string{"mqtt"},
-		}
+		dialer := testWSDialer()
 
-		conn, resp, err := dialer.Dial(wsURL, nil)
+		conn, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed: %v", err)
-		}
-		if resp != nil {
-			resp.Body.Close()
 		}
 
 		// CONNECT with empty client ID and CleanStart=true (server should assign ID)
@@ -682,7 +667,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		err = conn.WriteMessage(websocket.BinaryMessage, encodePacket(connect))
 		require.NoError(t, err)
 
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, data, err := conn.ReadMessage()
 		require.NoError(t, err)
 
@@ -696,7 +681,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 
 		select {
 		case <-connectDone:
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("connect callback not received")
 		}
 
@@ -714,6 +699,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 }
 
 func TestWSServerHandleWSConnProperties(t *testing.T) {
+	t.Parallel()
 	t.Run("handles will message", func(t *testing.T) {
 		srv := NewWSServer()
 		srv.Start()
@@ -723,16 +709,13 @@ func TestWSServerHandleWSConnProperties(t *testing.T) {
 		ts := httptest.NewServer(mux)
 
 		wsURL := "ws" + ts.URL[4:] + "/mqtt"
-		dialer := websocket.Dialer{Subprotocols: []string{"mqtt"}}
+		dialer := testWSDialer()
 
-		conn, resp, err := dialer.Dial(wsURL, nil)
+		conn, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed: %v", err)
-		}
-		if resp != nil {
-			resp.Body.Close()
 		}
 
 		connect := &ConnectPacket{
@@ -745,7 +728,7 @@ func TestWSServerHandleWSConnProperties(t *testing.T) {
 		err = conn.WriteMessage(websocket.BinaryMessage, encodePacket(connect))
 		require.NoError(t, err)
 
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, data, err := conn.ReadMessage()
 		require.NoError(t, err)
 
@@ -777,16 +760,13 @@ func TestWSServerHandleWSConnProperties(t *testing.T) {
 		ts := httptest.NewServer(mux)
 
 		wsURL := "ws" + ts.URL[4:] + "/mqtt"
-		dialer := websocket.Dialer{Subprotocols: []string{"mqtt"}}
+		dialer := testWSDialer()
 
-		conn, resp, err := dialer.Dial(wsURL, nil)
+		conn, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed: %v", err)
-		}
-		if resp != nil {
-			resp.Body.Close()
 		}
 
 		connect := &ConnectPacket{ClientID: "ws-rm-test"}
@@ -794,13 +774,13 @@ func TestWSServerHandleWSConnProperties(t *testing.T) {
 		err = conn.WriteMessage(websocket.BinaryMessage, encodePacket(connect))
 		require.NoError(t, err)
 
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, _, err = conn.ReadMessage()
 		require.NoError(t, err)
 
 		select {
 		case <-connectDone:
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("connect callback not received")
 		}
 
@@ -844,16 +824,13 @@ func TestWSServerHandleWSConnProperties(t *testing.T) {
 			ts := httptest.NewServer(mux)
 
 			wsURL := "ws" + ts.URL[4:] + "/mqtt"
-			dialer := websocket.Dialer{Subprotocols: []string{"mqtt"}}
+			dialer := testWSDialer()
 
-			conn, resp, err := dialer.Dial(wsURL, nil)
+			conn, _, err := dialer.Dial(wsURL, nil)
 			if err != nil {
 				ts.Close()
 				srv.Close()
 				t.Skipf("WebSocket dial failed: %v", err)
-			}
-			if resp != nil {
-				resp.Body.Close()
 			}
 
 			connect := &ConnectPacket{ClientID: tc.clientID}
@@ -861,7 +838,7 @@ func TestWSServerHandleWSConnProperties(t *testing.T) {
 			err = conn.WriteMessage(websocket.BinaryMessage, encodePacket(connect))
 			require.NoError(t, err)
 
-			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 			_, data, err := conn.ReadMessage()
 			require.NoError(t, err)
 
@@ -877,6 +854,7 @@ func TestWSServerHandleWSConnProperties(t *testing.T) {
 }
 
 func TestWSServerHandleWSConnSession(t *testing.T) {
+	t.Parallel()
 	t.Run("takes over existing connection", func(t *testing.T) {
 		disconnectDone := make(chan struct{}, 2) // Buffer for multiple disconnects
 
@@ -895,24 +873,21 @@ func TestWSServerHandleWSConnSession(t *testing.T) {
 		ts := httptest.NewServer(mux)
 
 		wsURL := "ws" + ts.URL[4:] + "/mqtt"
-		dialer := websocket.Dialer{Subprotocols: []string{"mqtt"}}
+		dialer := testWSDialer()
 
 		// First connection
-		conn1, resp1, err := dialer.Dial(wsURL, nil)
+		conn1, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed: %v", err)
-		}
-		if resp1 != nil {
-			resp1.Body.Close()
 		}
 
 		connect := &ConnectPacket{ClientID: "ws-takeover-test"}
 		err = conn1.WriteMessage(websocket.BinaryMessage, encodePacket(connect))
 		require.NoError(t, err)
 
-		conn1.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, _, err = conn1.ReadMessage()
 		require.NoError(t, err)
 
@@ -920,24 +895,21 @@ func TestWSServerHandleWSConnSession(t *testing.T) {
 		conn1.Close()
 
 		// Wait a bit for server to process disconnect
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Second connection with same client ID (reconnect/takeover scenario)
-		conn2, resp2, err := dialer.Dial(wsURL, nil)
+		conn2, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed for second connection: %v", err)
-		}
-		if resp2 != nil {
-			resp2.Body.Close()
 		}
 
 		connect2 := &ConnectPacket{ClientID: "ws-takeover-test"}
 		err = conn2.WriteMessage(websocket.BinaryMessage, encodePacket(connect2))
 		require.NoError(t, err)
 
-		conn2.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn2.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, _, err = conn2.ReadMessage()
 		require.NoError(t, err)
 
@@ -957,17 +929,14 @@ func TestWSServerHandleWSConnSession(t *testing.T) {
 		ts := httptest.NewServer(mux)
 
 		wsURL := "ws" + ts.URL[4:] + "/mqtt"
-		dialer := websocket.Dialer{Subprotocols: []string{"mqtt"}}
+		dialer := testWSDialer()
 
 		// First connection - create session and subscription
-		conn1, resp1, err := dialer.Dial(wsURL, nil)
+		conn1, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed: %v", err)
-		}
-		if resp1 != nil {
-			resp1.Body.Close()
 		}
 
 		// CONNECT with session expiry (to keep session)
@@ -976,7 +945,7 @@ func TestWSServerHandleWSConnSession(t *testing.T) {
 		err = conn1.WriteMessage(websocket.BinaryMessage, encodePacket(connect))
 		require.NoError(t, err)
 
-		conn1.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, _, err = conn1.ReadMessage()
 		require.NoError(t, err)
 
@@ -996,24 +965,21 @@ func TestWSServerHandleWSConnSession(t *testing.T) {
 		conn1.WriteMessage(websocket.BinaryMessage, encodePacket(disconnect))
 		conn1.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Second connection - session should be present with subscription
-		conn2, resp2, err := dialer.Dial(wsURL, nil)
+		conn2, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed for second connection: %v", err)
-		}
-		if resp2 != nil {
-			resp2.Body.Close()
 		}
 
 		connect2 := &ConnectPacket{ClientID: "ws-session-test", CleanStart: false}
 		err = conn2.WriteMessage(websocket.BinaryMessage, encodePacket(connect2))
 		require.NoError(t, err)
 
-		conn2.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn2.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, data, err := conn2.ReadMessage()
 		require.NoError(t, err)
 
@@ -1036,16 +1002,13 @@ func TestWSServerHandleWSConnSession(t *testing.T) {
 		ts := httptest.NewServer(mux)
 
 		wsURL := "ws" + ts.URL[4:] + "/mqtt"
-		dialer := websocket.Dialer{Subprotocols: []string{"mqtt"}}
+		dialer := testWSDialer()
 
-		conn, resp, err := dialer.Dial(wsURL, nil)
+		conn, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed: %v", err)
-		}
-		if resp != nil {
-			resp.Body.Close()
 		}
 
 		// Send PINGREQ instead of CONNECT (invalid first packet)
@@ -1074,23 +1037,20 @@ func TestWSServerHandleWSConnSession(t *testing.T) {
 		ts := httptest.NewServer(mux)
 
 		wsURL := "ws" + ts.URL[4:] + "/mqtt"
-		dialer := websocket.Dialer{Subprotocols: []string{"mqtt"}}
+		dialer := testWSDialer()
 
-		conn, resp, err := dialer.Dial(wsURL, nil)
+		conn, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed: %v", err)
-		}
-		if resp != nil {
-			resp.Body.Close()
 		}
 
 		connect := &ConnectPacket{ClientID: "ws-auth-fail-test"}
 		err = conn.WriteMessage(websocket.BinaryMessage, encodePacket(connect))
 		require.NoError(t, err)
 
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, data, err := conn.ReadMessage()
 		require.NoError(t, err)
 
@@ -1126,29 +1086,26 @@ func TestWSServerHandleWSConnSession(t *testing.T) {
 		ts := httptest.NewServer(mux)
 
 		wsURL := "ws" + ts.URL[4:] + "/mqtt"
-		dialer := websocket.Dialer{Subprotocols: []string{"mqtt"}}
+		dialer := testWSDialer()
 
-		conn, resp, err := dialer.Dial(wsURL, nil)
+		conn, _, err := dialer.Dial(wsURL, nil)
 		if err != nil {
 			ts.Close()
 			srv.Close()
 			t.Skipf("WebSocket dial failed: %v", err)
-		}
-		if resp != nil {
-			resp.Body.Close()
 		}
 
 		connect := &ConnectPacket{ClientID: "ws-srv-rm-test"}
 		err = conn.WriteMessage(websocket.BinaryMessage, encodePacket(connect))
 		require.NoError(t, err)
 
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		_, _, err = conn.ReadMessage()
 		require.NoError(t, err)
 
 		select {
 		case <-connectDone:
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("connect callback not received")
 		}
 

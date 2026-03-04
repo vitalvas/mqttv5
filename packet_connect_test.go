@@ -950,3 +950,23 @@ func FuzzConnectPacketDecode(f *testing.F) {
 		_, _ = p.Decode(bytes.NewReader(remaining), header)
 	})
 }
+
+func TestConnectPacketEdgeCases(t *testing.T) {
+	t.Run("empty client ID requires clean start", func(t *testing.T) {
+		pkt := &ConnectPacket{
+			ClientID:   "",
+			CleanStart: false,
+		}
+		err := pkt.Validate()
+		assert.Error(t, err, "Empty client ID without clean start should be invalid")
+	})
+
+	t.Run("empty client ID with clean start is valid", func(t *testing.T) {
+		pkt := &ConnectPacket{
+			ClientID:   "",
+			CleanStart: true,
+		}
+		err := pkt.Validate()
+		assert.NoError(t, err, "Empty client ID with clean start should be valid")
+	})
+}

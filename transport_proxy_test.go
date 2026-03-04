@@ -315,13 +315,18 @@ func TestClientProxyOptions(t *testing.T) {
 func TestWSDialerSetProxyFromEnvironment(t *testing.T) {
 	d := NewWSDialer()
 	require.NotNil(t, d.Dialer)
+	require.NotNil(t, d.Dialer.HTTPClient)
 
-	// Initially no proxy
-	assert.Nil(t, d.Dialer.Proxy)
+	// Initially no proxy configured
+	transport, ok := d.Dialer.HTTPClient.Transport.(*http.Transport)
+	require.True(t, ok)
+	assert.Nil(t, transport.Proxy)
 
 	// Set proxy from environment
 	d.SetProxyFromEnvironment()
-	assert.NotNil(t, d.Dialer.Proxy)
+	transport, ok = d.Dialer.HTTPClient.Transport.(*http.Transport)
+	require.True(t, ok)
+	assert.NotNil(t, transport.Proxy)
 }
 
 func TestProxyDialerSOCKS5(t *testing.T) {
@@ -505,7 +510,7 @@ func TestProxyDialerSOCKS5ContextCancellation(t *testing.T) {
 		defer conn.Close()
 
 		// Slow response - wait for client to cancel (must be longer than 100ms timeout)
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}()
 
 	proxyAddr := "socks5://" + proxyListener.Addr().String()

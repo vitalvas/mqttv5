@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +37,7 @@ func (t *testAuthorizer) Authorize(ctx context.Context, authzCtx *AuthzContext) 
 }
 
 func TestNewServer(t *testing.T) {
+	t.Parallel()
 	t.Run("creates server with listener", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -93,6 +96,7 @@ func TestNewServer(t *testing.T) {
 }
 
 func TestServerClients(t *testing.T) {
+	t.Parallel()
 	t.Run("empty server has no clients", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -106,6 +110,7 @@ func TestServerClients(t *testing.T) {
 }
 
 func TestServerPublish(t *testing.T) {
+	t.Parallel()
 	t.Run("publish when server not running", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -356,6 +361,7 @@ func TestServerPublish(t *testing.T) {
 }
 
 func TestServerClose(t *testing.T) {
+	t.Parallel()
 	t.Run("close stops server", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -366,7 +372,7 @@ func TestServerClose(t *testing.T) {
 		go srv.ListenAndServe()
 
 		// Wait for it to start
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		err = srv.Close()
 		require.NoError(t, err)
@@ -405,7 +411,7 @@ func TestServerClose(t *testing.T) {
 		)
 
 		go srv.ListenAndServe()
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Connect a client
 		conn, err := net.Dial("tcp", listener.Addr().String())
@@ -445,7 +451,7 @@ func TestServerClose(t *testing.T) {
 		// Wait for disconnect to be processed
 		select {
 		case <-disconnectDone:
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("timeout waiting for disconnect")
 		}
 
@@ -470,7 +476,7 @@ func TestServerClose(t *testing.T) {
 		)
 
 		go srv.ListenAndServe()
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Connect to both listeners
 		conn1, err := net.Dial("tcp", listener1.Addr().String())
@@ -510,7 +516,7 @@ func TestServerClose(t *testing.T) {
 		srv := NewServer(WithListener(listener))
 
 		go srv.ListenAndServe()
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Close should complete quickly
 		done := make(chan struct{})
@@ -522,13 +528,14 @@ func TestServerClose(t *testing.T) {
 		select {
 		case <-done:
 			// Success
-		case <-time.After(5 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("Close did not complete within timeout")
 		}
 	})
 }
 
 func TestServerAddrs(t *testing.T) {
+	t.Parallel()
 	t.Run("returns listener addresses", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -566,6 +573,7 @@ func TestServerAddrs(t *testing.T) {
 }
 
 func TestServerListenAndServe(t *testing.T) {
+	t.Parallel()
 	t.Run("already running returns error", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -574,7 +582,7 @@ func TestServerListenAndServe(t *testing.T) {
 
 		// Start first instance
 		go srv.ListenAndServe()
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Try to start again
 		errCh := make(chan error, 1)
@@ -595,6 +603,7 @@ func TestServerListenAndServe(t *testing.T) {
 }
 
 func TestServerConcurrency(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -629,6 +638,7 @@ func TestServerConcurrency(t *testing.T) {
 }
 
 func TestServerEmptyTopicValidation(t *testing.T) {
+	t.Parallel()
 	t.Run("empty topic after alias resolution disconnects client", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -643,7 +653,7 @@ func TestServerEmptyTopicValidation(t *testing.T) {
 		}()
 
 		// Give server time to start
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Connect a client
 		conn, err := net.Dial("tcp", listener.Addr().String())
@@ -693,6 +703,7 @@ func TestServerEmptyTopicValidation(t *testing.T) {
 
 // TestServerQoSRetryLogic tests that server retries QoS 1/2 messages with DUP flag (Issue 4)
 func TestServerQoSRetryLogic(t *testing.T) {
+	t.Parallel()
 	t.Run("retryClientMessages sets DUP flag for QoS1", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -842,6 +853,7 @@ func (c *mockServerConn) SetWriteDeadline(_ time.Time) error { return nil }
 
 // TestServerAcceptLoopRetryDelay tests that accept errors have backoff delay (Issue 10)
 func TestServerAcceptLoopRetryDelay(t *testing.T) {
+	t.Parallel()
 	t.Run("accept error does not cause CPU burn", func(t *testing.T) {
 		// This test verifies the 100ms delay exists by checking the code path
 		// The actual delay is hard to test without mocking time
@@ -853,13 +865,13 @@ func TestServerAcceptLoopRetryDelay(t *testing.T) {
 
 		// Start server
 		go srv.ListenAndServe()
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Close listener to cause accept errors
 		listener.Close()
 
 		// Give server time to hit the error path with delay
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(15 * time.Millisecond)
 
 		// Server should still be running (not crashed)
 		assert.True(t, srv.running.Load() || !srv.running.Load()) // Just checking no panic
@@ -870,6 +882,7 @@ func TestServerAcceptLoopRetryDelay(t *testing.T) {
 
 // TestServerAuthentication tests the server authentication flow
 func TestServerAuthentication(t *testing.T) {
+	t.Parallel()
 	// Custom authenticator for credential validation
 	credentialsAuth := &testAuthenticator{
 		authFunc: func(_ context.Context, ctx *AuthContext) (*AuthResult, error) {
@@ -950,7 +963,7 @@ func TestServerAuthentication(t *testing.T) {
 				srv.ListenAndServe()
 			}()
 
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(5 * time.Millisecond)
 
 			conn, err := net.Dial("tcp", listener.Addr().String())
 			require.NoError(t, err)
@@ -1003,6 +1016,7 @@ func (a *testEnhancedAuthEmptyNamespace) AuthContinue(_ context.Context, _ *Enha
 
 // TestServerEnhancedAuthEmptyNamespace tests that enhanced auth with empty namespace defaults to DefaultNamespace.
 func TestServerEnhancedAuthEmptyNamespace(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -1019,7 +1033,7 @@ func TestServerEnhancedAuthEmptyNamespace(t *testing.T) {
 		srv.ListenAndServe()
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	conn, err := net.Dial("tcp", listener.Addr().String())
 	require.NoError(t, err)
@@ -1153,6 +1167,7 @@ func splitByComma(s string) []string {
 
 // TestServerSCRAMSHA256EnhancedAuth tests the full SCRAM-SHA-256 challenge-response flow through the server.
 func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
+	t.Parallel()
 	t.Run("successful authentication", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -1170,7 +1185,7 @@ func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -1234,7 +1249,7 @@ func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -1319,7 +1334,7 @@ func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
 					srv.ListenAndServe()
 				}()
 
-				time.Sleep(50 * time.Millisecond)
+				time.Sleep(5 * time.Millisecond)
 
 				conn, err := net.Dial("tcp", listener.Addr().String())
 				require.NoError(t, err)
@@ -1363,7 +1378,7 @@ func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -1415,6 +1430,7 @@ func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
 
 // TestServerAuthorization tests the server authorization flow
 func TestServerAuthorization(t *testing.T) {
+	t.Parallel()
 	t.Run("publish denied by authorizer", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -1429,7 +1445,7 @@ func TestServerAuthorization(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -1481,7 +1497,7 @@ func TestServerAuthorization(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -1556,7 +1572,7 @@ func TestServerAuthorization(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -1619,6 +1635,7 @@ func TestServerAuthorization(t *testing.T) {
 
 // TestServerReceiveMaximumEnforcement tests server-side Receive Maximum enforcement
 func TestServerReceiveMaximumEnforcement(t *testing.T) {
+	t.Parallel()
 	t.Run("exceeding receive maximum disconnects client", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -1633,7 +1650,7 @@ func TestServerReceiveMaximumEnforcement(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -1710,7 +1727,7 @@ func TestServerReceiveMaximumEnforcement(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -1755,6 +1772,7 @@ func TestServerReceiveMaximumEnforcement(t *testing.T) {
 
 // TestServerMaxQoSDowngrade tests AuthzResult.MaxQoS downgrade behavior
 func TestServerMaxQoSDowngrade(t *testing.T) {
+	t.Parallel()
 	t.Run("subscription QoS downgraded to MaxQoS", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -1775,7 +1793,7 @@ func TestServerMaxQoSDowngrade(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -1846,7 +1864,7 @@ func TestServerMaxQoSDowngrade(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -1881,7 +1899,7 @@ func TestServerMaxQoSDowngrade(t *testing.T) {
 		assert.Equal(t, ReasonSuccess, puback.ReasonCode)
 
 		// Give time for message callback to be called
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Verify the message was handled at QoS 0 internally
 		mu.Lock()
@@ -1896,6 +1914,7 @@ func TestServerMaxQoSDowngrade(t *testing.T) {
 
 // TestServerSessionRecoveryErrorHandling tests proper session error handling (Issue 11)
 func TestServerSessionRecoveryErrorHandling(t *testing.T) {
+	t.Parallel()
 	t.Run("session not found creates new session", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -1909,7 +1928,7 @@ func TestServerSessionRecoveryErrorHandling(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Connect a client
 		conn, err := net.Dial("tcp", listener.Addr().String())
@@ -1960,7 +1979,7 @@ func TestServerSessionRecoveryErrorHandling(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -1991,6 +2010,7 @@ func TestServerSessionRecoveryErrorHandling(t *testing.T) {
 // TestServerClientMaxPacketSize tests that server respects client's Maximum Packet Size.
 // Per MQTT 5.0 spec, server must not send packets larger than client's advertised limit.
 func TestServerClientMaxPacketSize(t *testing.T) {
+	t.Parallel()
 	t.Run("server uses minimum of client and server max packet size", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -2005,7 +2025,7 @@ func TestServerClientMaxPacketSize(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -2055,7 +2075,7 @@ func TestServerClientMaxPacketSize(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -2102,7 +2122,7 @@ func TestServerClientMaxPacketSize(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -2139,6 +2159,7 @@ func TestServerClientMaxPacketSize(t *testing.T) {
 // TestServerSessionExpiryInterval tests that session expiry interval is read from CONNECT
 // and used for will-delay interaction.
 func TestServerSessionExpiryInterval(t *testing.T) {
+	t.Parallel()
 	t.Run("session expiry read from CONNECT", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -2152,7 +2173,7 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -2199,7 +2220,7 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -2230,7 +2251,7 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 		require.NoError(t, err)
 
 		// Give server time to process disconnect
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 
 		conn.Close()
 		srv.Close()
@@ -2250,7 +2271,7 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -2294,7 +2315,7 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 			srv.ListenAndServe()
 		}()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -2329,7 +2350,7 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 		conn.Close()
 
 		// Wait for will to be triggered
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 
 		// Will should be pending, but its publish time should be constrained by session expiry
 		// The will delay is 1 hour, but session expiry is 1 minute, so will should publish
@@ -2343,6 +2364,7 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 
 // TestServerOnSubscribeCallbackFiltering tests that onSubscribe callback only receives successful subscriptions
 func TestServerOnSubscribeCallbackFiltering(t *testing.T) {
+	t.Parallel()
 	t.Run("onSubscribe callback filters failed subscriptions", func(t *testing.T) {
 		var callbackSubs []Subscription
 		srv := NewServer(
@@ -2379,6 +2401,7 @@ func TestServerOnSubscribeCallbackFiltering(t *testing.T) {
 }
 
 func TestServerSubscribeHelpers(t *testing.T) {
+	t.Parallel()
 	t.Run("validateSubscriptionSupport checks wildcard and shared availability", func(t *testing.T) {
 		srv := NewServer(
 			WithWildcardSubAvailable(false),
@@ -2484,6 +2507,7 @@ func TestServerSubscribeHelpers(t *testing.T) {
 
 // TestServerShutdownCopiesClients tests that server shutdown copies clients before disconnect to avoid lock contention
 func TestServerShutdownCopiesClients(t *testing.T) {
+	t.Parallel()
 	t.Run("server shutdown copies clients before disconnect", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -2504,7 +2528,7 @@ func TestServerShutdownCopiesClients(t *testing.T) {
 		select {
 		case <-done:
 			// Success
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("server close took too long - possible deadlock")
 		}
 	})
@@ -2512,6 +2536,7 @@ func TestServerShutdownCopiesClients(t *testing.T) {
 
 // TestServerMaxConnectionsSendsCONNACK tests that server sends CONNACK with ServerBusy before close when max connections reached
 func TestServerMaxConnectionsSendsCONNACK(t *testing.T) {
+	t.Parallel()
 	t.Run("max connections sends CONNACK before close", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -2545,6 +2570,7 @@ func TestServerMaxConnectionsSendsCONNACK(t *testing.T) {
 }
 
 func TestRemoveClient(t *testing.T) {
+	t.Parallel()
 	t.Run("old connection does not remove new client state", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -2588,6 +2614,7 @@ func TestRemoveClient(t *testing.T) {
 }
 
 func TestGetTLSConnectionState(t *testing.T) {
+	t.Parallel()
 	t.Run("non-TLS connection returns nil", func(t *testing.T) {
 		conn := &mockConn{}
 
@@ -2704,6 +2731,7 @@ func (w *tlsWrapperConn) UnderlyingConn() net.Conn           { return w.underlyi
 
 // TestMultiTenantNamespaceIsolation tests runtime namespace isolation behaviors.
 func TestMultiTenantNamespaceIsolation(t *testing.T) {
+	t.Parallel()
 	t.Run("same clientID different namespaces coexist", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -2848,6 +2876,7 @@ func TestMultiTenantNamespaceIsolation(t *testing.T) {
 }
 
 func TestBuildConnackCapabilities(t *testing.T) {
+	t.Parallel()
 	t.Run("includes all capability properties with defaults", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -3048,6 +3077,7 @@ func TestBuildConnackCapabilities(t *testing.T) {
 }
 
 func TestErrorToReasonCode(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -3137,6 +3167,7 @@ func TestErrorToReasonCode(t *testing.T) {
 }
 
 func TestClientDisconnectWithWill(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		reasonCode  ReasonCode
@@ -3197,6 +3228,7 @@ func TestClientDisconnectWithWill(t *testing.T) {
 }
 
 func TestUnsubscribeTopicFilterValidation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		filter      string
@@ -3305,6 +3337,7 @@ func TestUnsubscribeTopicFilterValidation(t *testing.T) {
 }
 
 func TestConnectPropertyValidation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		setupProps     func(*ConnectPacket)
@@ -3390,6 +3423,7 @@ func TestConnectPropertyValidation(t *testing.T) {
 }
 
 func TestServerClientCredentialExpiry(t *testing.T) {
+	t.Parallel()
 	t.Run("default credential expiry is zero", func(t *testing.T) {
 		client := &ServerClient{}
 		assert.True(t, client.CredentialExpiry().IsZero())
@@ -3422,6 +3456,7 @@ func TestServerClientCredentialExpiry(t *testing.T) {
 }
 
 func TestServerGetClient(t *testing.T) {
+	t.Parallel()
 	t.Run("get existing client", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -3461,6 +3496,7 @@ func TestServerGetClient(t *testing.T) {
 }
 
 func TestServerDisconnectClient(t *testing.T) {
+	t.Parallel()
 	t.Run("disconnect existing client returns true", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -3492,6 +3528,7 @@ func TestServerDisconnectClient(t *testing.T) {
 }
 
 func TestServerCheckCredentialExpiry(t *testing.T) {
+	t.Parallel()
 	t.Run("disconnects expired clients", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -3569,6 +3606,7 @@ func TestServerCheckCredentialExpiry(t *testing.T) {
 
 // TestServerHandlePubrec tests the handlePubrec function
 func TestServerHandlePubrec(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name       string
 		reasonCode ReasonCode
@@ -3626,6 +3664,7 @@ func TestServerHandlePubrec(t *testing.T) {
 
 // TestServerHandlePubrel tests the handlePubrel function
 func TestServerHandlePubrel(t *testing.T) {
+	t.Parallel()
 	t.Run("handles valid PUBREL and sends PUBCOMP", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -3708,6 +3747,7 @@ func TestServerHandlePubrel(t *testing.T) {
 
 // TestServerHandlePubcomp tests the handlePubcomp function
 func TestServerHandlePubcomp(t *testing.T) {
+	t.Parallel()
 	t.Run("handles valid PUBCOMP and releases flow control", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -3758,6 +3798,7 @@ func TestServerHandlePubcomp(t *testing.T) {
 
 // TestServerHandleUnsubscribe tests the handleUnsubscribe function
 func TestServerHandleUnsubscribe(t *testing.T) {
+	t.Parallel()
 	t.Run("handles valid UNSUBSCRIBE and sends UNSUBACK", func(t *testing.T) {
 		listener, err := net.Listen("tcp", ":0")
 		require.NoError(t, err)
@@ -3912,6 +3953,7 @@ func TestServerHandleUnsubscribe(t *testing.T) {
 
 // TestServerQueueOfflineMessage tests the queueOfflineMessage function
 func TestServerQueueOfflineMessage(t *testing.T) {
+	t.Parallel()
 	t.Run("queues message for offline client with session", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -3941,6 +3983,7 @@ func TestServerQueueOfflineMessage(t *testing.T) {
 
 // TestServerDeliverPendingMessages tests the deliverPendingMessages function
 func TestServerDeliverPendingMessages(t *testing.T) {
+	t.Parallel()
 	t.Run("delivers pending messages to reconnected client", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -3999,6 +4042,7 @@ func TestServerDeliverPendingMessages(t *testing.T) {
 
 // TestServerRestoreInflightMessages tests the restoreInflightMessages function
 func TestServerRestoreInflightMessages(t *testing.T) {
+	t.Parallel()
 	t.Run("restores QoS 1 messages with DUP flag", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -4164,6 +4208,7 @@ func (l *testLogger) SetLevel(level LogLevel)       { l.level = level }
 
 // TestServerHandleReauth tests the handleReauth function
 func TestServerHandleReauth(t *testing.T) {
+	t.Parallel()
 	t.Run("reauth with unsupported method disconnects client", func(t *testing.T) {
 		enhancedAuth := &testEnhancedAuthEmptyNamespace{}
 		srv := NewServer(WithEnhancedAuth(enhancedAuth))
@@ -4259,6 +4304,7 @@ func TestServerHandleReauth(t *testing.T) {
 
 // TestServerResolvePublishTopic tests the resolvePublishTopic function
 func TestServerResolvePublishTopic(t *testing.T) {
+	t.Parallel()
 	t.Run("resolves topic without alias", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -4350,6 +4396,7 @@ func TestServerResolvePublishTopic(t *testing.T) {
 
 // TestServerValidatePublishFlags tests the validatePublishFlags function
 func TestServerValidatePublishFlags(t *testing.T) {
+	t.Parallel()
 	t.Run("accepts valid QoS and retain", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -4379,6 +4426,7 @@ func TestServerValidatePublishFlags(t *testing.T) {
 }
 
 func TestServerKeepAliveTimeout(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer listener.Close()
@@ -4387,7 +4435,7 @@ func TestServerKeepAliveTimeout(t *testing.T) {
 	go srv.ListenAndServe()
 	defer srv.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	// Connect a client
 	conn, err := net.Dial("tcp", listener.Addr().String())
@@ -4414,11 +4462,12 @@ func TestServerKeepAliveTimeout(t *testing.T) {
 	conn.Close()
 
 	// Wait for connection to be cleaned up
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 	assert.Equal(t, 0, srv.ClientCount())
 }
 
 func TestServerRetryClientMessages(t *testing.T) {
+	t.Parallel()
 	srv := NewServer()
 	defer srv.Close()
 
@@ -4464,6 +4513,7 @@ func TestServerRetryQoS2Messages(_ *testing.T) {
 }
 
 func TestServerHandlePubrecWithSession(t *testing.T) {
+	t.Parallel()
 	srv := NewServer()
 	defer srv.Close()
 
@@ -4504,6 +4554,7 @@ func TestServerHandlePubrecWithSession(t *testing.T) {
 }
 
 func TestServerDisconnectedClientRetry(t *testing.T) {
+	t.Parallel()
 	srv := NewServer()
 	defer srv.Close()
 
@@ -4524,32 +4575,44 @@ func TestServerDisconnectedClientRetry(t *testing.T) {
 }
 
 func TestServerReauthAuthStartFails(t *testing.T) {
-	// Create a mock enhanced auth that fails AuthStart
-	enhancedAuth := &testEnhancedAuthFailStart{}
-	srv := NewServer(WithEnhancedAuth(enhancedAuth))
-	defer srv.Close()
+	t.Parallel()
 
-	conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
-	connect := &ConnectPacket{ClientID: "reauth-fail-test"}
-	client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
-	client.connected.Store(true)
+	tests := []struct {
+		name       string
+		clientID   string
+		authMethod string
+	}{
+		{"auth start fails", "reauth-fail-test", "FAIL"},
+		{"unsupported method", "reauth-unsupported", "UNSUPPORTED"},
+	}
 
-	srv.mu.Lock()
-	srv.clients[NamespaceKey(DefaultNamespace, "reauth-fail-test")] = client
-	srv.mu.Unlock()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			enhancedAuth := &testEnhancedAuthFailStart{}
+			srv := NewServer(WithEnhancedAuth(enhancedAuth))
+			defer srv.Close()
 
-	srv.keepAlive.Register(NamespaceKey(DefaultNamespace, "reauth-fail-test"), 60)
+			conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
+			connect := &ConnectPacket{ClientID: tt.clientID}
+			client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
+			client.connected.Store(true)
 
-	logger := &testLogger{}
+			srv.mu.Lock()
+			srv.clients[NamespaceKey(DefaultNamespace, tt.clientID)] = client
+			srv.mu.Unlock()
 
-	// Send AUTH with supported method but AuthStart will fail
-	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
-	authPkt.Props.Set(PropAuthenticationMethod, "FAIL")
+			srv.keepAlive.Register(NamespaceKey(DefaultNamespace, tt.clientID), 60)
 
-	srv.handleReauth(client, authPkt, NamespaceKey(DefaultNamespace, "reauth-fail-test"), logger)
+			logger := &testLogger{}
 
-	// Client should be disconnected
-	assert.False(t, client.IsConnected())
+			authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
+			authPkt.Props.Set(PropAuthenticationMethod, tt.authMethod)
+
+			srv.handleReauth(client, authPkt, NamespaceKey(DefaultNamespace, tt.clientID), logger)
+
+			assert.False(t, client.IsConnected())
+		})
+	}
 }
 
 type testEnhancedAuthFailStart struct{}
@@ -4567,6 +4630,7 @@ func (a *testEnhancedAuthFailStart) AuthContinue(_ context.Context, _ *EnhancedA
 }
 
 func TestServerHandlePubrecWithError(t *testing.T) {
+	t.Parallel()
 	srv := NewServer()
 	defer srv.Close()
 
@@ -4619,6 +4683,7 @@ func TestServerPublishToSubscribersExpiredMessage(_ *testing.T) {
 }
 
 func TestServerPublishToSubscribersRetainedDelete(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer listener.Close()
@@ -4627,7 +4692,7 @@ func TestServerPublishToSubscribersRetainedDelete(t *testing.T) {
 	go srv.ListenAndServe()
 	defer srv.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	// First, set a retained message
 	setMsg := &Message{
@@ -4639,7 +4704,7 @@ func TestServerPublishToSubscribersRetainedDelete(t *testing.T) {
 	}
 	srv.Publish(setMsg)
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	// Now delete it with empty payload
 	deleteMsg := &Message{
@@ -4684,6 +4749,7 @@ func TestServerPublishToSubscribersOfflineClient(_ *testing.T) {
 }
 
 func TestServerPublishQoSDowngrade(t *testing.T) {
+	t.Parallel()
 	t.Run("delivery QoS is minimum of message QoS and subscription QoS", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -4703,7 +4769,7 @@ func TestServerPublishQoSDowngrade(t *testing.T) {
 		go srv.ListenAndServe()
 		defer srv.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Connect a client
 		conn, err := net.Dial("tcp", listener.Addr().String())
@@ -4737,7 +4803,7 @@ func TestServerPublishQoSDowngrade(t *testing.T) {
 		require.NoError(t, err)
 		require.IsType(t, &SubackPacket{}, pkt)
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Publish QoS 2 message via Server.Publish
 		msg := &Message{
@@ -4749,7 +4815,7 @@ func TestServerPublishQoSDowngrade(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for delivery
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 
 		// Read the PUBLISH from the client connection
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
@@ -4764,6 +4830,7 @@ func TestServerPublishQoSDowngrade(t *testing.T) {
 }
 
 func TestServerPublishSubscriptionIdentifiers(t *testing.T) {
+	t.Parallel()
 	t.Run("subscription identifiers are appended to delivery message", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -4773,7 +4840,7 @@ func TestServerPublishSubscriptionIdentifiers(t *testing.T) {
 		go srv.ListenAndServe()
 		defer srv.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Connect a client
 		conn, err := net.Dial("tcp", listener.Addr().String())
@@ -4808,7 +4875,7 @@ func TestServerPublishSubscriptionIdentifiers(t *testing.T) {
 		require.NoError(t, err)
 		require.IsType(t, &SubackPacket{}, pkt)
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Publish message via Server.Publish
 		msg := &Message{
@@ -4834,6 +4901,7 @@ func TestServerPublishSubscriptionIdentifiers(t *testing.T) {
 }
 
 func TestServerPublishOfflineClientQueueing(t *testing.T) {
+	t.Parallel()
 	t.Run("QoS 0 messages are not queued for offline clients", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -4975,36 +5043,8 @@ func TestServerPublishOfflineClientQueueing(t *testing.T) {
 	})
 }
 
-func TestServerHandleReauthUnsupportedMethod(t *testing.T) {
-	// Use mock that only supports "FAIL" method
-	enhancedAuth := &testEnhancedAuthFailStart{}
-	srv := NewServer(WithEnhancedAuth(enhancedAuth))
-	defer srv.Close()
-
-	conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
-	connect := &ConnectPacket{ClientID: "reauth-unsupported"}
-	client := NewServerClient(conn, connect, 256*1024, DefaultNamespace)
-	client.connected.Store(true)
-
-	srv.mu.Lock()
-	srv.clients[NamespaceKey(DefaultNamespace, "reauth-unsupported")] = client
-	srv.mu.Unlock()
-
-	srv.keepAlive.Register(NamespaceKey(DefaultNamespace, "reauth-unsupported"), 60)
-
-	logger := &testLogger{}
-
-	// Send AUTH with unsupported method (not "FAIL")
-	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
-	authPkt.Props.Set(PropAuthenticationMethod, "UNSUPPORTED")
-
-	srv.handleReauth(client, authPkt, NamespaceKey(DefaultNamespace, "reauth-unsupported"), logger)
-
-	// Client should be disconnected due to bad auth method
-	assert.False(t, client.IsConnected())
-}
-
 func TestServerHandleReauthEmptyMethod(t *testing.T) {
+	t.Parallel()
 	enhancedAuth := &testEnhancedAuthFailStart{}
 	srv := NewServer(WithEnhancedAuth(enhancedAuth))
 	defer srv.Close()
@@ -5033,6 +5073,7 @@ func TestServerHandleReauthEmptyMethod(t *testing.T) {
 }
 
 func TestServerMessageFromPublishPacket(t *testing.T) {
+	t.Parallel()
 	t.Run("with all properties", func(t *testing.T) {
 		pub := &PublishPacket{
 			Topic:   "test/topic",
@@ -5111,6 +5152,7 @@ func TestServerHandlePubcompUnknownPacketID(_ *testing.T) {
 }
 
 func TestServerGetTLSConnectionState(t *testing.T) {
+	t.Parallel()
 	// Test with non-TLS connection
 	conn := &mockServerConn{writeBuf: &bytes.Buffer{}}
 	state := getTLSConnectionState(conn)
@@ -5118,6 +5160,7 @@ func TestServerGetTLSConnectionState(t *testing.T) {
 }
 
 func TestServerApplyCredentialExpiry(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -5183,6 +5226,7 @@ func TestServerHandlePubcompNoQoS2Tracker(_ *testing.T) {
 }
 
 func TestServerPublishAuthorizationError(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -5199,7 +5243,7 @@ func TestServerPublishAuthorizationError(t *testing.T) {
 	go srv.ListenAndServe()
 	defer srv.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	// Connect
 	conn, err := net.Dial("tcp", listener.Addr().String())
@@ -5224,10 +5268,11 @@ func TestServerPublishAuthorizationError(t *testing.T) {
 	WritePacket(conn, pub, 256*1024)
 
 	// Should receive PUBACK with error
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 }
 
 func TestServerHandleSubscribeAuthorizationError(t *testing.T) {
+	t.Parallel()
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer listener.Close()
 
@@ -5247,7 +5292,7 @@ func TestServerHandleSubscribeAuthorizationError(t *testing.T) {
 	go srv.ListenAndServe()
 	defer srv.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	// Connect
 	conn, err := net.Dial("tcp", listener.Addr().String())
@@ -5280,6 +5325,7 @@ func TestServerHandleSubscribeAuthorizationError(t *testing.T) {
 }
 
 func TestServerHandleConnectionEdgeCases(t *testing.T) {
+	t.Parallel()
 	t.Run("first packet not CONNECT", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -5676,6 +5722,7 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 }
 
 func TestServerPingreqHandling(t *testing.T) {
+	t.Parallel()
 	t.Run("server responds to PINGREQ with PINGRESP", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -5720,6 +5767,7 @@ func TestServerPingreqHandling(t *testing.T) {
 }
 
 func TestServerDisconnectSessionExpiryUpdate(t *testing.T) {
+	t.Parallel()
 	t.Run("client can update session expiry on disconnect", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -5807,6 +5855,7 @@ func TestServerDisconnectSessionExpiryUpdate(t *testing.T) {
 }
 
 func TestServerAuthPacketWithoutEnhancedAuth(t *testing.T) {
+	t.Parallel()
 	t.Run("AUTH packet without enhanced auth configured disconnects client", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -5853,6 +5902,7 @@ func TestServerAuthPacketWithoutEnhancedAuth(t *testing.T) {
 }
 
 func TestServerConnackWriteFailure(t *testing.T) {
+	t.Parallel()
 	t.Run("client removed when CONNACK write fails", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -5896,6 +5946,7 @@ func TestServerConnackWriteFailure(t *testing.T) {
 }
 
 func TestServerProtocolErrorDisconnect(t *testing.T) {
+	t.Parallel()
 	t.Run("protocol error sends disconnect with reason code", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -5945,6 +5996,7 @@ func TestServerProtocolErrorDisconnect(t *testing.T) {
 }
 
 func TestServerPublishValidationFailureDisconnect(t *testing.T) {
+	t.Parallel()
 	t.Run("QoS above server max disconnects client", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -6049,6 +6101,7 @@ func TestServerPublishValidationFailureDisconnect(t *testing.T) {
 }
 
 func TestServerInboundFlowControlExceeded(t *testing.T) {
+	t.Parallel()
 	t.Run("exceeding inbound receive max disconnects client", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -6103,7 +6156,7 @@ func TestServerInboundFlowControlExceeded(t *testing.T) {
 
 		// Server should eventually send DISCONNECT with receive max exceeded
 		// (may receive PUBACK for first message first)
-		conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 		for {
 			pkt, _, err = ReadPacket(conn, 256*1024)
 			if err != nil {
@@ -6119,6 +6172,7 @@ func TestServerInboundFlowControlExceeded(t *testing.T) {
 }
 
 func TestServerQoS2AuthorizationFailurePubrec(t *testing.T) {
+	t.Parallel()
 	t.Run("authorization failure on QoS 2 publish sends PUBREC with error", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -6237,6 +6291,7 @@ func TestServerQoS2AuthorizationFailurePubrec(t *testing.T) {
 }
 
 func TestServerQoS2PublishHandling(t *testing.T) {
+	t.Parallel()
 	t.Run("QoS 2 publish tracks message and sends PUBREC", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -6512,7 +6567,7 @@ func TestServerQoS2PublishHandling(t *testing.T) {
 		assert.Equal(t, uint16(1), pubcomp.PacketID)
 
 		// Message should now be delivered
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 		mu.Lock()
 		assert.True(t, messageDelivered, "message should be delivered after PUBREL")
 		assert.Equal(t, "test/qos2/complete", deliveredTopic)
@@ -6521,6 +6576,7 @@ func TestServerQoS2PublishHandling(t *testing.T) {
 }
 
 func TestServerRetainedMessageHandling(t *testing.T) {
+	t.Parallel()
 	t.Run("retained message stores all properties", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -6643,7 +6699,7 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 		WritePacket(conn, pub, 256*1024)
 
 		// Wait for message to be processed
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 
 		// Verify retained message is stored with properties
 		retained := srv.config.retainedStore.Match(DefaultNamespace, "test/client/retained")
@@ -6698,7 +6754,7 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 		WritePacket(conn, pub, 256*1024)
 
 		// Wait for message to be processed
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 
 		// Verify retained message is deleted
 		retained := srv.config.retainedStore.Match(DefaultNamespace, "test/client/delete")
@@ -6757,7 +6813,7 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 		}
 		WritePacket(connA, pubA, 256*1024)
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Connect as tenant-b
 		connB, err := net.Dial("tcp", listener.Addr().String())
@@ -6786,7 +6842,7 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 		}
 		WritePacket(connB, pubB, 256*1024)
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Verify messages are stored in separate namespaces
 		retainedA := srv.config.retainedStore.Match("tenant-a", "shared/topic")
@@ -6800,6 +6856,7 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 }
 
 func TestServerPublishToSubscribersSubscriptionIdentifiers(t *testing.T) {
+	t.Parallel()
 	t.Run("subscription identifiers added when client publishes", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -6809,7 +6866,7 @@ func TestServerPublishToSubscribersSubscriptionIdentifiers(t *testing.T) {
 		go srv.ListenAndServe()
 		defer srv.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Connect publisher client
 		pubConn, err := net.Dial("tcp", listener.Addr().String())
@@ -6857,7 +6914,7 @@ func TestServerPublishToSubscribersSubscriptionIdentifiers(t *testing.T) {
 		require.NoError(t, err)
 		require.IsType(t, &SubackPacket{}, pkt)
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Publisher sends a message (goes through handlePublish -> publishToSubscribers)
 		pubPkt := &PublishPacket{
@@ -6882,6 +6939,7 @@ func TestServerPublishToSubscribersSubscriptionIdentifiers(t *testing.T) {
 }
 
 func TestServerPublishToSubscribersSendFailureQueueing(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		qos          byte
@@ -6982,6 +7040,7 @@ func TestServerPublishToSubscribersSendFailureQueueing(t *testing.T) {
 }
 
 func TestServerHandleSubscribeSubIDNotSupported(t *testing.T) {
+	t.Parallel()
 	t.Run("disconnects client when subscription identifier not supported", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -6994,7 +7053,7 @@ func TestServerHandleSubscribeSubIDNotSupported(t *testing.T) {
 		go srv.ListenAndServe()
 		defer srv.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -7040,6 +7099,7 @@ func TestServerHandleSubscribeSubIDNotSupported(t *testing.T) {
 }
 
 func TestServerHandleSubscribeWildcardNotSupported(t *testing.T) {
+	t.Parallel()
 	t.Run("returns error code when wildcard subscription not supported", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -7052,7 +7112,7 @@ func TestServerHandleSubscribeWildcardNotSupported(t *testing.T) {
 		go srv.ListenAndServe()
 		defer srv.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -7103,7 +7163,7 @@ func TestServerHandleSubscribeWildcardNotSupported(t *testing.T) {
 		go srv.ListenAndServe()
 		defer srv.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -7141,6 +7201,7 @@ func TestServerHandleSubscribeWildcardNotSupported(t *testing.T) {
 }
 
 func TestServerHandleSubscribeSharedNotSupported(t *testing.T) {
+	t.Parallel()
 	t.Run("returns error code when shared subscription not supported", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -7153,7 +7214,7 @@ func TestServerHandleSubscribeSharedNotSupported(t *testing.T) {
 		go srv.ListenAndServe()
 		defer srv.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -7193,6 +7254,7 @@ func TestServerHandleSubscribeSharedNotSupported(t *testing.T) {
 }
 
 func TestServerHandleSubscribeMaxQoSEnforcement(t *testing.T) {
+	t.Parallel()
 	t.Run("caps subscription QoS to server max QoS", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -7205,7 +7267,7 @@ func TestServerHandleSubscribeMaxQoSEnforcement(t *testing.T) {
 		go srv.ListenAndServe()
 		defer srv.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -7246,6 +7308,7 @@ func TestServerHandleSubscribeMaxQoSEnforcement(t *testing.T) {
 }
 
 func TestServerHandleSubscribeRetainedMessageDelivery(t *testing.T) {
+	t.Parallel()
 	t.Run("delivers retained messages with QoS downgrade", func(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -7255,7 +7318,7 @@ func TestServerHandleSubscribeRetainedMessageDelivery(t *testing.T) {
 		go srv.ListenAndServe()
 		defer srv.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Store a retained message with QoS 2
 		srv.config.retainedStore.Set(DefaultNamespace, &RetainedMessage{
@@ -7315,7 +7378,7 @@ func TestServerHandleSubscribeRetainedMessageDelivery(t *testing.T) {
 		go srv.ListenAndServe()
 		defer srv.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Store a retained message
 		srv.config.retainedStore.Set(DefaultNamespace, &RetainedMessage{
@@ -7473,6 +7536,7 @@ func TestServerHandleSubscribeRetainedMessageDelivery(t *testing.T) {
 }
 
 func TestServerOnUnsubscribeCallback(t *testing.T) {
+	t.Parallel()
 	t.Run("callback is invoked on unsubscribe", func(t *testing.T) {
 		var callbackCalled bool
 		var callbackTopics []string
@@ -7491,7 +7555,7 @@ func TestServerOnUnsubscribeCallback(t *testing.T) {
 		go srv.ListenAndServe()
 		defer srv.Close()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		conn, err := net.Dial("tcp", listener.Addr().String())
 		require.NoError(t, err)
@@ -7535,7 +7599,7 @@ func TestServerOnUnsubscribeCallback(t *testing.T) {
 		require.NoError(t, err)
 		require.IsType(t, &UnsubackPacket{}, pkt)
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		assert.True(t, callbackCalled, "onUnsubscribe callback should be called")
 		assert.ElementsMatch(t, []string{"test/topic1", "test/topic2"}, callbackTopics)
@@ -7543,6 +7607,7 @@ func TestServerOnUnsubscribeCallback(t *testing.T) {
 }
 
 func TestServerRemoveClientWithNilClient(t *testing.T) {
+	t.Parallel()
 	t.Run("removes client unconditionally when client parameter is nil", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -7575,6 +7640,7 @@ func TestServerRemoveClientWithNilClient(t *testing.T) {
 }
 
 func TestServerErrorToReasonCodePropertyNotAllowed(t *testing.T) {
+	t.Parallel()
 	srv := NewServer()
 	defer srv.Close()
 
@@ -7584,6 +7650,7 @@ func TestServerErrorToReasonCodePropertyNotAllowed(t *testing.T) {
 }
 
 func TestServerDeliverPendingMessagesRequeue(t *testing.T) {
+	t.Parallel()
 	t.Run("re-queues message when send fails", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -7620,6 +7687,7 @@ func TestServerDeliverPendingMessagesRequeue(t *testing.T) {
 }
 
 func TestServerRestoreInflightMessagesFlowControlExhausted(t *testing.T) {
+	t.Parallel()
 	t.Run("skips message when flow control exhausted for QoS 1 restore", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
@@ -7750,6 +7818,7 @@ func TestServerRestoreInflightMessagesFlowControlExhausted(t *testing.T) {
 }
 
 func TestServerRetryClientMessagesPubrelRetransmit(t *testing.T) {
+	t.Parallel()
 	srv := NewServer()
 	defer srv.Close()
 
@@ -7805,6 +7874,7 @@ func (a *testEnhancedAuthFailStartConnect) AuthContinue(_ context.Context, _ *En
 }
 
 func TestServerPerformEnhancedAuthStartFails(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -7818,7 +7888,7 @@ func TestServerPerformEnhancedAuthStartFails(t *testing.T) {
 		srv.ListenAndServe()
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	conn, err := net.Dial("tcp", listener.Addr().String())
 	require.NoError(t, err)
@@ -7873,6 +7943,7 @@ func (a *testEnhancedAuthContinueAuth) AuthContinue(_ context.Context, _ *Enhanc
 }
 
 func TestServerPerformEnhancedAuthContinueFails(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -7886,7 +7957,7 @@ func TestServerPerformEnhancedAuthContinueFails(t *testing.T) {
 		srv.ListenAndServe()
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	conn, err := net.Dial("tcp", listener.Addr().String())
 	require.NoError(t, err)
@@ -7930,6 +8001,7 @@ func TestServerPerformEnhancedAuthContinueFails(t *testing.T) {
 }
 
 func TestServerPerformEnhancedAuthReadFails(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -7943,7 +8015,7 @@ func TestServerPerformEnhancedAuthReadFails(t *testing.T) {
 		srv.ListenAndServe()
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	conn, err := net.Dial("tcp", listener.Addr().String())
 	require.NoError(t, err)
@@ -7967,13 +8039,14 @@ func TestServerPerformEnhancedAuthReadFails(t *testing.T) {
 	conn.Close()
 
 	// Wait a bit for server to handle the read error
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	srv.Close()
 	wg.Wait()
 }
 
 func TestServerPerformEnhancedAuthWrongPacketType(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -7987,7 +8060,7 @@ func TestServerPerformEnhancedAuthWrongPacketType(t *testing.T) {
 		srv.ListenAndServe()
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	conn, err := net.Dial("tcp", listener.Addr().String())
 	require.NoError(t, err)
@@ -8067,6 +8140,7 @@ func (a *testReauthMultiStepAuth) AuthContinue(_ context.Context, _ *EnhancedAut
 }
 
 func TestServerHandleReauthMultiStepContinueFails(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -8080,7 +8154,7 @@ func TestServerHandleReauthMultiStepContinueFails(t *testing.T) {
 		srv.ListenAndServe()
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	conn, err := net.Dial("tcp", listener.Addr().String())
 	require.NoError(t, err)
@@ -8119,13 +8193,14 @@ func TestServerHandleReauthMultiStepContinueFails(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for server to process and disconnect
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	srv.Close()
 	wg.Wait()
 }
 
 func TestServerHandleReauthMultiStepReadFails(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -8139,7 +8214,7 @@ func TestServerHandleReauthMultiStepReadFails(t *testing.T) {
 		srv.ListenAndServe()
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	conn, err := net.Dial("tcp", listener.Addr().String())
 	require.NoError(t, err)
@@ -8171,13 +8246,14 @@ func TestServerHandleReauthMultiStepReadFails(t *testing.T) {
 	// Close connection without responding - causes read failure
 	conn.Close()
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	srv.Close()
 	wg.Wait()
 }
 
 func TestServerHandleReauthMultiStepWrongPacketType(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -8191,7 +8267,7 @@ func TestServerHandleReauthMultiStepWrongPacketType(t *testing.T) {
 		srv.ListenAndServe()
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	conn, err := net.Dial("tcp", listener.Addr().String())
 	require.NoError(t, err)
@@ -8227,13 +8303,14 @@ func TestServerHandleReauthMultiStepWrongPacketType(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for server to process and disconnect
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	srv.Close()
 	wg.Wait()
 }
 
 func TestServerHandleReauthMultiStepFinalResultFails(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -8250,7 +8327,7 @@ func TestServerHandleReauthMultiStepFinalResultFails(t *testing.T) {
 		srv.ListenAndServe()
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	conn, err := net.Dial("tcp", listener.Addr().String())
 	require.NoError(t, err)
@@ -8288,13 +8365,14 @@ func TestServerHandleReauthMultiStepFinalResultFails(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for server to process (client should be disconnected due to auth failure)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	srv.Close()
 	wg.Wait()
 }
 
 func TestServerHandleReauthMultiStepFinalResultCustomReasonCode(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -8312,7 +8390,7 @@ func TestServerHandleReauthMultiStepFinalResultCustomReasonCode(t *testing.T) {
 		srv.ListenAndServe()
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	conn, err := net.Dial("tcp", listener.Addr().String())
 	require.NoError(t, err)
@@ -8350,13 +8428,14 @@ func TestServerHandleReauthMultiStepFinalResultCustomReasonCode(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for server to process
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	srv.Close()
 	wg.Wait()
 }
 
 func TestServerHandleReauthMultiStepSuccess(t *testing.T) {
+	t.Parallel()
 	listener, err := net.Listen("tcp", ":0")
 	require.NoError(t, err)
 
@@ -8370,7 +8449,7 @@ func TestServerHandleReauthMultiStepSuccess(t *testing.T) {
 		srv.ListenAndServe()
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	conn, err := net.Dial("tcp", listener.Addr().String())
 	require.NoError(t, err)
@@ -8418,4 +8497,950 @@ func TestServerHandleReauthMultiStepSuccess(t *testing.T) {
 
 	srv.Close()
 	wg.Wait()
+}
+
+// testClient is a lightweight MQTT client for load testing.
+type testClient struct {
+	conn     net.Conn
+	clientID string
+}
+
+func newTestClient(addr, clientID string) (*testClient, error) {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	tc := &testClient{
+		conn:     conn,
+		clientID: clientID,
+	}
+
+	connect := &ConnectPacket{
+		ClientID:   clientID,
+		CleanStart: true,
+		KeepAlive:  60,
+	}
+	if _, err := WritePacket(conn, connect, 0); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err := ReadPacket(conn, 0)
+	conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	connack, ok := pkt.(*ConnackPacket)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("expected CONNACK, got %T", pkt)
+	}
+	if connack.ReasonCode != ReasonSuccess {
+		conn.Close()
+		return nil, fmt.Errorf("connect failed: %v", connack.ReasonCode)
+	}
+
+	return tc, nil
+}
+
+func (tc *testClient) subscribe(topic string, qos byte) error {
+	sub := &SubscribePacket{
+		PacketID: 1,
+		Subscriptions: []Subscription{
+			{TopicFilter: topic, QoS: qos},
+		},
+	}
+	if _, err := WritePacket(tc.conn, sub, 0); err != nil {
+		return err
+	}
+
+	tc.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, _, err := ReadPacket(tc.conn, 0)
+	tc.conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		return err
+	}
+
+	if _, ok := pkt.(*SubackPacket); !ok {
+		return fmt.Errorf("expected SUBACK, got %T", pkt)
+	}
+	return nil
+}
+
+func (tc *testClient) publish(topic string, payload []byte, qos byte) error {
+	pub := &PublishPacket{
+		Topic:   topic,
+		Payload: payload,
+		QoS:     qos,
+	}
+	if qos > 0 {
+		pub.PacketID = 1
+	}
+	_, err := WritePacket(tc.conn, pub, 0)
+	return err
+}
+
+func (tc *testClient) readPacket(timeout time.Duration) (Packet, error) {
+	tc.conn.SetReadDeadline(time.Now().Add(timeout))
+	pkt, _, err := ReadPacket(tc.conn, 0)
+	tc.conn.SetReadDeadline(time.Time{})
+	return pkt, err
+}
+
+func (tc *testClient) close() {
+	disconnect := &DisconnectPacket{ReasonCode: ReasonSuccess}
+	WritePacket(tc.conn, disconnect, 0)
+	tc.conn.Close()
+}
+
+func TestConcurrentConnections(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	server := NewServer(WithListener(listener))
+	go server.ListenAndServe()
+	defer server.Close()
+
+	addr := listener.Addr().String()
+
+	numClients := 200
+	clients := make([]*testClient, numClients)
+	var wg sync.WaitGroup
+	var connectErrors atomic.Int32
+
+	start := time.Now()
+	wg.Add(numClients)
+	for i := range numClients {
+		go func(idx int) {
+			defer wg.Done()
+			client, err := newTestClient(addr, fmt.Sprintf("client-%d", idx))
+			if err != nil {
+				connectErrors.Add(1)
+				return
+			}
+			clients[idx] = client
+		}(i)
+	}
+	wg.Wait()
+	connectTime := time.Since(start)
+
+	t.Logf("Connected %d clients in %v (%.0f conn/sec)", numClients, connectTime, float64(numClients)/connectTime.Seconds())
+	assert.Equal(t, int32(0), connectErrors.Load(), "all clients should connect successfully")
+	assert.Equal(t, numClients, server.ClientCount(), "server should track all clients")
+
+	for _, client := range clients {
+		if client != nil {
+			client.close()
+		}
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	assert.Equal(t, 0, server.ClientCount(), "all clients should be disconnected")
+}
+
+func TestMessageThroughput(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	server := NewServer(WithListener(listener))
+	go server.ListenAndServe()
+	defer server.Close()
+
+	addr := listener.Addr().String()
+
+	numSubscribers := 50
+	subscribers := make([]*testClient, numSubscribers)
+	topic := "test/fanout"
+
+	for i := range numSubscribers {
+		client, err := newTestClient(addr, fmt.Sprintf("sub-%d", i))
+		require.NoError(t, err)
+		require.NoError(t, client.subscribe(topic, 0))
+		subscribers[i] = client
+	}
+	defer func() {
+		for _, sub := range subscribers {
+			sub.close()
+		}
+	}()
+
+	publisher, err := newTestClient(addr, "publisher")
+	require.NoError(t, err)
+	defer publisher.close()
+
+	payload := []byte("hello world")
+	start := time.Now()
+	require.NoError(t, publisher.publish(topic, payload, 0))
+
+	var received atomic.Int32
+	var wg sync.WaitGroup
+	wg.Add(numSubscribers)
+
+	for _, sub := range subscribers {
+		go func(s *testClient) {
+			defer wg.Done()
+			pkt, err := s.readPacket(2 * time.Second)
+			if err != nil {
+				return
+			}
+			if pub, ok := pkt.(*PublishPacket); ok {
+				if pub.Topic == topic && string(pub.Payload) == string(payload) {
+					received.Add(1)
+				}
+			}
+		}(sub)
+	}
+	wg.Wait()
+	deliveryTime := time.Since(start)
+
+	t.Logf("Delivered to %d/%d subscribers in %v", received.Load(), numSubscribers, deliveryTime)
+	assert.Equal(t, int32(numSubscribers), received.Load(), "all subscribers should receive message")
+}
+
+func TestResourceUsage(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	server := NewServer(WithListener(listener))
+	go server.ListenAndServe()
+	defer server.Close()
+
+	addr := listener.Addr().String()
+
+	runtime.GC()
+	var m1 runtime.MemStats
+	runtime.ReadMemStats(&m1)
+
+	numClients := 200
+	clients := make([]*testClient, numClients)
+
+	for i := range numClients {
+		client, err := newTestClient(addr, fmt.Sprintf("mem-client-%d", i))
+		require.NoError(t, err)
+		clients[i] = client
+	}
+	defer func() {
+		for _, client := range clients {
+			if client != nil {
+				client.close()
+			}
+		}
+	}()
+
+	runtime.GC()
+	var m2 runtime.MemStats
+	runtime.ReadMemStats(&m2)
+
+	heapIncrease := m2.HeapAlloc - m1.HeapAlloc
+	perClient := heapIncrease / uint64(numClients)
+
+	t.Logf("Memory stats for %d clients:", numClients)
+	t.Logf("  Total heap increase: %d KB (%.2f MB)", heapIncrease/1024, float64(heapIncrease)/(1024*1024))
+	t.Logf("  Per client: %d bytes", perClient)
+	t.Logf("  Goroutines: %d", runtime.NumGoroutine())
+}
+
+func setupTestServer(t *testing.T) (string, func()) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	server := NewServer(WithListener(listener))
+	go server.ListenAndServe()
+
+	cleanup := func() {
+		server.Close()
+		listener.Close()
+	}
+
+	return listener.Addr().String(), cleanup
+}
+
+func TestRPCRequestResponse(t *testing.T) {
+	addr, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	t.Run("20 concurrent RPC pairs", func(t *testing.T) {
+		numRPCPairs := 20
+		var wg sync.WaitGroup
+		var successfulRPCs atomic.Int32
+
+		for i := range numRPCPairs {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+
+				requestTopic := fmt.Sprintf("rpc/request/%d", idx)
+				responseTopic := fmt.Sprintf("rpc/response/%d", idx)
+
+				requester, err := newTestClient(addr, fmt.Sprintf("requester-%d", idx))
+				if err != nil {
+					return
+				}
+				defer requester.close()
+
+				responder, err := newTestClient(addr, fmt.Sprintf("responder-%d", idx))
+				if err != nil {
+					return
+				}
+				defer responder.close()
+
+				if err := responder.subscribe(requestTopic, 0); err != nil {
+					return
+				}
+
+				if err := requester.subscribe(responseTopic, 0); err != nil {
+					return
+				}
+
+				requestPayload := []byte(fmt.Sprintf(`{"id":%d,"method":"getData"}`, idx))
+				if err := requester.publish(requestTopic, requestPayload, 0); err != nil {
+					return
+				}
+
+				pkt, err := responder.readPacket(2 * time.Second)
+				if err != nil {
+					return
+				}
+				if _, ok := pkt.(*PublishPacket); !ok {
+					return
+				}
+
+				responsePayload := []byte(fmt.Sprintf(`{"id":%d,"result":"ok"}`, idx))
+				if err := responder.publish(responseTopic, responsePayload, 0); err != nil {
+					return
+				}
+
+				pkt, err = requester.readPacket(2 * time.Second)
+				if err != nil {
+					return
+				}
+				if pub, ok := pkt.(*PublishPacket); ok {
+					if string(pub.Payload) == string(responsePayload) {
+						successfulRPCs.Add(1)
+					}
+				}
+			}(i)
+		}
+		wg.Wait()
+
+		t.Logf("Successful RPCs: %d/%d", successfulRPCs.Load(), numRPCPairs)
+		assert.GreaterOrEqual(t, successfulRPCs.Load(), int32(numRPCPairs*9/10), "at least 90%% RPCs should succeed")
+	})
+}
+
+func TestBroadcastTo100Subscribers(t *testing.T) {
+	addr, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	numSubscribers := 100
+	broadcastTopic := "broadcast/all"
+	subscribers := make([]*testClient, numSubscribers)
+
+	for i := range numSubscribers {
+		client, err := newTestClient(addr, fmt.Sprintf("broadcast-sub-%d", i))
+		require.NoError(t, err)
+		require.NoError(t, client.subscribe(broadcastTopic, 0))
+		subscribers[i] = client
+	}
+	defer func() {
+		for _, s := range subscribers {
+			s.close()
+		}
+	}()
+
+	broadcaster, err := newTestClient(addr, "broadcaster")
+	require.NoError(t, err)
+	defer broadcaster.close()
+
+	payload := []byte(`{"type":"announcement","msg":"hello all"}`)
+	start := time.Now()
+	require.NoError(t, broadcaster.publish(broadcastTopic, payload, 0))
+
+	var received atomic.Int32
+	var wg sync.WaitGroup
+	wg.Add(numSubscribers)
+
+	for _, sub := range subscribers {
+		go func(s *testClient) {
+			defer wg.Done()
+			pkt, err := s.readPacket(5 * time.Second)
+			if err != nil {
+				return
+			}
+			if pub, ok := pkt.(*PublishPacket); ok {
+				if pub.Topic == broadcastTopic {
+					received.Add(1)
+				}
+			}
+		}(sub)
+	}
+	wg.Wait()
+	deliveryTime := time.Since(start)
+
+	t.Logf("Broadcast delivered to %d/%d subscribers in %v", received.Load(), numSubscribers, deliveryTime)
+	assert.Equal(t, int32(numSubscribers), received.Load(), "all subscribers should receive broadcast")
+}
+
+func TestIoTTelemetrySimulation(t *testing.T) {
+	addr, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	t.Run("50 devices 3 messages each", func(t *testing.T) {
+		numDevices := 50
+		messagesPerDevice := 3
+		telemetryTopic := "telemetry/+"
+
+		collector, err := newTestClient(addr, "collector")
+		require.NoError(t, err)
+		require.NoError(t, collector.subscribe(telemetryTopic, 0))
+		defer collector.close()
+
+		devices := make([]*testClient, numDevices)
+		for i := range numDevices {
+			device, err := newTestClient(addr, fmt.Sprintf("device-%d", i))
+			require.NoError(t, err)
+			devices[i] = device
+		}
+		defer func() {
+			for _, d := range devices {
+				d.close()
+			}
+		}()
+
+		var wg sync.WaitGroup
+		var messagesSent atomic.Int32
+		start := time.Now()
+
+		for i, device := range devices {
+			wg.Add(1)
+			go func(idx int, d *testClient) {
+				defer wg.Done()
+				topic := fmt.Sprintf("telemetry/%d", idx)
+				for j := range messagesPerDevice {
+					payload := []byte(fmt.Sprintf(`{"device":%d,"seq":%d,"temp":%.1f}`, idx, j, 20.0+float64(j)*0.1))
+					if err := d.publish(topic, payload, 0); err != nil {
+						return
+					}
+					messagesSent.Add(1)
+				}
+			}(i, device)
+		}
+		wg.Wait()
+		sendTime := time.Since(start)
+
+		totalMessages := numDevices * messagesPerDevice
+		t.Logf("Sent %d messages from %d devices in %v (%.0f msg/sec)",
+			messagesSent.Load(), numDevices, sendTime, float64(messagesSent.Load())/sendTime.Seconds())
+		assert.Equal(t, int32(totalMessages), messagesSent.Load(), "all messages should be sent")
+	})
+}
+
+func TestChatRoomSimulation(t *testing.T) {
+	addr, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	numUsers := 20
+	messagesPerUser := 3
+	chatTopic := "chat/room1"
+
+	users := make([]*testClient, numUsers)
+	for i := range numUsers {
+		user, err := newTestClient(addr, fmt.Sprintf("user-%d", i))
+		require.NoError(t, err)
+		require.NoError(t, user.subscribe(chatTopic, 0))
+		users[i] = user
+	}
+	defer func() {
+		for _, u := range users {
+			u.close()
+		}
+	}()
+
+	var wg sync.WaitGroup
+	var messagesSent atomic.Int32
+	start := time.Now()
+
+	for i, user := range users {
+		wg.Add(1)
+		go func(idx int, u *testClient) {
+			defer wg.Done()
+			for j := range messagesPerUser {
+				payload := []byte(fmt.Sprintf(`{"user":%d,"msg":"hello %d"}`, idx, j))
+				if err := u.publish(chatTopic, payload, 0); err != nil {
+					return
+				}
+				messagesSent.Add(1)
+				time.Sleep(time.Millisecond)
+			}
+		}(i, user)
+	}
+	wg.Wait()
+	sendTime := time.Since(start)
+
+	totalMessages := numUsers * messagesPerUser
+	t.Logf("Chat simulation: %d users sent %d messages in %v",
+		numUsers, messagesSent.Load(), sendTime)
+	assert.Equal(t, int32(totalMessages), messagesSent.Load(), "all chat messages should be sent")
+}
+
+func TestCommandResponseWith100Clients(t *testing.T) {
+	addr, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	t.Run("server to all clients", func(t *testing.T) {
+		numClients := 100
+		commandTopic := "commands/all"
+		responseTopicPrefix := "responses/"
+
+		clients := make([]*testClient, numClients)
+		for i := range numClients {
+			client, err := newTestClient(addr, fmt.Sprintf("cmd-client-%d", i))
+			require.NoError(t, err)
+			require.NoError(t, client.subscribe(commandTopic, 0))
+			clients[i] = client
+		}
+		defer func() {
+			for _, c := range clients {
+				c.close()
+			}
+		}()
+
+		cmdServer, err := newTestClient(addr, "cmd-server")
+		require.NoError(t, err)
+		require.NoError(t, cmdServer.subscribe(responseTopicPrefix+"+", 0))
+		defer cmdServer.close()
+
+		commandPayload := []byte(`{"cmd":"status","id":12345}`)
+		start := time.Now()
+		require.NoError(t, cmdServer.publish(commandTopic, commandPayload, 0))
+
+		var commandsReceived atomic.Int32
+		var wg sync.WaitGroup
+		wg.Add(numClients)
+
+		for i, client := range clients {
+			go func(idx int, c *testClient) {
+				defer wg.Done()
+				pkt, err := c.readPacket(5 * time.Second)
+				if err != nil {
+					return
+				}
+				if _, ok := pkt.(*PublishPacket); ok {
+					commandsReceived.Add(1)
+					responseTopic := fmt.Sprintf("%s%d", responseTopicPrefix, idx)
+					responsePayload := []byte(fmt.Sprintf(`{"client":%d,"status":"ok"}`, idx))
+					c.publish(responseTopic, responsePayload, 0)
+				}
+			}(i, client)
+		}
+		wg.Wait()
+		commandTime := time.Since(start)
+
+		t.Logf("Command delivered to %d/%d clients in %v", commandsReceived.Load(), numClients, commandTime)
+		assert.Equal(t, int32(numClients), commandsReceived.Load(), "all clients should receive command")
+	})
+}
+
+func TestSustainedLoad(t *testing.T) {
+	addr, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	numPublishers := 5
+	messagesPerPublisher := 200
+	topic := "load/test"
+
+	publishers := make([]*testClient, numPublishers)
+	for i := range numPublishers {
+		pub, err := newTestClient(addr, fmt.Sprintf("load-pub-%d", i))
+		require.NoError(t, err)
+		publishers[i] = pub
+	}
+	defer func() {
+		for _, p := range publishers {
+			p.close()
+		}
+	}()
+
+	var messagesSent atomic.Int64
+	var wg sync.WaitGroup
+	payload := make([]byte, 64)
+	start := time.Now()
+
+	for _, pub := range publishers {
+		wg.Add(1)
+		go func(p *testClient) {
+			defer wg.Done()
+			for range messagesPerPublisher {
+				if err := p.publish(topic, payload, 0); err != nil {
+					return
+				}
+				messagesSent.Add(1)
+			}
+		}(pub)
+	}
+
+	wg.Wait()
+	duration := time.Since(start)
+
+	totalSent := messagesSent.Load()
+	rate := float64(totalSent) / duration.Seconds()
+	t.Logf("Sustained load: %d messages in %v (%.0f msg/sec) with %d publishers",
+		totalSent, duration, rate, numPublishers)
+	assert.Equal(t, int64(numPublishers*messagesPerPublisher), totalSent, "all messages should be sent")
+}
+
+func BenchmarkConnectionRate(b *testing.B) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer listener.Close()
+
+	server := NewServer(WithListener(listener))
+	go server.ListenAndServe()
+	defer server.Close()
+
+	addr := listener.Addr().String()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := range b.N {
+		client, err := newTestClient(addr, fmt.Sprintf("bench-client-%d", i))
+		if err != nil {
+			b.Fatal(err)
+		}
+		client.close()
+	}
+}
+
+func BenchmarkParallelConnections(b *testing.B) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer listener.Close()
+
+	server := NewServer(WithListener(listener))
+	go server.ListenAndServe()
+	defer server.Close()
+
+	addr := listener.Addr().String()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	var counter atomic.Int64
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			id := counter.Add(1)
+			client, err := newTestClient(addr, fmt.Sprintf("parallel-client-%d", id))
+			if err != nil {
+				b.Error(err)
+				return
+			}
+			client.close()
+		}
+	})
+}
+
+func BenchmarkPublishQoS0(b *testing.B) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer listener.Close()
+
+	server := NewServer(WithListener(listener))
+	go server.ListenAndServe()
+	defer server.Close()
+
+	addr := listener.Addr().String()
+
+	client, err := newTestClient(addr, "bench-pub")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer client.close()
+
+	payload := make([]byte, 100)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for range b.N {
+		if err := client.publish("test/bench", payload, 0); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkPublishQoS0Parallel(b *testing.B) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer listener.Close()
+
+	server := NewServer(WithListener(listener))
+	go server.ListenAndServe()
+	defer server.Close()
+
+	addr := listener.Addr().String()
+
+	numClients := runtime.GOMAXPROCS(0)
+	clients := make([]*testClient, numClients)
+
+	for i := range numClients {
+		client, err := newTestClient(addr, fmt.Sprintf("bench-parallel-pub-%d", i))
+		if err != nil {
+			b.Fatal(err)
+		}
+		clients[i] = client
+	}
+	defer func() {
+		for _, c := range clients {
+			c.close()
+		}
+	}()
+
+	payload := make([]byte, 100)
+	var clientIdx atomic.Int32
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	b.RunParallel(func(pb *testing.PB) {
+		idx := int(clientIdx.Add(1)-1) % numClients
+		client := clients[idx]
+
+		for pb.Next() {
+			if err := client.publish("test/bench", payload, 0); err != nil {
+				b.Error(err)
+				return
+			}
+		}
+	})
+}
+
+func BenchmarkFanout(b *testing.B) {
+	fanoutSizes := []int{10, 50, 100, 500}
+
+	for _, numSubs := range fanoutSizes {
+		b.Run(fmt.Sprintf("%d_subscribers", numSubs), func(b *testing.B) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer listener.Close()
+
+			server := NewServer(WithListener(listener))
+			go server.ListenAndServe()
+			defer server.Close()
+
+			addr := listener.Addr().String()
+			topic := "test/fanout"
+
+			subscribers := make([]*testClient, numSubs)
+			for i := range numSubs {
+				client, err := newTestClient(addr, fmt.Sprintf("fanout-sub-%d", i))
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := client.subscribe(topic, 0); err != nil {
+					b.Fatal(err)
+				}
+				subscribers[i] = client
+			}
+			defer func() {
+				for _, c := range subscribers {
+					c.close()
+				}
+			}()
+
+			publisher, err := newTestClient(addr, "fanout-pub")
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer publisher.close()
+
+			payload := make([]byte, 100)
+
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			for range b.N {
+				if err := publisher.publish(topic, payload, 0); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkManyClientsPublishing(b *testing.B) {
+	clientCounts := []int{10, 100, 500}
+
+	for _, numClients := range clientCounts {
+		b.Run(fmt.Sprintf("%d_clients", numClients), func(b *testing.B) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer listener.Close()
+
+			server := NewServer(WithListener(listener))
+			go server.ListenAndServe()
+			defer server.Close()
+
+			addr := listener.Addr().String()
+
+			clients := make([]*testClient, numClients)
+			for i := range numClients {
+				client, err := newTestClient(addr, fmt.Sprintf("multi-pub-%d", i))
+				if err != nil {
+					b.Fatal(err)
+				}
+				clients[i] = client
+			}
+			defer func() {
+				for _, c := range clients {
+					c.close()
+				}
+			}()
+
+			payload := make([]byte, 100)
+			var clientIdx atomic.Int32
+
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			b.RunParallel(func(pb *testing.PB) {
+				idx := int(clientIdx.Add(1)-1) % numClients
+				client := clients[idx]
+				topic := fmt.Sprintf("test/client/%d", idx)
+
+				for pb.Next() {
+					if err := client.publish(topic, payload, 0); err != nil {
+						b.Error(err)
+						return
+					}
+				}
+			})
+		})
+	}
+}
+
+func BenchmarkSubscribeUnsubscribe(b *testing.B) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer listener.Close()
+
+	server := NewServer(WithListener(listener))
+	go server.ListenAndServe()
+	defer server.Close()
+
+	addr := listener.Addr().String()
+
+	client, err := newTestClient(addr, "bench-sub")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer client.close()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	var packetID uint16 = 1
+
+	for range b.N {
+		sub := &SubscribePacket{
+			PacketID: packetID,
+			Subscriptions: []Subscription{
+				{TopicFilter: "test/bench/+", QoS: 0},
+			},
+		}
+		if _, err := WritePacket(client.conn, sub, 0); err != nil {
+			b.Fatal(err)
+		}
+
+		client.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		_, _, err := ReadPacket(client.conn, 0)
+		client.conn.SetReadDeadline(time.Time{})
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		unsub := &UnsubscribePacket{
+			PacketID:     packetID,
+			TopicFilters: []string{"test/bench/+"},
+		}
+		if _, err := WritePacket(client.conn, unsub, 0); err != nil {
+			b.Fatal(err)
+		}
+
+		client.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		_, _, err = ReadPacket(client.conn, 0)
+		client.conn.SetReadDeadline(time.Time{})
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		packetID++
+		if packetID == 0 {
+			packetID = 1
+		}
+	}
+}
+
+func BenchmarkPingPong(b *testing.B) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer listener.Close()
+
+	server := NewServer(WithListener(listener))
+	go server.ListenAndServe()
+	defer server.Close()
+
+	addr := listener.Addr().String()
+
+	client, err := newTestClient(addr, "bench-ping")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer client.close()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for range b.N {
+		ping := &PingreqPacket{}
+		if _, err := WritePacket(client.conn, ping, 0); err != nil {
+			b.Fatal(err)
+		}
+
+		client.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		pkt, _, err := ReadPacket(client.conn, 0)
+		client.conn.SetReadDeadline(time.Time{})
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		if _, ok := pkt.(*PingrespPacket); !ok {
+			b.Fatalf("expected PINGRESP, got %T", pkt)
+		}
+	}
 }

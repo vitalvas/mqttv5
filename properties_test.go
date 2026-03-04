@@ -757,3 +757,35 @@ func BenchmarkPropertyTypeMethod(b *testing.B) {
 		}
 	}
 }
+
+func TestPropertyIdentifierValues(t *testing.T) {
+	t.Run("property identifier values", func(t *testing.T) {
+		assert.Equal(t, PropertyID(0x01), PropPayloadFormatIndicator)
+		assert.Equal(t, PropertyID(0x02), PropMessageExpiryInterval)
+		assert.Equal(t, PropertyID(0x03), PropContentType)
+		assert.Equal(t, PropertyID(0x08), PropResponseTopic)
+		assert.Equal(t, PropertyID(0x09), PropCorrelationData)
+		assert.Equal(t, PropertyID(0x0B), PropSubscriptionIdentifier)
+		assert.Equal(t, PropertyID(0x11), PropSessionExpiryInterval)
+		assert.Equal(t, PropertyID(0x12), PropAssignedClientIdentifier)
+		assert.Equal(t, PropertyID(0x13), PropServerKeepAlive)
+		assert.Equal(t, PropertyID(0x15), PropAuthenticationMethod)
+		assert.Equal(t, PropertyID(0x16), PropAuthenticationData)
+		assert.Equal(t, PropertyID(0x17), PropRequestProblemInfo)
+		assert.Equal(t, PropertyID(0x18), PropWillDelayInterval)
+		assert.Equal(t, PropertyID(0x19), PropRequestResponseInfo)
+		assert.Equal(t, PropertyID(0x1A), PropResponseInformation)
+		assert.Equal(t, PropertyID(0x1C), PropServerReference)
+		assert.Equal(t, PropertyID(0x1F), PropReasonString)
+		assert.Equal(t, PropertyID(0x21), PropReceiveMaximum)
+		assert.Equal(t, PropertyID(0x22), PropTopicAliasMaximum)
+		assert.Equal(t, PropertyID(0x23), PropTopicAlias)
+		assert.Equal(t, PropertyID(0x24), PropMaximumQoS)
+		assert.Equal(t, PropertyID(0x25), PropRetainAvailable)
+		assert.Equal(t, PropertyID(0x26), PropUserProperty)
+		assert.Equal(t, PropertyID(0x27), PropMaximumPacketSize)
+		assert.Equal(t, PropertyID(0x28), PropWildcardSubAvailable)
+		assert.Equal(t, PropertyID(0x29), PropSubscriptionIDAvailable)
+		assert.Equal(t, PropertyID(0x2A), PropSharedSubAvailable)
+	})
+}

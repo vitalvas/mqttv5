@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vitalvas/kasper/websocket"
 )
 
 func TestWSConnReadWrite(t *testing.T) {
@@ -84,7 +84,7 @@ func TestWSConnUnderlyingConn(t *testing.T) {
 	handler := NewWSHandler(func(conn Conn) {
 		wsConn := conn.(*WSConn)
 		serverConnCh <- wsConn
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 		conn.Close()
 	})
 
@@ -114,7 +114,7 @@ func TestWSConnUnderlyingConn(t *testing.T) {
 
 func TestWSConnDeadlines(t *testing.T) {
 	handler := NewWSHandler(func(conn Conn) {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 		conn.Close()
 	})
 

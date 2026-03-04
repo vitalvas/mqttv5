@@ -115,11 +115,12 @@ func readConnect(t *testing.T, conn net.Conn) *ConnectPacket {
 }
 
 func TestDialSuccess(t *testing.T) {
+	t.Parallel()
 	addr, cleanup := mockServer(t, func(conn net.Conn) {
 		_ = readConnect(t, conn)
 		err := sendConnack(conn, false, ReasonSuccess)
 		assert.NoError(t, err)
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	})
 	defer cleanup()
 
@@ -133,13 +134,14 @@ func TestDialSuccess(t *testing.T) {
 }
 
 func TestDialWithCredentials(t *testing.T) {
+	t.Parallel()
 	var receivedConnect *ConnectPacket
 
 	addr, cleanup := mockServer(t, func(conn net.Conn) {
 		receivedConnect = readConnect(t, conn)
 		err := sendConnack(conn, false, ReasonSuccess)
 		assert.NoError(t, err)
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	})
 	defer cleanup()
 
@@ -156,6 +158,7 @@ func TestDialWithCredentials(t *testing.T) {
 }
 
 func TestDialConnectionRefused(t *testing.T) {
+	t.Parallel()
 	addr, cleanup := mockServer(t, func(conn net.Conn) {
 		_ = readConnect(t, conn)
 		err := sendConnack(conn, false, ReasonBadUserNameOrPassword)
@@ -169,12 +172,13 @@ func TestDialConnectionRefused(t *testing.T) {
 }
 
 func TestDialContext(t *testing.T) {
+	t.Parallel()
 	t.Run("success with context", func(t *testing.T) {
 		addr, cleanup := mockServer(t, func(conn net.Conn) {
 			_ = readConnect(t, conn)
 			err := sendConnack(conn, false, ReasonSuccess)
 			assert.NoError(t, err)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -200,6 +204,7 @@ func TestDialContext(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
+	t.Parallel()
 	var disconnectReceived bool
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -230,11 +235,12 @@ func TestClose(t *testing.T) {
 }
 
 func TestCloseIdempotent(t *testing.T) {
+	t.Parallel()
 	addr, cleanup := mockServer(t, func(conn net.Conn) {
 		_ = readConnect(t, conn)
 		err := sendConnack(conn, false, ReasonSuccess)
 		assert.NoError(t, err)
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	})
 	defer cleanup()
 
@@ -249,6 +255,7 @@ func TestCloseIdempotent(t *testing.T) {
 }
 
 func TestPublish(t *testing.T) {
+	t.Parallel()
 	t.Run("QoS 0", func(t *testing.T) {
 		var receivedPublish *PublishPacket
 		var wg sync.WaitGroup
@@ -304,7 +311,7 @@ func TestPublish(t *testing.T) {
 					_, _ = WritePacket(conn, puback, 256*1024)
 				}
 			}
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(5 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -344,7 +351,7 @@ func TestPublish(t *testing.T) {
 			_ = readConnect(t, conn)
 			err := sendConnack(conn, false, ReasonSuccess)
 			assert.NoError(t, err)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -390,7 +397,7 @@ func TestPublish(t *testing.T) {
 					}
 				}
 			}
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(5 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -473,6 +480,7 @@ func TestPublish(t *testing.T) {
 }
 
 func TestSubscribe(t *testing.T) {
+	t.Parallel()
 	var receivedSubscribe *SubscribePacket
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -495,7 +503,7 @@ func TestSubscribe(t *testing.T) {
 				_, _ = WritePacket(conn, suback, 256*1024)
 			}
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	})
 	defer cleanup()
 
@@ -515,6 +523,7 @@ func TestSubscribe(t *testing.T) {
 }
 
 func TestUnsubscribe(t *testing.T) {
+	t.Parallel()
 	var receivedUnsubscribe *UnsubscribePacket
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -537,7 +546,7 @@ func TestUnsubscribe(t *testing.T) {
 				_, _ = WritePacket(conn, unsuback, 256*1024)
 			}
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	})
 	defer cleanup()
 
@@ -555,6 +564,7 @@ func TestUnsubscribe(t *testing.T) {
 }
 
 func TestClientEventHandler(t *testing.T) {
+	t.Parallel()
 	var connectedEvent error
 	var mu sync.Mutex
 
@@ -562,7 +572,7 @@ func TestClientEventHandler(t *testing.T) {
 		_ = readConnect(t, conn)
 		err := sendConnack(conn, false, ReasonSuccess)
 		assert.NoError(t, err)
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	})
 	defer cleanup()
 
@@ -579,7 +589,7 @@ func TestClientEventHandler(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
 
 	mu.Lock()
 	assert.NotNil(t, connectedEvent)
@@ -587,6 +597,7 @@ func TestClientEventHandler(t *testing.T) {
 }
 
 func TestGenerateClientID(t *testing.T) {
+	t.Parallel()
 	id1 := generateClientID()
 	id2 := generateClientID()
 
@@ -597,11 +608,12 @@ func TestGenerateClientID(t *testing.T) {
 }
 
 func TestIsConnected(t *testing.T) {
+	t.Parallel()
 	addr, cleanup := mockServer(t, func(conn net.Conn) {
 		_ = readConnect(t, conn)
 		err := sendConnack(conn, false, ReasonSuccess)
 		assert.NoError(t, err)
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	})
 	defer cleanup()
 
@@ -617,6 +629,7 @@ func TestIsConnected(t *testing.T) {
 }
 
 func TestMaxSubscriptions(t *testing.T) {
+	t.Parallel()
 	t.Run("exceeds limit", func(t *testing.T) {
 		addr, cleanup := mockServer(t, func(conn net.Conn) {
 			_ = readConnect(t, conn)
@@ -753,6 +766,7 @@ func TestMaxSubscriptions(t *testing.T) {
 
 // TestClientQoSRetryWithDUP tests that QoS 1/2 messages are retried with DUP flag (Issue 14)
 func TestClientQoSRetryWithDUP(t *testing.T) {
+	t.Parallel()
 	t.Run("QoS1 tracker retry logic sets DUP flag", func(t *testing.T) {
 		// Test the retry logic directly by examining the tracker behavior
 		tracker := NewQoS1Tracker(10*time.Millisecond, 3)
@@ -825,6 +839,7 @@ func TestClientQoSRetryWithDUP(t *testing.T) {
 
 // TestClientGoroutineCleanupOnReconnect tests that goroutines are cleaned up on reconnection (Issue 6)
 func TestClientGoroutineCleanupOnReconnect(t *testing.T) {
+	t.Parallel()
 	t.Run("context canceled before reconnect", func(t *testing.T) {
 		connectionCount := 0
 		var mu sync.Mutex
@@ -838,7 +853,7 @@ func TestClientGoroutineCleanupOnReconnect(t *testing.T) {
 			_ = sendConnack(conn, false, ReasonSuccess)
 
 			// Keep connection alive briefly
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(20 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -867,11 +882,12 @@ func TestClientGoroutineCleanupOnReconnect(t *testing.T) {
 
 // TestClientParentContextPropagation tests that parent context is respected (Issue 16)
 func TestClientParentContextPropagation(t *testing.T) {
+	t.Parallel()
 	t.Run("client closes when parent context canceled", func(t *testing.T) {
 		addr, cleanup := mockServer(t, func(conn net.Conn) {
 			_ = readConnect(t, conn)
 			_ = sendConnack(conn, false, ReasonSuccess)
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(20 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -900,7 +916,7 @@ func TestClientParentContextPropagation(t *testing.T) {
 		addr, cleanup := mockServer(t, func(conn net.Conn) {
 			_ = readConnect(t, conn)
 			_ = sendConnack(conn, false, ReasonSuccess)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -917,6 +933,7 @@ func TestClientParentContextPropagation(t *testing.T) {
 
 // TestClientCancelOnDialErrors tests that context is canceled on dial failures (Issue 18)
 func TestClientCancelOnDialErrors(t *testing.T) {
+	t.Parallel()
 	t.Run("cancel called on connection refused", func(t *testing.T) {
 		// Try to connect to a port that's not listening
 		_, err := Dial(WithServers("tcp://127.0.0.1:59999"),
@@ -960,6 +977,7 @@ func TestClientCancelOnDialErrors(t *testing.T) {
 // This tests the fix for the deadlock issue where deliverMessage held subscriptionsMu.RLock()
 // while invoking user handlers, which would deadlock if handlers called Subscribe/Unsubscribe.
 func TestDeliverMessageNoDeadlock(t *testing.T) {
+	t.Parallel()
 	t.Run("handler can call Subscribe without deadlock", func(t *testing.T) {
 		addr, cleanup := mockServer(t, func(conn net.Conn) {
 			_ = readConnect(t, conn)
@@ -1010,7 +1028,7 @@ func TestDeliverMessageNoDeadlock(t *testing.T) {
 		require.NoError(t, err)
 
 		// Wait for subscription to be acknowledged
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Publish a message to trigger the handler
 		err = client.Publish(&Message{Topic: "test/topic", Payload: []byte("trigger")})
@@ -1020,7 +1038,7 @@ func TestDeliverMessageNoDeadlock(t *testing.T) {
 		select {
 		case <-handlerCalled:
 			// Handler was called successfully
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("handler was not called - possible deadlock")
 		}
 
@@ -1028,7 +1046,7 @@ func TestDeliverMessageNoDeadlock(t *testing.T) {
 		select {
 		case <-subscribeComplete:
 			// Nested subscribe completed successfully
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("nested Subscribe deadlocked")
 		}
 	})
@@ -1087,7 +1105,7 @@ func TestDeliverMessageNoDeadlock(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		err = client.Publish(&Message{Topic: "test/topic", Payload: []byte("trigger")})
 		require.NoError(t, err)
@@ -1095,14 +1113,14 @@ func TestDeliverMessageNoDeadlock(t *testing.T) {
 		select {
 		case <-handlerCalled:
 			// Success
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("handler was not called - possible deadlock")
 		}
 
 		select {
 		case <-unsubscribeComplete:
 			// Success
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("nested Unsubscribe deadlocked")
 		}
 	})
@@ -1110,6 +1128,7 @@ func TestDeliverMessageNoDeadlock(t *testing.T) {
 
 // TestSubscriptionHandlerTiming tests that handlers are registered before SUBSCRIBE is sent (Issue 7)
 func TestSubscriptionHandlerTiming(t *testing.T) {
+	t.Parallel()
 	t.Run("handler registered before SUBSCRIBE sent", func(t *testing.T) {
 		var subscribeReceived bool
 		var handlerRegistered bool
@@ -1177,6 +1196,7 @@ func TestSubscriptionHandlerTiming(t *testing.T) {
 }
 
 func TestClientCapabilityChecking(t *testing.T) {
+	t.Parallel()
 	t.Run("default capabilities allow all features", func(t *testing.T) {
 		c := &Client{
 			serverMaxQoS:             2,
@@ -1221,6 +1241,7 @@ func TestClientCapabilityChecking(t *testing.T) {
 }
 
 func TestClientTopicAliasResolution(t *testing.T) {
+	t.Parallel()
 	t.Run("topic alias manager initialized with configured max", func(t *testing.T) {
 		opts := applyOptions(WithTopicAliasMaximum(50))
 		c := &Client{
@@ -1330,6 +1351,7 @@ func TestClientTopicAliasResolution(t *testing.T) {
 }
 
 func TestClientServerCapabilityParsing(t *testing.T) {
+	t.Parallel()
 	t.Run("parses MaximumQoS from CONNACK", func(t *testing.T) {
 		props := &Properties{}
 		props.Set(PropMaximumQoS, byte(1))
@@ -1423,6 +1445,7 @@ func TestClientServerCapabilityParsing(t *testing.T) {
 }
 
 func TestClientQoS2PubrecErrorHandling(t *testing.T) {
+	t.Parallel()
 	t.Run("sends PUBREL even when PUBREC has error reason code", func(t *testing.T) {
 		// Per MQTT v5 spec section 4.3.3, sender MUST send PUBREL in response to PUBREC
 		// even when PUBREC contains an error reason code. This ensures the receiver
@@ -1481,7 +1504,7 @@ func TestClientQoS2PubrecErrorHandling(t *testing.T) {
 		})
 
 		// Give time for the exchange
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 
 		mu.Lock()
 		assert.True(t, pubrelReceived, "PUBREL should be sent even when PUBREC has error")
@@ -1490,6 +1513,7 @@ func TestClientQoS2PubrecErrorHandling(t *testing.T) {
 }
 
 func TestClientEnhancedAuthentication(t *testing.T) {
+	t.Parallel()
 	t.Run("uses enhanced auth during connect", func(t *testing.T) {
 		var authMethodReceived string
 		var authDataReceived []byte
@@ -1513,7 +1537,7 @@ func TestClientEnhancedAuthentication(t *testing.T) {
 			require.NoError(t, sendConnack(conn, false, ReasonSuccess))
 
 			// Keep connection open briefly
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -1572,7 +1596,7 @@ func TestClientEnhancedAuthentication(t *testing.T) {
 			require.NoError(t, sendConnack(conn, false, ReasonSuccess))
 
 			// Keep connection open briefly
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -1675,6 +1699,7 @@ func (m *testMockConn) Write(b []byte) (n int, err error) {
 }
 
 func TestClientContextCancellation(t *testing.T) {
+	t.Parallel()
 	t.Run("watchParentContext with nil context does nothing", func(t *testing.T) {
 		c := &Client{
 			parentCtx: nil,
@@ -1726,6 +1751,7 @@ func TestClientContextCancellation(t *testing.T) {
 }
 
 func TestClientErrorToReasonCode(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		err            error
@@ -1896,6 +1922,7 @@ func TestClientErrorToReasonCode(t *testing.T) {
 }
 
 func TestApplyConnackProperties(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		setupProps  func(*ConnackPacket)
@@ -2077,6 +2104,7 @@ func TestApplyConnackProperties(t *testing.T) {
 }
 
 func TestSendDisconnect(t *testing.T) {
+	t.Parallel()
 	t.Run("nil connection does not panic", func(t *testing.T) {
 		client := &Client{
 			conn:    nil,
@@ -2128,6 +2156,7 @@ func TestSendDisconnect(t *testing.T) {
 }
 
 func TestHandlePubrel(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		packetID       uint16
@@ -2201,6 +2230,7 @@ func TestHandlePubrel(t *testing.T) {
 }
 
 func TestHandlePubcomp(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		packetID       uint16
@@ -2295,6 +2325,7 @@ func TestHandlePubcomp(t *testing.T) {
 }
 
 func TestHandleDisconnect(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		reasonCode    ReasonCode
@@ -2383,6 +2414,7 @@ func TestHandleDisconnect(t *testing.T) {
 }
 
 func TestClientErrorTypes(t *testing.T) {
+	t.Parallel()
 	t.Run("ReconnectEvent", func(t *testing.T) {
 		tests := []struct {
 			name        string
@@ -2524,6 +2556,7 @@ func TestClientErrorTypes(t *testing.T) {
 }
 
 func TestHandleAuth(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		reasonCode      ReasonCode
@@ -2608,6 +2641,7 @@ func (m *mockEnhancedAuth) AuthContinue(_ context.Context, _ *ClientEnhancedAuth
 }
 
 func TestHandlePuback(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		packetID       uint16
@@ -2709,6 +2743,7 @@ func TestHandlePuback(t *testing.T) {
 }
 
 func TestHandlePubrec(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		packetID       uint16
@@ -2815,6 +2850,7 @@ func TestHandlePubrec(t *testing.T) {
 }
 
 func TestHandlePublish(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		qos        byte
@@ -2901,6 +2937,7 @@ func TestHandlePublish(t *testing.T) {
 }
 
 func TestDialValidation(t *testing.T) {
+	t.Parallel()
 	t.Run("no servers returns error", func(t *testing.T) {
 		_, err := Dial(WithClientID("test"))
 		assert.Error(t, err)
@@ -2911,7 +2948,7 @@ func TestDialValidation(t *testing.T) {
 		addr, cleanup := mockServer(t, func(conn net.Conn) {
 			_ = readConnect(t, conn)
 			_ = sendConnack(conn, false, ReasonSuccess)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -2925,7 +2962,7 @@ func TestDialValidation(t *testing.T) {
 		addr, cleanup := mockServer(t, func(conn net.Conn) {
 			_ = readConnect(t, conn)
 			_ = sendConnack(conn, false, ReasonSuccess)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -2941,6 +2978,7 @@ func TestDialValidation(t *testing.T) {
 }
 
 func TestNextServer(t *testing.T) {
+	t.Parallel()
 	t.Run("round-robin with static servers", func(t *testing.T) {
 		c := &Client{
 			options: &clientOptions{
@@ -3038,6 +3076,7 @@ func TestNextServer(t *testing.T) {
 
 // TestClientReconnectLoop tests the reconnectLoop function
 func TestClientReconnectLoop(t *testing.T) {
+	t.Parallel()
 	t.Run("reconnects successfully on first attempt", func(t *testing.T) {
 		reconnectAttempts := 0
 		addr, cleanup := mockServer(t, func(conn net.Conn) {
@@ -3046,7 +3085,7 @@ func TestClientReconnectLoop(t *testing.T) {
 			ReadPacket(conn, 256*1024)
 			// Send CONNACK
 			sendConnack(conn, false, ReasonSuccess)
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(20 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -3175,7 +3214,7 @@ func TestClientReconnectLoop(t *testing.T) {
 		case firstPub = <-firstPublishCh:
 		case err := <-errCh:
 			require.NoError(t, err)
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("timed out waiting for initial publish")
 		}
 
@@ -3184,7 +3223,7 @@ func TestClientReconnectLoop(t *testing.T) {
 		case resendPub = <-resendCh:
 		case err := <-errCh:
 			require.NoError(t, err)
-		case <-time.After(2 * time.Second):
+		case <-time.After(500 * time.Millisecond):
 			t.Fatal("timed out waiting for resend publish")
 		}
 
@@ -3271,7 +3310,7 @@ func TestClientReconnectLoop(t *testing.T) {
 		close(c.done)
 
 		// Give time for reconnect to stop
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 
 		// Should not be reconnecting anymore
 		assert.False(t, c.reconnecting.Load())
@@ -3280,6 +3319,7 @@ func TestClientReconnectLoop(t *testing.T) {
 
 // TestClientResendInflightMessages tests the resendInflightMessages function
 func TestClientResendInflightMessages(t *testing.T) {
+	t.Parallel()
 	t.Run("resends QoS 1 messages with DUP flag", func(t *testing.T) {
 		writeBuf := &bytes.Buffer{}
 		conn := &bufMockConn{writer: writeBuf}
@@ -3378,6 +3418,7 @@ func TestClientResendInflightMessages(t *testing.T) {
 
 // TestClientRestoreSubscriptions tests the restoreSubscriptions function
 func TestClientRestoreSubscriptions(t *testing.T) {
+	t.Parallel()
 	t.Run("restores subscriptions after reconnect", func(t *testing.T) {
 		writeBuf := &bytes.Buffer{}
 		conn := &bufMockConn{writer: writeBuf}
@@ -3469,6 +3510,7 @@ func TestClientRestoreSubscriptions(t *testing.T) {
 
 // TestClientResetInflightState tests the resetInflightState function
 func TestClientResetInflightState(t *testing.T) {
+	t.Parallel()
 	t.Run("resets all inflight state", func(t *testing.T) {
 		c := &Client{
 			qos1Tracker:       NewQoS1Tracker(30*time.Second, 3),
@@ -3499,6 +3541,7 @@ func TestClientResetInflightState(t *testing.T) {
 
 // TestClientClearPendingOperations tests the clearPendingOperations function
 func TestClientClearPendingOperations(t *testing.T) {
+	t.Parallel()
 	t.Run("clears pending subscribes and unsubscribes", func(t *testing.T) {
 		c := &Client{
 			packetIDMgr:         NewPacketIDManager(),
@@ -3527,6 +3570,7 @@ func TestClientClearPendingOperations(t *testing.T) {
 
 // TestClientHandleAuth tests the handleAuth function
 func TestClientHandleAuth(t *testing.T) {
+	t.Parallel()
 	t.Run("disconnects when enhanced auth not configured", func(t *testing.T) {
 		writeBuf := &bytes.Buffer{}
 		conn := &bufMockConn{writer: writeBuf}
@@ -3671,6 +3715,7 @@ func (a *testClientEnhancedAuth) AuthContinue(_ context.Context, _ *ClientEnhanc
 
 // TestClientHandlePublishWithQoS2 tests the handlePublish function for QoS 2
 func TestClientHandlePublishWithQoS2(t *testing.T) {
+	t.Parallel()
 	t.Run("handles QoS 2 publish and sends PUBREC", func(t *testing.T) {
 		writeBuf := &bytes.Buffer{}
 		conn := &bufMockConn{writer: writeBuf}
@@ -3748,6 +3793,7 @@ func TestClientHandlePublishWithQoS2(t *testing.T) {
 
 // TestClientHandlePublishWithTopicAlias tests topic alias handling in handlePublish
 func TestClientHandlePublishWithTopicAlias(t *testing.T) {
+	t.Parallel()
 	t.Run("stores topic alias mapping", func(t *testing.T) {
 		writeBuf := &bytes.Buffer{}
 		conn := &bufMockConn{writer: writeBuf}
@@ -3858,6 +3904,7 @@ func TestClientHandlePublishWithTopicAlias(t *testing.T) {
 
 // TestClientQoSRetryLoop tests the qosRetryLoop function
 func TestClientQoSRetryLoop(t *testing.T) {
+	t.Parallel()
 	t.Run("skips retry when not connected", func(_ *testing.T) {
 		writeBuf := &bytes.Buffer{}
 		conn := &bufMockConn{writer: writeBuf}
@@ -3880,7 +3927,7 @@ func TestClientQoSRetryLoop(t *testing.T) {
 
 		// Cancel quickly to exit loop
 		go func() {
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(5 * time.Millisecond)
 			cancel()
 		}()
 
@@ -3911,7 +3958,7 @@ func TestClientQoSRetryLoop(t *testing.T) {
 		c.qos1Tracker.messages[1].SentAt = time.Now().Add(-10 * time.Second)
 
 		go func() {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 			cancel()
 		}()
 
@@ -3921,6 +3968,7 @@ func TestClientQoSRetryLoop(t *testing.T) {
 
 // TestClientQoSRetryLoopRetryPaths tests the retry paths directly
 func TestClientQoSRetryLoopRetryPaths(t *testing.T) {
+	t.Parallel()
 	t.Run("QoS 1 retry writes DUP publish", func(t *testing.T) {
 		writeBuf := &bytes.Buffer{}
 		conn := &bufMockConn{writer: writeBuf}
@@ -4067,6 +4115,7 @@ func TestClientQoSRetryLoopRetryPaths(t *testing.T) {
 
 // TestClientKeepAliveLoop tests the keepAliveLoop function
 func TestClientKeepAliveLoop(t *testing.T) {
+	t.Parallel()
 	t.Run("does nothing when keepAlive is 0", func(_ *testing.T) {
 		c := &Client{
 			options: &clientOptions{keepAlive: 0},
@@ -4092,7 +4141,7 @@ func TestClientKeepAliveLoop(t *testing.T) {
 
 		// Run for a short time - PINGREQ should be sent on first check since lastPacket is 2s ago
 		go func() {
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(20 * time.Millisecond)
 			cancel()
 		}()
 
@@ -4185,6 +4234,7 @@ func TestClientResolveProxy(t *testing.T) {
 }
 
 func TestClientQoSRetryLoopContextCancel(t *testing.T) {
+	t.Parallel()
 	t.Run("exits on context cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 
@@ -4215,10 +4265,11 @@ func TestClientQoSRetryLoopContextCancel(t *testing.T) {
 }
 
 func TestClientHandlePacketUnknown(t *testing.T) {
+	t.Parallel()
 	addr, cleanup := mockServer(t, func(conn net.Conn) {
 		ReadPacket(conn, 256*1024)
 		sendConnack(conn, false, ReasonSuccess)
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	})
 	defer cleanup()
 
@@ -4231,6 +4282,7 @@ func TestClientHandlePacketUnknown(t *testing.T) {
 }
 
 func TestClientUnsubscribeErrors(t *testing.T) {
+	t.Parallel()
 	t.Run("returns error when closed", func(_ *testing.T) {
 		c := &Client{
 			options: &clientOptions{},
@@ -4284,12 +4336,14 @@ func TestClientUnsubscribeErrors(t *testing.T) {
 }
 
 func TestClientDialWithWebSocket(t *testing.T) {
+	t.Parallel()
 	// Test that ws:// scheme is handled correctly
 	_, err := Dial(WithServers("ws://nonexistent:8080"))
 	assert.Error(t, err) // Should fail to connect but not panic
 }
 
 func TestClientDialWithTLS(t *testing.T) {
+	t.Parallel()
 	// Test that tls:// scheme is handled correctly
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -4299,6 +4353,7 @@ func TestClientDialWithTLS(t *testing.T) {
 }
 
 func TestClientDialUnsupportedScheme(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
@@ -4308,6 +4363,7 @@ func TestClientDialUnsupportedScheme(t *testing.T) {
 }
 
 func TestClientDialInvalidAddress(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
@@ -4317,6 +4373,7 @@ func TestClientDialInvalidAddress(t *testing.T) {
 }
 
 func TestClientDialDefaultPorts(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		scheme string
@@ -4344,6 +4401,7 @@ func TestClientDialDefaultPorts(t *testing.T) {
 }
 
 func TestClientHandlePingresp(t *testing.T) {
+	t.Parallel()
 	addr, cleanup := mockServer(t, func(conn net.Conn) {
 		_, _, _ = ReadPacket(conn, 256*1024)
 		sendConnack(conn, false, ReasonSuccess)
@@ -4383,7 +4441,7 @@ func TestClientKeepAliveLoopNotConnected(_ *testing.T) {
 	c.lastPacket.Store(time.Now().Add(-5 * time.Second).UnixNano())
 
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 		cancel()
 	}()
 
@@ -4391,6 +4449,7 @@ func TestClientKeepAliveLoopNotConnected(_ *testing.T) {
 }
 
 func TestReadConnackWithAuthEdgeCases(t *testing.T) {
+	t.Parallel()
 	t.Run("AUTH received without enhanced auth configured", func(t *testing.T) {
 		// Create a buffer with AUTH packet
 		authBuf := &bytes.Buffer{}
@@ -4490,13 +4549,14 @@ func TestReadConnackWithAuthEdgeCases(t *testing.T) {
 }
 
 func TestDialWithWillMessage(t *testing.T) {
+	t.Parallel()
 	var receivedConnect *ConnectPacket
 
 	addr, cleanup := mockServer(t, func(conn net.Conn) {
 		receivedConnect = readConnect(t, conn)
 		err := sendConnack(conn, false, ReasonSuccess)
 		assert.NoError(t, err)
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	})
 	defer cleanup()
 
@@ -4517,13 +4577,14 @@ func TestDialWithWillMessage(t *testing.T) {
 }
 
 func TestDialWithWillMessageAndProps(t *testing.T) {
+	t.Parallel()
 	var receivedConnect *ConnectPacket
 
 	addr, cleanup := mockServer(t, func(conn net.Conn) {
 		receivedConnect = readConnect(t, conn)
 		err := sendConnack(conn, false, ReasonSuccess)
 		assert.NoError(t, err)
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	})
 	defer cleanup()
 
@@ -4548,6 +4609,7 @@ func TestDialWithWillMessageAndProps(t *testing.T) {
 }
 
 func TestDialWithConnectProperties(t *testing.T) {
+	t.Parallel()
 	t.Run("session expiry interval", func(t *testing.T) {
 		var receivedConnect *ConnectPacket
 
@@ -4555,7 +4617,7 @@ func TestDialWithConnectProperties(t *testing.T) {
 			receivedConnect = readConnect(t, conn)
 			err := sendConnack(conn, false, ReasonSuccess)
 			assert.NoError(t, err)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -4578,7 +4640,7 @@ func TestDialWithConnectProperties(t *testing.T) {
 			receivedConnect = readConnect(t, conn)
 			err := sendConnack(conn, false, ReasonSuccess)
 			assert.NoError(t, err)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -4601,7 +4663,7 @@ func TestDialWithConnectProperties(t *testing.T) {
 			receivedConnect = readConnect(t, conn)
 			err := sendConnack(conn, false, ReasonSuccess)
 			assert.NoError(t, err)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -4624,7 +4686,7 @@ func TestDialWithConnectProperties(t *testing.T) {
 			receivedConnect = readConnect(t, conn)
 			err := sendConnack(conn, false, ReasonSuccess)
 			assert.NoError(t, err)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -4647,7 +4709,7 @@ func TestDialWithConnectProperties(t *testing.T) {
 			receivedConnect = readConnect(t, conn)
 			err := sendConnack(conn, false, ReasonSuccess)
 			assert.NoError(t, err)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		})
 		defer cleanup()
 
@@ -4670,6 +4732,7 @@ func TestDialWithConnectProperties(t *testing.T) {
 }
 
 func TestClientDialWithProxy(t *testing.T) {
+	t.Parallel()
 	t.Run("TCP with proxy", func(t *testing.T) {
 		// Start mock target server
 		targetListener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -4722,7 +4785,7 @@ func TestClientDialWithProxy(t *testing.T) {
 				connack := &ConnackPacket{ReasonCode: ReasonSuccess}
 				WritePacket(conn, connack, 256*1024)
 			}
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		}()
 
 		proxyURL := "http://" + proxyListener.Addr().String()
@@ -4802,7 +4865,7 @@ func TestClientDialWithProxy(t *testing.T) {
 				connack := &ConnackPacket{ReasonCode: ReasonSuccess}
 				WritePacket(tlsConn, connack, 256*1024)
 			}
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		}()
 
 		proxyURL := "http://" + proxyListener.Addr().String()
@@ -4886,6 +4949,7 @@ func TestClientDialWithProxy(t *testing.T) {
 }
 
 func TestClientDialUnixSocket(t *testing.T) {
+	t.Parallel()
 	testUnixSocketDial := func(t *testing.T, prefix string) {
 		t.Helper()
 
@@ -4908,7 +4972,7 @@ func TestClientDialUnixSocket(t *testing.T) {
 				connack := &ConnackPacket{ReasonCode: ReasonSuccess}
 				WritePacket(conn, connack, 256*1024)
 			}
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		}()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -4931,6 +4995,7 @@ func TestClientDialUnixSocket(t *testing.T) {
 }
 
 func TestClientDialWebSocketWithTLSConfig(t *testing.T) {
+	t.Parallel()
 	// Test that TLS config is applied to WebSocket dialer
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -4948,6 +5013,7 @@ func TestClientDialWebSocketWithTLSConfig(t *testing.T) {
 }
 
 func TestClientDialWebSocketWithProxyEnv(t *testing.T) {
+	t.Parallel()
 	// Test that proxy from environment is set for WebSocket
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -4961,6 +5027,7 @@ func TestClientDialWebSocketWithProxyEnv(t *testing.T) {
 }
 
 func TestClientDialQUIC(t *testing.T) {
+	t.Parallel()
 	t.Run("QUIC without TLS config", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
@@ -4989,6 +5056,7 @@ func TestClientDialQUIC(t *testing.T) {
 }
 
 func TestClientHandlePacket(t *testing.T) {
+	t.Parallel()
 	t.Run("handles PublishPacket", func(_ *testing.T) {
 		c := &Client{
 			options:       &clientOptions{},
@@ -5172,6 +5240,7 @@ func TestClientHandlePacket(t *testing.T) {
 
 // TestClientHandleUnsuback tests the handleUnsuback function
 func TestClientHandleUnsuback(t *testing.T) {
+	t.Parallel()
 	t.Run("returns early for unknown packet ID", func(_ *testing.T) {
 		c := &Client{
 			pendingUnsubscribes: make(map[uint16][]string),
@@ -5285,6 +5354,7 @@ func (a *testFailingClientEnhancedAuth) AuthContinue(_ context.Context, _ *Clien
 }
 
 func TestClientHandleAuthFailures(t *testing.T) {
+	t.Parallel()
 	t.Run("disconnects when AuthStart fails during re-auth", func(t *testing.T) {
 		writeBuf := &bytes.Buffer{}
 		conn := &bufMockConn{writer: writeBuf}
@@ -5398,6 +5468,7 @@ func TestClientHandleAuthFailures(t *testing.T) {
 }
 
 func TestClientQoSRetryLoopTickerExecution(t *testing.T) {
+	t.Parallel()
 	t.Run("executes retry via ticker when connected", func(t *testing.T) {
 		writeBuf := &bytes.Buffer{}
 		conn := &bufMockConn{writer: writeBuf}
@@ -5433,7 +5504,7 @@ func TestClientQoSRetryLoopTickerExecution(t *testing.T) {
 
 		// Wait for at least one ticker execution (ticker is 5s, but we can cancel early)
 		// We wait a bit then cancel
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 		cancel()
 
 		select {
@@ -5446,6 +5517,7 @@ func TestClientQoSRetryLoopTickerExecution(t *testing.T) {
 }
 
 func TestClientHandlePublishTopicAliasErrors(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		name         string
 		inboundMax   uint16
@@ -5507,6 +5579,7 @@ func TestClientHandlePublishTopicAliasErrors(t *testing.T) {
 }
 
 func TestClientHandlePublishEmptyTopic(t *testing.T) {
+	t.Parallel()
 	writeBuf := &bytes.Buffer{}
 	conn := &bufMockConn{writer: writeBuf}
 
@@ -5548,6 +5621,7 @@ func TestClientHandlePublishEmptyTopic(t *testing.T) {
 }
 
 func TestClientHandlePublishQoS1FlowControlExhausted(t *testing.T) {
+	t.Parallel()
 	writeBuf := &bytes.Buffer{}
 	conn := &bufMockConn{writer: writeBuf}
 
@@ -5595,6 +5669,7 @@ func TestClientHandlePublishQoS1FlowControlExhausted(t *testing.T) {
 }
 
 func TestClientHandlePublishQoS2FlowControlExhausted(t *testing.T) {
+	t.Parallel()
 	writeBuf := &bytes.Buffer{}
 	conn := &bufMockConn{writer: writeBuf}
 
@@ -5649,6 +5724,7 @@ func (i *testFilteringConsumerInterceptor) OnConsume(_ *Message) *Message {
 }
 
 func TestClientDeliverMessageInterceptorFilters(t *testing.T) {
+	t.Parallel()
 	c := &Client{
 		options: &clientOptions{
 			consumerInterceptors: []ConsumerInterceptor{&testFilteringConsumerInterceptor{}},
@@ -5671,6 +5747,7 @@ func TestClientDeliverMessageInterceptorFilters(t *testing.T) {
 }
 
 func TestClientHandlePubrelFlowControlRelease(t *testing.T) {
+	t.Parallel()
 	writeBuf := &bytes.Buffer{}
 	conn := &bufMockConn{writer: writeBuf}
 
@@ -5709,6 +5786,7 @@ func TestClientHandlePubrelFlowControlRelease(t *testing.T) {
 }
 
 func TestClientHandleSubackReasonCodeMismatch(t *testing.T) {
+	t.Parallel()
 	writeBuf := &bytes.Buffer{}
 	conn := &bufMockConn{writer: writeBuf}
 
@@ -5754,6 +5832,7 @@ func TestClientHandleSubackReasonCodeMismatch(t *testing.T) {
 }
 
 func TestClientSubscribeMultipleValidations(t *testing.T) {
+	t.Parallel()
 	t.Run("returns error when closed", func(_ *testing.T) {
 		c := &Client{
 			options: &clientOptions{},
@@ -5786,6 +5865,7 @@ func TestClientSubscribeMultipleValidations(t *testing.T) {
 }
 
 func TestClientSubscribeMultipleFilterValidations(t *testing.T) {
+	t.Parallel()
 	t.Run("returns error for empty filter string", func(_ *testing.T) {
 		c := &Client{
 			options:       &clientOptions{},
@@ -5836,6 +5916,7 @@ func TestClientSubscribeMultipleFilterValidations(t *testing.T) {
 }
 
 func TestClientSubscribeMultipleWriteFailure(t *testing.T) {
+	t.Parallel()
 	conn := &bufMockConn{writeErr: errors.New("write failed")}
 
 	c := &Client{
@@ -5870,6 +5951,7 @@ func TestClientSubscribeMultipleWriteFailure(t *testing.T) {
 }
 
 func TestClientUnsubscribeWriteFailure(t *testing.T) {
+	t.Parallel()
 	conn := &bufMockConn{writeErr: errors.New("write failed")}
 
 	c := &Client{

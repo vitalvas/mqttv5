@@ -51,7 +51,7 @@ func TestMemoryMessageStore(t *testing.T) {
 		ok := store.Exists(msgStoreTestNS, "msg-1")
 		assert.True(t, ok)
 
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(15 * time.Millisecond)
 
 		ok = store.Exists(msgStoreTestNS, "msg-1")
 		assert.False(t, ok)
@@ -66,7 +66,7 @@ func TestMemoryMessageStore(t *testing.T) {
 
 		assert.Equal(t, 3, store.Count(msgStoreTestNS))
 
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(15 * time.Millisecond)
 
 		count := store.Cleanup(msgStoreTestNS)
 		assert.Equal(t, 1, count)
@@ -123,7 +123,7 @@ func TestMemoryMessageStore(t *testing.T) {
 		store.Store("tenant-a", "msg-1", &Message{}, 10*time.Millisecond)
 		store.Store("tenant-b", "msg-1", &Message{}, 10*time.Millisecond)
 
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(15 * time.Millisecond)
 
 		// Cleanup only tenant-a
 		count := store.Cleanup("tenant-a")
