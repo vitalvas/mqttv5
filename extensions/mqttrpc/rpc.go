@@ -1,8 +1,8 @@
-// Package rpc provides request/response functionality for MQTT v5.0 clients.
+// Package mqttrpc provides request/response functionality for MQTT v5.0 clients.
 // It uses MQTT v5.0 correlation data and response topic properties to match
 // requests with their responses.
 // MQTT v5.0 spec: Section 4.10 (Request / Response)
-package rpc
+package mqttrpc
 
 import (
 	"context"
@@ -16,13 +16,13 @@ import (
 
 var (
 	// ErrTimeout is returned when a request times out waiting for a response.
-	ErrTimeout = errors.New("rpc: request timeout")
+	ErrTimeout = errors.New("mqttrpc:request timeout")
 
 	// ErrClientClosed is returned when the client is closed during a request.
-	ErrClientClosed = errors.New("rpc: client closed")
+	ErrClientClosed = errors.New("mqttrpc:client closed")
 
 	// ErrNoResponseTopic is returned when no response topic is configured.
-	ErrNoResponseTopic = errors.New("rpc: no response topic configured")
+	ErrNoResponseTopic = errors.New("mqttrpc:no response topic configured")
 )
 
 // Headers represents RPC headers as key-value pairs.
@@ -98,7 +98,7 @@ type HandlerOptions struct {
 // NewHandler creates a new RPC handler and subscribes to the response topic.
 func NewHandler(client Client, opts *HandlerOptions) (*Handler, error) {
 	if client == nil {
-		return nil, errors.New("rpc: client is required")
+		return nil, errors.New("mqttrpc:client is required")
 	}
 
 	if opts == nil {
@@ -119,7 +119,7 @@ func NewHandler(client Client, opts *HandlerOptions) (*Handler, error) {
 
 	// Subscribe to response topic
 	if err := client.Subscribe(responseTopic, opts.QoS, h.handleResponse); err != nil {
-		return nil, fmt.Errorf("rpc: failed to subscribe to response topic: %w", err)
+		return nil, fmt.Errorf("mqttrpc:failed to subscribe to response topic: %w", err)
 	}
 
 	return h, nil
@@ -170,7 +170,7 @@ func (h *Handler) Call(ctx context.Context, topic string, req *Request) (*Respon
 	}
 
 	if err := h.client.Publish(msg); err != nil {
-		return nil, fmt.Errorf("rpc: failed to publish request: %w", err)
+		return nil, fmt.Errorf("mqttrpc:failed to publish request: %w", err)
 	}
 
 	// Wait for response or context cancellation

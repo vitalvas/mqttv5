@@ -1,4 +1,4 @@
-package rpc
+package mqttrpc
 
 import (
 	"context"

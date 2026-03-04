@@ -30,7 +30,7 @@ import (
     "time"
 
     "github.com/vitalvas/mqttv5"
-    "github.com/vitalvas/mqttv5/extensions/rpc"
+    "github.com/vitalvas/mqttv5/extensions/rpc" // package mqttrpc
 )
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
     defer client.Close()
 
     // Create RPC handler
-    handler, err := rpc.NewHandler(client, nil)
+    handler, err := mqttrpc.NewHandler(client, nil)
     if err != nil {
         panic(err)
     }
@@ -64,10 +64,10 @@ func main() {
 ### Request with Headers
 
 ```go
-resp, err := handler.Call(ctx, "service/api", &rpc.Request{
+resp, err := handler.Call(ctx, "service/api", &mqttrpc.Request{
     Payload:     []byte(`{"action":"getData"}`),
     ContentType: "application/json",
-    Headers: rpc.Headers{
+    Headers: mqttrpc.Headers{
         "x-request-id": "req-123",
         "x-auth-token": "bearer-token",
     },
@@ -89,16 +89,16 @@ fmt.Printf("Status: %s\n", resp.Headers["x-status"])
 resp, err := handler.RequestWithTimeout("service/echo", []byte("hello"), 5*time.Second)
 
 // Call with timeout and headers
-resp, err := handler.CallWithTimeout("service/api", &rpc.Request{
+resp, err := handler.CallWithTimeout("service/api", &mqttrpc.Request{
     Payload: []byte("data"),
-    Headers: rpc.Headers{"x-key": "value"},
+    Headers: mqttrpc.Headers{"x-key": "value"},
 }, 5*time.Second)
 ```
 
 ### Custom Response Topic
 
 ```go
-handler, err := rpc.NewHandler(client, &rpc.HandlerOptions{
+handler, err := mqttrpc.NewHandler(client, &mqttrpc.HandlerOptions{
     ResponseTopic: "my-app/responses/client-1",
     QoS:           mqttv5.QoS1,
 })
