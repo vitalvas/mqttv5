@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.2](https://github.com/vitalvas/mqttv5/compare/v0.1.1...v0.1.2) (2026-03-04)
+
+
+### Bug Fixes
+
+* migrate websocket from gorilla to kasper ([5fe6422](https://github.com/vitalvas/mqttv5/commit/5fe64229ce2d568883552db065f05aad206a752e))
+* rename rpc package to mqttrpc to avoid stdlib name conflict ([7942f90](https://github.com/vitalvas/mqttv5/commit/7942f9069c1931d9f0e04f6090618a7a7eaff593))
+
 ## [0.1.1](https://github.com/vitalvas/mqttv5/compare/v0.1.0...v0.1.1) (2026-01-14)
 
 
