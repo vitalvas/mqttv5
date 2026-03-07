@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/vitalvas/mqttv5/compare/v0.1.2...v0.2.0) (2026-03-07)
+
+
+### Features
+
+* add connection and message rate limiting ([ca93ef3](https://github.com/vitalvas/mqttv5/commit/ca93ef3ac0a6b218341833e88f8e8807a8ab4447))
+
 ## [0.1.2](https://github.com/vitalvas/mqttv5/compare/v0.1.1...v0.1.2) (2026-03-04)
 
 
