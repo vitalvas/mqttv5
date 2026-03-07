@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/vitalvas/mqttv5/compare/v0.2.0...v0.3.0) (2026-03-07)
+
+
+### Features
+
+* add per-topic message and subscription metrics ([49c8725](https://github.com/vitalvas/mqttv5/commit/49c87251098a0f35a89496e91b54cd7fb6c0d32e))
+* add server introspection for clients and subscriptions ([ac3815e](https://github.com/vitalvas/mqttv5/commit/ac3815e9b3882f0b8daef1cfad4856fa7cc364d6))
+
 ## [0.2.0](https://github.com/vitalvas/mqttv5/compare/v0.1.2...v0.2.0) (2026-03-07)
 
 
