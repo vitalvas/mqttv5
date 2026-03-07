@@ -87,6 +87,42 @@ These methods are available directly on `SubscriptionManager`:
 | `Shared` | `bool` | Whether this is a shared subscription |
 | `ShareGroup` | `string` | Share group name (if shared) |
 
+## Topic Metrics
+
+Per-topic message and subscription statistics.
+
+| Method | Description |
+|--------|-------------|
+| `TopicMetrics()` | Returns the `*TopicMetrics` tracker |
+| `GetTopicMetrics(namespace, topic)` | Metrics for a topic (with subscriber count) |
+| `AllTopicMetrics(namespace)` | All topic metrics (empty namespace = all) |
+
+### TopicMetrics Methods
+
+These methods are available directly on `TopicMetrics`:
+
+| Method | Description |
+|--------|-------------|
+| `Get(namespace, topic)` | Get metrics for a topic |
+| `All(namespace)` | All metrics (empty namespace = all) |
+| `TopicCount(namespace)` | Number of tracked topics |
+| `Reset()` | Clear all topic metrics |
+
+### TopicMetricsInfo Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `Topic` | `string` | Topic name |
+| `Namespace` | `string` | Namespace |
+| `MessagesIn` | `int64` | Messages published to topic |
+| `MessagesOut` | `int64` | Messages delivered from topic |
+| `BytesIn` | `int64` | Bytes published to topic |
+| `BytesOut` | `int64` | Bytes delivered from topic |
+| `Subscribers` | `int` | Current matching subscribers |
+
+The `Subscribers` field is populated when accessed via `Server.GetTopicMetrics()`
+or `Server.AllTopicMetrics()`.
+
 ## Examples
 
 ### List All Clients
@@ -126,5 +162,21 @@ subs := srv.GetClientSubscriptions("default", "client1")
 for _, sub := range subs {
     fmt.Printf("  filter=%s qos=%d shared=%v\n",
         sub.TopicFilter, sub.QoS, sub.Shared)
+}
+```
+
+### Get Topic Metrics
+
+```go
+info := srv.GetTopicMetrics("default", "sensor/temp")
+if info != nil {
+    fmt.Printf("topic=%s in=%d out=%d subs=%d\n",
+        info.Topic, info.MessagesIn, info.MessagesOut, info.Subscribers)
+}
+
+// All topics in a namespace
+for _, t := range srv.AllTopicMetrics("default") {
+    fmt.Printf("%s: %d in, %d out, %d subs\n",
+        t.Topic, t.MessagesIn, t.MessagesOut, t.Subscribers)
 }
 ```

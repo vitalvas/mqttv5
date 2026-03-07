@@ -126,6 +126,7 @@ This document compares the mqttv5 library with other popular open-source MQTT br
 | Message Metrics | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Client Introspection | Yes | No | Yes | Yes | No | Yes | Yes | Yes |
 | Subscription Introspection | Yes | No | Yes | Yes | No | Yes | Yes | Yes |
+| Topic Metrics | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Latency Tracking | Yes | No | Yes | Yes | No | Yes | Yes | Yes |
 
 ## Extensions and Integrations
@@ -171,7 +172,6 @@ This section highlights MQTT-related features available in other brokers that ar
 | Delayed Messages | EMQX, HiveMQ (Enterprise) | Schedule MQTT message delivery for future time |
 | Offline Message Queue | EMQX, HiveMQ, VerneMQ | Queue messages for disconnected persistent sessions |
 | Auto Topic Creation | EMQX, HiveMQ | Automatically create topics on first publish |
-| Topic Metrics | EMQX, VerneMQ, Mosquitto | Per-topic message and subscription statistics |
 | Banned Clients | EMQX, HiveMQ | Block specific client IDs from connecting |
 | Flapping Detection | EMQX | Detect and block clients reconnecting too frequently |
 

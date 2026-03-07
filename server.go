@@ -273,15 +273,16 @@ var (
 
 // Server is an MQTT v5.0 broker server.
 type Server struct {
-	mu        sync.RWMutex
-	config    *serverConfig
-	clients   map[string]*ServerClient
-	subs      *SubscriptionManager
-	keepAlive *KeepAliveManager
-	wills     *WillManager
-	running   atomic.Bool
-	done      chan struct{}
-	wg        sync.WaitGroup
+	mu           sync.RWMutex
+	config       *serverConfig
+	clients      map[string]*ServerClient
+	subs         *SubscriptionManager
+	topicMetrics *TopicMetrics
+	keepAlive    *KeepAliveManager
+	wills        *WillManager
+	running      atomic.Bool
+	done         chan struct{}
+	wg           sync.WaitGroup
 }
 
 // boolToByte converts a boolean to a byte (0 or 1) for MQTT properties.
@@ -312,12 +313,13 @@ func NewServer(opts ...ServerOption) *Server {
 	}
 
 	return &Server{
-		config:    config,
-		clients:   make(map[string]*ServerClient),
-		subs:      NewSubscriptionManager(),
-		keepAlive: ka,
-		wills:     NewWillManager(),
-		done:      make(chan struct{}),
+		config:       config,
+		clients:      make(map[string]*ServerClient),
+		subs:         NewSubscriptionManager(),
+		topicMetrics: NewTopicMetrics(),
+		keepAlive:    ka,
+		wills:        NewWillManager(),
+		done:         make(chan struct{}),
 	}
 }
 
@@ -543,7 +545,9 @@ func (s *Server) Publish(msg *Message) error {
 		}
 
 		// Try to send, queue on failure for QoS > 0
-		if err := client.Send(deliveryMsg); err != nil && deliveryQoS > QoS0 {
+		if err := client.Send(deliveryMsg); err == nil {
+			s.topicMetrics.recordMessageOut(namespace, msg.Topic, len(msg.Payload))
+		} else if deliveryQoS > QoS0 {
 			// Queue for later delivery if quota exceeded or connection lost
 			s.queueOfflineMessage(entry.Namespace, entry.ClientID, deliveryMsg)
 		}
@@ -1374,6 +1378,7 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 	// Metrics
 	s.config.metrics.MessageReceived(pub.QoS)
 	client.recordMessageIn()
+	s.topicMetrics.recordMessageIn(namespace, topic, len(pub.Payload))
 
 	// Send PUBACK for QoS 1
 	if pub.QoS == QoS1 {
@@ -1547,7 +1552,9 @@ func (s *Server) publishToSubscribers(publisherID string, msg *Message) {
 		}
 
 		// Try to send, queue on failure for QoS > 0
-		if err := client.Send(deliveryMsg); err != nil && deliveryQoS > QoS0 {
+		if err := client.Send(deliveryMsg); err == nil {
+			s.topicMetrics.recordMessageOut(namespace, msg.Topic, len(msg.Payload))
+		} else if deliveryQoS > QoS0 {
 			// Queue for later delivery if quota exceeded or connection lost
 			s.queueOfflineMessage(entry.Namespace, entry.ClientID, deliveryMsg)
 		}

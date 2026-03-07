@@ -212,6 +212,18 @@ func (m *SubscriptionManager) GetSubscriptions(clientID, namespace string) []Sub
 	return subs
 }
 
+// SubscriberCount returns the number of subscribers matching a topic in a namespace.
+func (m *SubscriptionManager) SubscriberCount(namespace, topic string) int {
+	entries := m.match(topic)
+	count := 0
+	for _, entry := range entries {
+		if entry.Namespace == namespace {
+			count++
+		}
+	}
+	return count
+}
+
 // match returns all matching subscriptions for a topic (internal use only).
 // This method does NOT filter by namespace - use MatchForDelivery for namespace-isolated matching.
 func (m *SubscriptionManager) match(topic string) []SubscriptionEntry {

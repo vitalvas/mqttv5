@@ -491,3 +491,55 @@ func TestServerClientDisconnectWillHandling(t *testing.T) {
 		}
 	})
 }
+
+func TestServerClientStats(t *testing.T) {
+	t.Run("connected at and uptime", func(t *testing.T) {
+		conn := &mockConn{}
+		connect := &ConnectPacket{ClientID: "c1"}
+		client := NewServerClient(conn, connect, MaxPacketSizeDefault, DefaultNamespace)
+
+		assert.False(t, client.ConnectedAt().IsZero())
+		assert.True(t, client.Uptime() >= 0)
+	})
+
+	t.Run("last activity updated on bytes in", func(t *testing.T) {
+		conn := &mockConn{}
+		connect := &ConnectPacket{ClientID: "c1"}
+		client := NewServerClient(conn, connect, MaxPacketSizeDefault, DefaultNamespace)
+
+		before := client.LastActivity()
+		time.Sleep(5 * time.Millisecond)
+		client.recordBytesIn(10)
+		after := client.LastActivity()
+
+		assert.True(t, after.After(before))
+	})
+
+	t.Run("idle duration", func(t *testing.T) {
+		conn := &mockConn{}
+		connect := &ConnectPacket{ClientID: "c1"}
+		client := NewServerClient(conn, connect, MaxPacketSizeDefault, DefaultNamespace)
+
+		time.Sleep(10 * time.Millisecond)
+		assert.True(t, client.IdleDuration() >= 10*time.Millisecond)
+
+		client.recordBytesIn(1)
+		assert.True(t, client.IdleDuration() < 5*time.Millisecond)
+	})
+
+	t.Run("bytes and messages counters", func(t *testing.T) {
+		conn := &mockConn{}
+		connect := &ConnectPacket{ClientID: "c1"}
+		client := NewServerClient(conn, connect, MaxPacketSizeDefault, DefaultNamespace)
+
+		client.recordBytesIn(100)
+		client.recordBytesOut(200)
+		client.recordMessageIn()
+		client.recordMessageOut()
+
+		assert.Equal(t, int64(100), client.BytesIn())
+		assert.Equal(t, int64(200), client.BytesOut())
+		assert.Equal(t, int64(1), client.MessagesIn())
+		assert.Equal(t, int64(1), client.MessagesOut())
+	})
+}

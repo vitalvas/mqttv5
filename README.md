@@ -23,7 +23,7 @@ Implements the [MQTT Version 5.0 OASIS Standard](https://docs.oasis-open.org/mqt
 - Keep-alive management
 - Flow control per MQTT v5.0 spec
 - Rate limiting (connection and message)
-- Server introspection (client info, subscription info)
+- Server introspection (client info, subscription info, topic metrics)
 - Metrics collection
 - Multi-server support with round-robin selection
 - Dynamic service discovery (DNS SRV, registries)
