@@ -58,6 +58,12 @@ const (
 
 	// MetricBridgeErrors is the total bridge forwarding errors.
 	MetricBridgeErrors = "mqtt_bridge_errors_total"
+
+	// MetricConnectionsRateLimited is the total connections rejected by rate limiting.
+	MetricConnectionsRateLimited = "mqtt_connections_rate_limited_total"
+
+	// MetricMessagesRateLimited is the total messages rejected by rate limiting.
+	MetricMessagesRateLimited = "mqtt_messages_rate_limited_total"
 )
 
 // Metrics provides broker metrics using expvar.
@@ -76,6 +82,10 @@ type Metrics struct {
 	bridgeForwardedToRemote *expvar.Int
 	bridgeDroppedLoop       *expvar.Int
 	bridgeErrors            *expvar.Int
+
+	// Rate limiting metrics
+	connectionsRateLimited *expvar.Int
+	messagesRateLimited    *expvar.Int
 
 	// Maps for labeled metrics
 	mu               sync.RWMutex
@@ -100,6 +110,8 @@ func NewMetrics() *Metrics {
 		bridgeForwardedToRemote: expvar.NewInt(MetricBridgeForwardedToRemote),
 		bridgeDroppedLoop:       expvar.NewInt(MetricBridgeDroppedLoop),
 		bridgeErrors:            expvar.NewInt(MetricBridgeErrors),
+		connectionsRateLimited:  expvar.NewInt(MetricConnectionsRateLimited),
+		messagesRateLimited:     expvar.NewInt(MetricMessagesRateLimited),
 		messagesReceived:        make(map[byte]*expvar.Int),
 		messagesSent:            make(map[byte]*expvar.Int),
 		packetsReceived:         make(map[PacketType]*expvar.Int),
@@ -254,6 +266,16 @@ func (m *Metrics) BridgeError() {
 	m.bridgeErrors.Add(1)
 }
 
+// ConnectionRateLimited records a connection rejected by rate limiting.
+func (m *Metrics) ConnectionRateLimited() {
+	m.connectionsRateLimited.Add(1)
+}
+
+// MessageRateLimited records a message rejected by rate limiting.
+func (m *Metrics) MessageRateLimited() {
+	m.messagesRateLimited.Add(1)
+}
+
 // NoOpMetrics is a no-op implementation for when metrics are disabled.
 type NoOpMetrics struct{}
 
@@ -308,6 +330,12 @@ func (n *NoOpMetrics) BridgeDroppedLoop() {}
 // BridgeError does nothing.
 func (n *NoOpMetrics) BridgeError() {}
 
+// ConnectionRateLimited does nothing.
+func (n *NoOpMetrics) ConnectionRateLimited() {}
+
+// MessageRateLimited does nothing.
+func (n *NoOpMetrics) MessageRateLimited() {}
+
 // MetricsCollector defines the interface for metrics collection.
 type MetricsCollector interface {
 	ConnectionOpened()
@@ -327,6 +355,8 @@ type MetricsCollector interface {
 	BridgeForwardedToRemote()
 	BridgeDroppedLoop()
 	BridgeError()
+	ConnectionRateLimited()
+	MessageRateLimited()
 }
 
 // MemoryMetrics is an in-memory implementation for testing without expvar side effects.
@@ -345,6 +375,10 @@ type MemoryMetrics struct {
 	bridgeForwardedToRemote atomic.Int64
 	bridgeDroppedLoop       atomic.Int64
 	bridgeErrors            atomic.Int64
+
+	// Rate limiting metrics
+	connectionsRateLimited atomic.Int64
+	messagesRateLimited    atomic.Int64
 
 	mu               sync.RWMutex
 	messagesReceived map[byte]*atomic.Int64
@@ -589,6 +623,26 @@ func (m *MemoryMetrics) BridgeError() {
 // BridgeErrorsTotal returns the total bridge forwarding errors.
 func (m *MemoryMetrics) BridgeErrorsTotal() int64 {
 	return m.bridgeErrors.Load()
+}
+
+// ConnectionRateLimited records a connection rejected by rate limiting.
+func (m *MemoryMetrics) ConnectionRateLimited() {
+	m.connectionsRateLimited.Add(1)
+}
+
+// ConnectionsRateLimitedTotal returns the total connections rejected by rate limiting.
+func (m *MemoryMetrics) ConnectionsRateLimitedTotal() int64 {
+	return m.connectionsRateLimited.Load()
+}
+
+// MessageRateLimited records a message rejected by rate limiting.
+func (m *MemoryMetrics) MessageRateLimited() {
+	m.messagesRateLimited.Add(1)
+}
+
+// MessagesRateLimitedTotal returns the total messages rejected by rate limiting.
+func (m *MemoryMetrics) MessagesRateLimitedTotal() int64 {
+	return m.messagesRateLimited.Load()
 }
 
 // float64ToBits converts a float64 to uint64 bits.

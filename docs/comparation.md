@@ -166,13 +166,10 @@ This section highlights MQTT-related features available in other brokers that ar
 | $SYS Topics | Mosquitto, EMQX, VerneMQ, NanoMQ, HiveMQ CE | System topics for broker statistics |
 | Native Clustering | EMQX, VerneMQ, HiveMQ (Enterprise) | Built-in distributed broker clustering |
 | Session Replication | EMQX, VerneMQ, HiveMQ (Enterprise) | Replicate client sessions across nodes |
-| Rate Limiting | EMQX, Mosquitto, HiveMQ | Built-in connection and message rate limits |
 | Delayed Messages | EMQX, HiveMQ (Enterprise) | Schedule MQTT message delivery for future time |
 | Offline Message Queue | EMQX, HiveMQ, VerneMQ | Queue messages for disconnected persistent sessions |
 | Auto Topic Creation | EMQX, HiveMQ | Automatically create topics on first publish |
 | Topic Metrics | EMQX, VerneMQ, Mosquitto | Per-topic message and subscription statistics |
-| Connection Rate Limit | EMQX, Mosquitto, HiveMQ | Limit new connections per second |
-| Message Rate Limit | EMQX, HiveMQ | Limit messages per client per second |
 | Banned Clients | EMQX, HiveMQ | Block specific client IDs from connecting |
 | Flapping Detection | EMQX | Detect and block clients reconnecting too frequently |
 
@@ -181,7 +178,6 @@ This section highlights MQTT-related features available in other brokers that ar
 **May be added in future:**
 
 - $SYS topics for broker statistics
-- Built-in rate limiting
 - Offline message queuing
 - Delayed message delivery
 - Banned clients list

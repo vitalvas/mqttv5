@@ -53,6 +53,10 @@ type serverConfig struct {
 	subIDAvailable     bool // Whether subscription identifiers are supported
 	sharedSubAvailable bool // Whether shared subscriptions are supported
 
+	// Rate limiting
+	connRateLimiter ConnectionRateLimiter
+	msgRateLimiter  MessageRateLimiter
+
 	// Interceptors
 	producerInterceptors []ProducerInterceptor
 	consumerInterceptors []ConsumerInterceptor
@@ -318,5 +322,23 @@ func WithSubIDAvailable(available bool) ServerOption {
 func WithSharedSubAvailable(available bool) ServerOption {
 	return func(c *serverConfig) {
 		c.sharedSubAvailable = available
+	}
+}
+
+// WithConnectionRateLimiter sets the connection rate limiter.
+// When set, new connections are checked against the limiter before being accepted.
+// If nil (default), no connection rate limiting is applied.
+func WithConnectionRateLimiter(limiter ConnectionRateLimiter) ServerOption {
+	return func(c *serverConfig) {
+		c.connRateLimiter = limiter
+	}
+}
+
+// WithMessageRateLimiter sets the message rate limiter.
+// When set, incoming PUBLISH messages are checked against the limiter before processing.
+// If nil (default), no message rate limiting is applied.
+func WithMessageRateLimiter(limiter MessageRateLimiter) ServerOption {
+	return func(c *serverConfig) {
+		c.msgRateLimiter = limiter
 	}
 }

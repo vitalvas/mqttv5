@@ -382,6 +382,12 @@ func (s *Server) acceptLoop(listener net.Listener) {
 			}
 		}
 
+		if s.config.connRateLimiter != nil && !s.config.connRateLimiter.AllowConnection(conn) {
+			s.config.metrics.ConnectionRateLimited()
+			conn.Close()
+			continue
+		}
+
 		s.wg.Add(1)
 		go s.handleConnection(conn)
 	}
@@ -1120,6 +1126,33 @@ func (s *Server) validatePublishFlags(pub *PublishPacket) ReasonCode {
 	return ReasonSuccess
 }
 
+func (s *Server) handleRateLimitExceeded(client *ServerClient, pub *PublishPacket, action RateLimitExceedAction, logger Logger) {
+	logger.Warn("message rate limit exceeded", LogFields{
+		LogFieldQoS: pub.QoS,
+	})
+
+	if action == RateLimitDisconnect {
+		client.Disconnect(ReasonMessageRateTooHigh)
+		return
+	}
+
+	// RateLimitDropMessage: send appropriate ack without processing
+	switch pub.QoS {
+	case QoS1:
+		puback := &PubackPacket{
+			PacketID:   pub.PacketID,
+			ReasonCode: ReasonQuotaExceeded,
+		}
+		WritePacket(client.Conn(), puback, client.MaxPacketSize())
+	case QoS2:
+		pubrec := &PubrecPacket{
+			PacketID:   pub.PacketID,
+			ReasonCode: ReasonQuotaExceeded,
+		}
+		WritePacket(client.Conn(), pubrec, client.MaxPacketSize())
+	}
+}
+
 func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger Logger) {
 	clientID := client.ClientID()
 	namespace := client.Namespace()
@@ -1140,6 +1173,15 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 		})
 		client.Disconnect(reason)
 		return
+	}
+
+	// Check message rate limit before any flow control
+	if s.config.msgRateLimiter != nil {
+		if action := s.config.msgRateLimiter.AllowMessage(clientID, namespace, topic); action != RateLimitAllow {
+			s.config.metrics.MessageRateLimited()
+			s.handleRateLimitExceeded(client, pub, action, logger)
+			return
+		}
 	}
 
 	// Check if this is a DUP retransmit (either DUP flag set, or QoS 2 packet already being tracked)

@@ -34,13 +34,14 @@ When the server receives a PUBLISH from a client:
 
 1. Topic alias resolution and validation
 2. QoS and retain flag validation
-3. Flow control check (Receive Maximum)
-4. Authorization check (Authorizer.Authorize)
-5. PUBACK sent (QoS 1 only)
-6. **ConsumerInterceptor.OnConsume called**
-7. PUBREC sent and message tracked (QoS 2 only)
-8. OnMessage callback (QoS 0/1; QoS 2 on PUBREL)
-9. Message published to subscribers
+3. Message rate limit check (MessageRateLimiter)
+4. Flow control check (Receive Maximum)
+5. Authorization check (Authorizer.Authorize)
+6. PUBACK sent (QoS 1 only)
+7. **ConsumerInterceptor.OnConsume called**
+8. PUBREC sent and message tracked (QoS 2 only)
+9. OnMessage callback (QoS 0/1; QoS 2 on PUBREL)
+10. Message published to subscribers
 
 ### Server-side ProducerInterceptor
 

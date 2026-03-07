@@ -36,6 +36,13 @@ All options for configuring an MQTT v5.0 server/broker.
 | `WithServerTopicAliasMax(n)` | 0 | Max topic aliases |
 | `WithServerKeepAlive(sec)` | 0 | Override client keep-alive |
 
+## Rate Limiting
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithConnectionRateLimiter(limiter)` | nil | Connection rate limiter interface |
+| `WithMessageRateLimiter(limiter)` | nil | Message rate limiter interface |
+
 ## Capabilities
 
 | Option | Default | Description |
@@ -228,6 +235,33 @@ srv := mqttv5.NewServer(
     mqttv5.WithMaxQoS(mqttv5.QoS1),
     mqttv5.WithRetainAvailable(false),
     mqttv5.WithSharedSubAvailable(false),
+)
+```
+
+### Rate Limiting
+
+```go
+connLimiter := mqttv5.NewTokenBucketConnectionLimiter(
+    mqttv5.ConnectionLimiterConfig{
+        Global: mqttv5.RateLimitConfig{Rate: 100, Burst: 200},
+        PerIP:  mqttv5.RateLimitConfig{Rate: 10, Burst: 20},
+    },
+)
+msgLimiter := mqttv5.NewTokenBucketMessageLimiter(
+    mqttv5.MessageLimiterConfig{
+        Global:         mqttv5.RateLimitConfig{Rate: 10000, Burst: 20000},
+        PerNamespace:   mqttv5.RateLimitConfig{Rate: 5000, Burst: 10000},
+        PerClient:      mqttv5.RateLimitConfig{Rate: 100, Burst: 200},
+        PerTopic:       mqttv5.RateLimitConfig{Rate: 500, Burst: 1000},
+        PerClientTopic: mqttv5.RateLimitConfig{Rate: 10, Burst: 20},
+        ExceedAction:   mqttv5.RateLimitDropMessage,
+    },
+)
+
+srv := mqttv5.NewServer(
+    mqttv5.WithListener(listener),
+    mqttv5.WithConnectionRateLimiter(connLimiter),
+    mqttv5.WithMessageRateLimiter(msgLimiter),
 )
 ```
 

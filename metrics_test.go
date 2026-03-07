@@ -28,6 +28,8 @@ func TestNoOpMetrics(t *testing.T) {
 		metrics.BridgeForwardedToRemote()
 		metrics.BridgeDroppedLoop()
 		metrics.BridgeError()
+		metrics.ConnectionRateLimited()
+		metrics.MessageRateLimited()
 	})
 }
 
@@ -147,6 +149,17 @@ func TestMemoryMetrics(t *testing.T) {
 		assert.Equal(t, int64(1), m.BridgeForwardedToRemoteTotal())
 		assert.Equal(t, int64(1), m.BridgeDroppedLoopTotal())
 		assert.Equal(t, int64(3), m.BridgeErrorsTotal())
+	})
+
+	t.Run("rate limiting metrics", func(t *testing.T) {
+		m := NewMemoryMetrics()
+
+		m.ConnectionRateLimited()
+		m.ConnectionRateLimited()
+		m.MessageRateLimited()
+
+		assert.Equal(t, int64(2), m.ConnectionsRateLimitedTotal())
+		assert.Equal(t, int64(1), m.MessagesRateLimitedTotal())
 	})
 }
 
@@ -284,6 +297,17 @@ func TestExpvarMetrics(t *testing.T) {
 		assert.Equal(t, initialRemote+1, m.bridgeForwardedToRemote.Value())
 		assert.Equal(t, initialLoop+1, m.bridgeDroppedLoop.Value())
 		assert.Equal(t, initialErrors+1, m.bridgeErrors.Value())
+	})
+
+	t.Run("rate limiting metrics", func(t *testing.T) {
+		initialConn := m.connectionsRateLimited.Value()
+		initialMsg := m.messagesRateLimited.Value()
+
+		m.ConnectionRateLimited()
+		m.MessageRateLimited()
+
+		assert.Equal(t, initialConn+1, m.connectionsRateLimited.Value())
+		assert.Equal(t, initialMsg+1, m.messagesRateLimited.Value())
 	})
 
 	t.Run("qos bounds", func(t *testing.T) {
