@@ -31,10 +31,19 @@ type ServerClient struct {
 	credentialExpiry      time.Time // when credentials (cert/token) expire, zero means no expiry
 	tlsConnectionState    *tls.ConnectionState
 	tlsIdentity           *TLSIdentity
+
+	// Per-client stats
+	connectedAt  time.Time
+	messagesIn   atomic.Int64
+	messagesOut  atomic.Int64
+	bytesIn      atomic.Int64
+	bytesOut     atomic.Int64
+	lastActivity atomic.Int64 // unix nano timestamp
 }
 
 // NewServerClient creates a new server client.
 func NewServerClient(conn Conn, connect *ConnectPacket, maxPacketSize uint32, namespace string) *ServerClient {
+	now := time.Now()
 	client := &ServerClient{
 		conn:               conn,
 		clientID:           connect.ClientID,
@@ -49,7 +58,9 @@ func NewServerClient(conn Conn, connect *ConnectPacket, maxPacketSize uint32, na
 		qos2Tracker:        NewQoS2Tracker(20*time.Second, 3),
 		flowControl:        NewFlowController(65535),
 		inboundFlowControl: NewFlowController(65535),
+		connectedAt:        now,
 	}
+	client.lastActivity.Store(now.UnixNano())
 	client.connected.Store(true)
 	return client
 }
@@ -337,8 +348,13 @@ func (c *ServerClient) Send(msg *Message) error {
 	}
 
 	c.writeMu.Lock()
-	_, err := WritePacket(c.conn, pub, c.maxPacketSize)
+	n, err := WritePacket(c.conn, pub, c.maxPacketSize)
 	c.writeMu.Unlock()
+
+	if err == nil {
+		c.recordBytesOut(n)
+		c.recordMessageOut()
+	}
 
 	if err != nil && msg.QoS > QoS0 {
 		// Rollback: release flow control quota and remove tracker entry
@@ -403,4 +419,65 @@ func (c *ServerClient) Disconnect(reason ReasonCode) error {
 	c.writeMu.Unlock()
 
 	return c.Close()
+}
+
+// recordBytesIn records bytes received from this client.
+func (c *ServerClient) recordBytesIn(n int) {
+	c.bytesIn.Add(int64(n))
+	c.lastActivity.Store(time.Now().UnixNano())
+}
+
+// recordBytesOut records bytes sent to this client.
+func (c *ServerClient) recordBytesOut(n int) {
+	c.bytesOut.Add(int64(n))
+}
+
+// recordMessageIn records a message received from this client.
+func (c *ServerClient) recordMessageIn() {
+	c.messagesIn.Add(1)
+}
+
+// recordMessageOut records a message sent to this client.
+func (c *ServerClient) recordMessageOut() {
+	c.messagesOut.Add(1)
+}
+
+// ConnectedAt returns when the client connected.
+func (c *ServerClient) ConnectedAt() time.Time {
+	return c.connectedAt
+}
+
+// Uptime returns how long the client has been connected.
+func (c *ServerClient) Uptime() time.Duration {
+	return time.Since(c.connectedAt)
+}
+
+// LastActivity returns the time of last activity from this client.
+func (c *ServerClient) LastActivity() time.Time {
+	return time.Unix(0, c.lastActivity.Load())
+}
+
+// IdleDuration returns how long the client has been idle.
+func (c *ServerClient) IdleDuration() time.Duration {
+	return time.Since(c.LastActivity())
+}
+
+// MessagesIn returns the total messages received from this client.
+func (c *ServerClient) MessagesIn() int64 {
+	return c.messagesIn.Load()
+}
+
+// MessagesOut returns the total messages sent to this client.
+func (c *ServerClient) MessagesOut() int64 {
+	return c.messagesOut.Load()
+}
+
+// BytesIn returns the total bytes received from this client.
+func (c *ServerClient) BytesIn() int64 {
+	return c.bytesIn.Load()
+}
+
+// BytesOut returns the total bytes sent to this client.
+func (c *ServerClient) BytesOut() int64 {
+	return c.bytesOut.Load()
 }

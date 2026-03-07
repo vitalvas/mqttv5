@@ -77,6 +77,12 @@ All options for configuring an MQTT v5.0 server/broker.
 | `WithLogger(logger)` | no-op | Logger interface |
 | `WithMetrics(metrics)` | no-op | Metrics collector |
 
+## Introspection
+
+The server provides methods to inspect connected clients and their
+subscriptions at runtime. See [Server Stats](server-stats.md) for
+full details, field references, and examples.
+
 ## Examples
 
 ### Basic Server
@@ -238,7 +244,7 @@ srv := mqttv5.NewServer(
 )
 ```
 
-### Rate Limiting
+### Rate Limiting Example
 
 ```go
 connLimiter := mqttv5.NewTokenBucketConnectionLimiter(

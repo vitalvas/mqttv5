@@ -552,49 +552,150 @@ func (s *Server) Publish(msg *Message) error {
 	return nil
 }
 
-// Clients returns a list of connected client IDs.
-// Note: In multi-tenant deployments, the same client ID may exist in different namespaces.
-// Use ClientsWithNamespace() for namespace-aware client listing.
-func (s *Server) Clients() []string {
+// Namespaces returns a list of unique namespaces with connected clients.
+func (s *Server) Namespaces() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	seen := make(map[string]struct{})
+	for key := range s.clients {
+		ns, _ := ParseNamespaceKey(key)
+		seen[ns] = struct{}{}
+	}
+
+	namespaces := make([]string, 0, len(seen))
+	for ns := range seen {
+		namespaces = append(namespaces, ns)
+	}
+	return namespaces
+}
+
+// Clients returns a list of connected client IDs.
+// If namespaces are provided, only clients in those namespaces are returned.
+func (s *Server) Clients(namespaces ...string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	filter := namespaceSet(namespaces)
 	ids := make([]string, 0, len(s.clients))
 	for key := range s.clients {
-		_, clientID := ParseNamespaceKey(key)
+		ns, clientID := ParseNamespaceKey(key)
+		if filter != nil && !filter[ns] {
+			continue
+		}
 		ids = append(ids, clientID)
 	}
 	return ids
 }
 
-// ClientInfo represents a connected client with its namespace.
+// ClientInfo represents detailed information about a connected client.
 type ClientInfo struct {
-	Namespace string
-	ClientID  string
+	ClientID      string               `json:"client_id"`
+	Username      string               `json:"username,omitempty"`
+	Namespace     string               `json:"namespace"`
+	RemoteAddr    string               `json:"remote_addr"`
+	LocalAddr     string               `json:"local_addr"`
+	ConnectedAt   time.Time            `json:"connected_at"`
+	Uptime        time.Duration        `json:"uptime"`
+	Idle          time.Duration        `json:"idle"`
+	LastActivity  time.Time            `json:"last_activity"`
+	TLS           *tls.ConnectionState `json:"tls,omitempty"`
+	CleanStart    bool                 `json:"clean_start"`
+	KeepAlive     uint16               `json:"keep_alive"`
+	MaxPacketSize uint32               `json:"max_packet_size"`
+	Subscriptions int                  `json:"subscriptions"`
+	MessagesIn    int64                `json:"messages_in"`
+	MessagesOut   int64                `json:"messages_out"`
+	BytesIn       int64                `json:"bytes_in"`
+	BytesOut      int64                `json:"bytes_out"`
 }
 
-// ClientsWithNamespace returns a list of connected clients with their namespaces.
-// This is useful for multi-tenant deployments where clients are isolated by namespace.
-func (s *Server) ClientsWithNamespace() []ClientInfo {
+// ClientsInfo returns a list of connected clients with detailed info and stats.
+// If namespaces are provided, only clients in those namespaces are returned.
+func (s *Server) ClientsInfo(namespaces ...string) []ClientInfo {
+	now := time.Now()
+	filter := namespaceSet(namespaces)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	clients := make([]ClientInfo, 0, len(s.clients))
-	for key := range s.clients {
-		namespace, clientID := ParseNamespaceKey(key)
-		clients = append(clients, ClientInfo{
-			Namespace: namespace,
-			ClientID:  clientID,
-		})
+	for _, client := range s.clients {
+		if filter != nil && !filter[client.Namespace()] {
+			continue
+		}
+		clients = append(clients, buildClientInfo(client, now))
 	}
 	return clients
 }
 
+func buildClientInfo(client *ServerClient, now time.Time) ClientInfo {
+	info := ClientInfo{
+		ClientID:      client.ClientID(),
+		Username:      client.Username(),
+		Namespace:     client.Namespace(),
+		ConnectedAt:   client.connectedAt,
+		Uptime:        now.Sub(client.connectedAt),
+		LastActivity:  client.LastActivity(),
+		Idle:          now.Sub(client.LastActivity()),
+		CleanStart:    client.CleanStart(),
+		KeepAlive:     client.KeepAlive(),
+		MaxPacketSize: client.MaxPacketSize(),
+		TLS:           client.TLSConnectionState(),
+		MessagesIn:    client.messagesIn.Load(),
+		MessagesOut:   client.messagesOut.Load(),
+		BytesIn:       client.bytesIn.Load(),
+		BytesOut:      client.bytesOut.Load(),
+	}
+
+	conn := client.Conn()
+	if conn != nil {
+		if addr := conn.RemoteAddr(); addr != nil {
+			info.RemoteAddr = addr.String()
+		}
+		if addr := conn.LocalAddr(); addr != nil {
+			info.LocalAddr = addr.String()
+		}
+	}
+
+	session := client.Session()
+	if session != nil {
+		info.Subscriptions = len(session.Subscriptions())
+	}
+
+	return info
+}
+
 // ClientCount returns the number of connected clients.
-func (s *Server) ClientCount() int {
+// If namespaces are provided, only clients in those namespaces are counted.
+func (s *Server) ClientCount(namespaces ...string) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.clients)
+
+	filter := namespaceSet(namespaces)
+	if filter == nil {
+		return len(s.clients)
+	}
+
+	count := 0
+	for _, client := range s.clients {
+		if filter[client.Namespace()] {
+			count++
+		}
+	}
+	return count
+}
+
+// namespaceSet builds a set from namespace args. Returns nil if no filter.
+func namespaceSet(namespaces []string) map[string]bool {
+	if len(namespaces) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(namespaces))
+	for _, ns := range namespaces {
+		set[ns] = true
+	}
+	return set
 }
 
 // GetClient returns the connected client with the given ID and namespace.
@@ -604,6 +705,19 @@ func (s *Server) GetClient(namespace, clientID string) *ServerClient {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.clients[NamespaceKey(namespace, clientID)]
+}
+
+// GetClientInfo returns connection info for a specific client.
+// Returns nil if the client is not connected.
+// Use DefaultNamespace for clients in the default namespace.
+func (s *Server) GetClientInfo(namespace, clientID string) *ClientInfo {
+	client := s.GetClient(namespace, clientID)
+	if client == nil {
+		return nil
+	}
+
+	info := buildClientInfo(client, time.Now())
+	return &info
 }
 
 // DisconnectClient disconnects a client with the given reason code.
@@ -927,6 +1041,7 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 		// Metrics
 		s.config.metrics.BytesReceived(n)
 		s.config.metrics.PacketReceived(pkt.Type())
+		client.recordBytesIn(n)
 
 		// Update keep-alive
 		s.keepAlive.UpdateActivity(clientKey)
@@ -957,6 +1072,7 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 			pingresp := &PingrespPacket{}
 			if n, err := WritePacket(conn, pingresp, client.MaxPacketSize()); err == nil {
 				s.config.metrics.BytesSent(n)
+				client.recordBytesOut(n)
 				s.config.metrics.PacketSent(PacketPINGRESP)
 			}
 
@@ -1020,6 +1136,7 @@ func (s *Server) handlePubrec(client *ServerClient, p *PubrecPacket) {
 		pubrel := &PubrelPacket{PacketID: p.PacketID}
 		if n, err := WritePacket(client.Conn(), pubrel, client.MaxPacketSize()); err == nil {
 			s.config.metrics.BytesSent(n)
+			client.recordBytesOut(n)
 			s.config.metrics.PacketSent(PacketPUBREL)
 		}
 		return
@@ -1029,6 +1146,7 @@ func (s *Server) handlePubrec(client *ServerClient, p *PubrecPacket) {
 		pubrel := &PubrelPacket{PacketID: p.PacketID}
 		if n, err := WritePacket(client.Conn(), pubrel, client.MaxPacketSize()); err == nil {
 			s.config.metrics.BytesSent(n)
+			client.recordBytesOut(n)
 			s.config.metrics.PacketSent(PacketPUBREL)
 		}
 		if session := client.Session(); session != nil {
@@ -1051,6 +1169,7 @@ func (s *Server) handlePubrel(client *ServerClient, p *PubrelPacket) {
 		}
 		if n, err := WritePacket(client.Conn(), pubcomp, client.MaxPacketSize()); err == nil {
 			s.config.metrics.BytesSent(n)
+			client.recordBytesOut(n)
 			s.config.metrics.PacketSent(PacketPUBCOMP)
 		}
 		return
@@ -1059,6 +1178,7 @@ func (s *Server) handlePubrel(client *ServerClient, p *PubrelPacket) {
 	pubcomp := &PubcompPacket{PacketID: p.PacketID}
 	if n, err := WritePacket(client.Conn(), pubcomp, client.MaxPacketSize()); err == nil {
 		s.config.metrics.BytesSent(n)
+		client.recordBytesOut(n)
 		s.config.metrics.PacketSent(PacketPUBCOMP)
 	}
 
@@ -1253,6 +1373,7 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 
 	// Metrics
 	s.config.metrics.MessageReceived(pub.QoS)
+	client.recordMessageIn()
 
 	// Send PUBACK for QoS 1
 	if pub.QoS == QoS1 {
@@ -1262,6 +1383,7 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 		}
 		if n, err := WritePacket(client.Conn(), puback, client.MaxPacketSize()); err == nil {
 			s.config.metrics.BytesSent(n)
+			client.recordBytesOut(n)
 			s.config.metrics.PacketSent(PacketPUBACK)
 		}
 		// Release inbound quota
@@ -1309,6 +1431,7 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 		}
 		if n, err := WritePacket(client.Conn(), pubrec, client.MaxPacketSize()); err == nil {
 			s.config.metrics.BytesSent(n)
+			client.recordBytesOut(n)
 			s.config.metrics.PacketSent(PacketPUBREC)
 
 			if !isRetransmit {
@@ -1535,6 +1658,7 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 	}
 	if n, err := WritePacket(client.Conn(), suback, client.MaxPacketSize()); err == nil {
 		s.config.metrics.BytesSent(n)
+		client.recordBytesOut(n)
 		s.config.metrics.PacketSent(PacketSUBACK)
 	}
 }
@@ -1688,6 +1812,7 @@ func (s *Server) handleUnsubscribe(client *ServerClient, unsub *UnsubscribePacke
 	}
 	if n, err := WritePacket(client.Conn(), unsuback, client.MaxPacketSize()); err == nil {
 		s.config.metrics.BytesSent(n)
+		client.recordBytesOut(n)
 		s.config.metrics.PacketSent(PacketUNSUBACK)
 	}
 }
@@ -1818,6 +1943,7 @@ func (s *Server) restoreInflightMessages(client *ServerClient, session Session, 
 		pub.DUP = true
 		if n, err := WritePacket(conn, pub, client.MaxPacketSize()); err == nil {
 			s.config.metrics.BytesSent(n)
+			client.recordBytesOut(n)
 			s.config.metrics.PacketSent(PacketPUBLISH)
 		}
 	}
@@ -1845,6 +1971,7 @@ func (s *Server) restoreInflightMessages(client *ServerClient, session Session, 
 				pub.DUP = true
 				if n, err := WritePacket(conn, pub, client.MaxPacketSize()); err == nil {
 					s.config.metrics.BytesSent(n)
+					client.recordBytesOut(n)
 					s.config.metrics.PacketSent(PacketPUBLISH)
 				}
 
@@ -1862,6 +1989,7 @@ func (s *Server) restoreInflightMessages(client *ServerClient, session Session, 
 				pubrel := &PubrelPacket{PacketID: packetID}
 				if n, err := WritePacket(conn, pubrel, client.MaxPacketSize()); err == nil {
 					s.config.metrics.BytesSent(n)
+					client.recordBytesOut(n)
 					s.config.metrics.PacketSent(PacketPUBREL)
 				}
 			}

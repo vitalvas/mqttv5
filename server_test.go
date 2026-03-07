@@ -107,6 +107,100 @@ func TestServerClients(t *testing.T) {
 		assert.Equal(t, 0, srv.ClientCount())
 		assert.Empty(t, srv.Clients())
 	})
+
+	t.Run("filter by namespace", func(t *testing.T) {
+		srv := NewServer()
+		for _, tc := range []struct {
+			id string
+			ns string
+		}{
+			{"c1", "ns1"},
+			{"c2", "ns1"},
+			{"c3", "ns2"},
+		} {
+			conn := &mockConn{}
+			connect := &ConnectPacket{ClientID: tc.id}
+			client := NewServerClient(conn, connect, MaxPacketSizeDefault, tc.ns)
+			srv.clients[NamespaceKey(tc.ns, tc.id)] = client
+		}
+
+		assert.Len(t, srv.Clients(), 3)
+		assert.Len(t, srv.Clients("ns1"), 2)
+		assert.Len(t, srv.Clients("ns2"), 1)
+		assert.Empty(t, srv.Clients("ns999"))
+		assert.Len(t, srv.Clients("ns1", "ns2"), 3)
+
+		assert.Equal(t, 3, srv.ClientCount())
+		assert.Equal(t, 2, srv.ClientCount("ns1"))
+		assert.Equal(t, 1, srv.ClientCount("ns2"))
+		assert.Equal(t, 0, srv.ClientCount("ns999"))
+		assert.Equal(t, 3, srv.ClientCount("ns1", "ns2"))
+
+		assert.Len(t, srv.ClientsInfo(), 3)
+		assert.Len(t, srv.ClientsInfo("ns1"), 2)
+		assert.Len(t, srv.ClientsInfo("ns2"), 1)
+		assert.Empty(t, srv.ClientsInfo("ns999"))
+		assert.Len(t, srv.ClientsInfo("ns1", "ns2"), 3)
+	})
+}
+
+func TestServerNamespaces(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty server", func(t *testing.T) {
+		srv := NewServer()
+		assert.Empty(t, srv.Namespaces())
+	})
+
+	t.Run("single namespace", func(t *testing.T) {
+		srv := NewServer()
+		conn := &mockConn{}
+		connect := &ConnectPacket{ClientID: "c1"}
+		client := NewServerClient(conn, connect, MaxPacketSizeDefault, DefaultNamespace)
+		srv.mu.Lock()
+		srv.clients[NamespaceKey(DefaultNamespace, "c1")] = client
+		srv.mu.Unlock()
+
+		namespaces := srv.Namespaces()
+		assert.Len(t, namespaces, 1)
+		assert.Contains(t, namespaces, DefaultNamespace)
+	})
+
+	t.Run("multiple namespaces", func(t *testing.T) {
+		srv := NewServer()
+
+		for _, ns := range []string{"ns1", "ns2", "ns3"} {
+			conn := &mockConn{}
+			connect := &ConnectPacket{ClientID: "c1"}
+			client := NewServerClient(conn, connect, MaxPacketSizeDefault, ns)
+			srv.mu.Lock()
+			srv.clients[NamespaceKey(ns, "c1")] = client
+			srv.mu.Unlock()
+		}
+
+		namespaces := srv.Namespaces()
+		assert.Len(t, namespaces, 3)
+		assert.Contains(t, namespaces, "ns1")
+		assert.Contains(t, namespaces, "ns2")
+		assert.Contains(t, namespaces, "ns3")
+	})
+
+	t.Run("deduplicated", func(t *testing.T) {
+		srv := NewServer()
+
+		for _, id := range []string{"c1", "c2", "c3"} {
+			conn := &mockConn{}
+			connect := &ConnectPacket{ClientID: id}
+			client := NewServerClient(conn, connect, MaxPacketSizeDefault, "shared-ns")
+			srv.mu.Lock()
+			srv.clients[NamespaceKey("shared-ns", id)] = client
+			srv.mu.Unlock()
+		}
+
+		namespaces := srv.Namespaces()
+		assert.Len(t, namespaces, 1)
+		assert.Contains(t, namespaces, "shared-ns")
+	})
 }
 
 func TestServerPublish(t *testing.T) {
@@ -1418,7 +1512,7 @@ func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
 		assert.Equal(t, ReasonSuccess, connack.ReasonCode)
 
 		// Verify client is in the correct namespace
-		clients := srv.ClientsWithNamespace()
+		clients := srv.ClientsInfo()
 		require.Len(t, clients, 1)
 		assert.Equal(t, "tenant1-ns", clients[0].Namespace)
 		assert.Equal(t, "tenant-client", clients[0].ClientID)
@@ -2786,7 +2880,7 @@ func TestMultiTenantNamespaceIsolation(t *testing.T) {
 		assert.Equal(t, 2, sharedCount, "should have 2 clients with same ID from different namespaces")
 	})
 
-	t.Run("ClientsWithNamespace provides namespace info", func(t *testing.T) {
+	t.Run("ClientsInfo provides namespace info", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
 
@@ -2798,7 +2892,7 @@ func TestMultiTenantNamespaceIsolation(t *testing.T) {
 		srv.clients[NamespaceKey("tenant-b", "client-1")] = clientB
 		srv.mu.Unlock()
 
-		clients := srv.ClientsWithNamespace()
+		clients := srv.ClientsInfo()
 		assert.Len(t, clients, 2)
 
 		// Verify we can distinguish them by namespace

@@ -395,3 +395,78 @@ func (m *SubscriptionManager) ClientCount() int {
 
 	return len(m.subscriptions)
 }
+
+// Summary returns a subscription summary, optionally filtered by namespace.
+// If namespace is empty, returns subscriptions across all namespaces.
+func (m *SubscriptionManager) Summary(namespace string) SubscriptionSummary {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var infos []SubscriptionInfo
+	clients := make(map[string]struct{})
+
+	for key, entries := range m.subscriptions {
+		entryNamespace, clientID := ParseNamespaceKey(key)
+		if namespace != "" && entryNamespace != namespace {
+			continue
+		}
+
+		for _, entry := range entries {
+			infos = append(infos, buildSubscriptionInfo(clientID, entryNamespace, entry))
+		}
+		clients[key] = struct{}{}
+	}
+
+	sharedGroups := 0
+	for groupKey := range m.sharedGroupIndex {
+		if namespace == "" {
+			sharedGroups++
+			continue
+		}
+		groupNS, _ := ParseNamespaceKey(groupKey)
+		if groupNS == namespace {
+			sharedGroups++
+		}
+	}
+
+	return SubscriptionSummary{
+		TotalSubscriptions: len(infos),
+		TotalClients:       len(clients),
+		SharedGroups:       sharedGroups,
+		Subscriptions:      infos,
+	}
+}
+
+// ClientSubscriptionInfo returns subscription info for a specific client.
+func (m *SubscriptionManager) ClientSubscriptionInfo(namespace, clientID string) []SubscriptionInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	key := NamespaceKey(namespace, clientID)
+	entries := m.subscriptions[key]
+	if len(entries) == 0 {
+		return nil
+	}
+
+	infos := make([]SubscriptionInfo, 0, len(entries))
+	for _, entry := range entries {
+		infos = append(infos, buildSubscriptionInfo(clientID, namespace, entry))
+	}
+	return infos
+}
+
+func buildSubscriptionInfo(clientID, namespace string, entry SubscriptionEntry) SubscriptionInfo {
+	info := SubscriptionInfo{
+		ClientID:        clientID,
+		Namespace:       namespace,
+		TopicFilter:     entry.Subscription.TopicFilter,
+		QoS:             entry.Subscription.QoS,
+		NoLocal:         entry.Subscription.NoLocal,
+		RetainAsPublish: entry.Subscription.RetainAsPublish,
+		RetainHandling:  entry.Subscription.RetainHandling,
+		SubscriptionID:  entry.Subscription.SubscriptionID,
+		Shared:          entry.ShareGroup != "",
+		ShareGroup:      entry.ShareGroup,
+	}
+	return info
+}

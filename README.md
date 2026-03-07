@@ -22,6 +22,8 @@ Implements the [MQTT Version 5.0 OASIS Standard](https://docs.oasis-open.org/mqt
 - Will messages
 - Keep-alive management
 - Flow control per MQTT v5.0 spec
+- Rate limiting (connection and message)
+- Server introspection (client info, subscription info)
 - Metrics collection
 - Multi-server support with round-robin selection
 - Dynamic service discovery (DNS SRV, registries)
@@ -365,6 +367,56 @@ srv := mqttv5.NewServer(
     mqttv5.WithMetrics(metrics),
 )
 ```
+
+## Rate Limiting
+
+Control the rate of incoming connections and published messages:
+
+```go
+connLimiter := mqttv5.NewTokenBucketConnectionLimiter(
+    mqttv5.ConnectionLimiterConfig{
+        Global: mqttv5.RateLimitConfig{Rate: 100, Burst: 200},
+        PerIP:  mqttv5.RateLimitConfig{Rate: 10, Burst: 20},
+    },
+)
+
+msgLimiter := mqttv5.NewTokenBucketMessageLimiter(
+    mqttv5.MessageLimiterConfig{
+        Global:    mqttv5.RateLimitConfig{Rate: 10000, Burst: 20000},
+        PerClient: mqttv5.RateLimitConfig{Rate: 100, Burst: 200},
+    },
+)
+
+srv := mqttv5.NewServer(
+    mqttv5.WithListener(listener),
+    mqttv5.WithConnectionRateLimiter(connLimiter),
+    mqttv5.WithMessageRateLimiter(msgLimiter),
+)
+```
+
+See [rate limiting documentation](docs/rate_limiting.md) for all tiers and options.
+
+## Server Stats
+
+Inspect connected clients and subscriptions at runtime:
+
+```go
+// List namespaces
+namespaces := srv.Namespaces()
+
+// List clients (optionally filtered by namespace)
+clients := srv.ClientsInfo("tenant1")
+for _, c := range clients {
+    fmt.Printf("%s: uptime=%s msgs_in=%d\n", c.ClientID, c.Uptime, c.MessagesIn)
+}
+
+// Subscription summary
+summary := srv.GetSubscriptionSummary("tenant1")
+fmt.Printf("Subscriptions: %d, Clients: %d\n",
+    summary.TotalSubscriptions, summary.TotalClients)
+```
+
+See [server stats documentation](docs/server-stats.md) for full details.
 
 ## Bridging
 

@@ -124,6 +124,8 @@ This document compares the mqttv5 library with other popular open-source MQTT br
 | Dashboard | No | No | Yes | No | No | Enterprise | Yes | No |
 | Connection Metrics | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Message Metrics | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Client Introspection | Yes | No | Yes | Yes | No | Yes | Yes | Yes |
+| Subscription Introspection | Yes | No | Yes | Yes | No | Yes | Yes | Yes |
 | Latency Tracking | Yes | No | Yes | Yes | No | Yes | Yes | Yes |
 
 ## Extensions and Integrations
