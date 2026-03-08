@@ -1,6 +1,7 @@
 package router
 
 import (
+	"net"
 	"regexp"
 	"sync/atomic"
 	"testing"
@@ -9,6 +10,22 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/vitalvas/mqttv5"
 )
+
+func setupTestServer(t *testing.T) (string, func()) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	server := mqttv5.NewServer(mqttv5.WithListener(listener))
+	go server.ListenAndServe()
+
+	cleanup := func() {
+		server.Close()
+		listener.Close()
+	}
+
+	return listener.Addr().String(), cleanup
+}
 
 func TestRouterHandle(t *testing.T) {
 	r := New()
@@ -590,15 +607,6 @@ func TestRouterConcurrentAccess(t *testing.T) {
 	assert.Equal(t, 10, r.Len())
 }
 
-func TestRouterSubscribeNoFilters(t *testing.T) {
-	r := New()
-	// Register handler without topic filter
-	r.Handle(func(_ *mqttv5.Message) {})
-
-	err := r.Subscribe(nil, mqttv5.QoS1)
-	assert.NoError(t, err)
-}
-
 func TestRouterFiltersWithQoS(t *testing.T) {
 	t.Run("handler with subscribe qos", func(t *testing.T) {
 		r := New()
@@ -653,35 +661,61 @@ func TestRouterFiltersWithQoS(t *testing.T) {
 	})
 }
 
-func TestRouterSubscribeWithPerTopicQoS(t *testing.T) {
-	t.Run("handler without subscribe qos uses default", func(t *testing.T) {
+func TestRouterSubscribe(t *testing.T) {
+	t.Run("no filters returns nil", func(t *testing.T) {
 		r := New()
-		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/a"))
+		r.Handle(func(_ *mqttv5.Message) {})
 
-		// Cannot call Subscribe without a real client, but we can verify
-		// the filter map logic through FiltersWithQoS + Filters
-		filters := r.Filters()
-		assert.Len(t, filters, 1)
-
-		perTopicQoS := r.FiltersWithQoS()
-		assert.Empty(t, perTopicQoS)
-
-		// "topic/a" is not in perTopicQoS, so it would get defaultQoS
+		err := r.Subscribe(nil, mqttv5.QoS1)
+		assert.NoError(t, err)
 	})
 
-	t.Run("handler with subscribe qos overrides default", func(t *testing.T) {
+	t.Run("all handlers use default qos", func(t *testing.T) {
+		addr, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		client, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("sub-default"))
+		require.NoError(t, err)
+		defer client.Close()
+
+		r := New()
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/a"))
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/b"))
+
+		err = r.Subscribe(client, mqttv5.QoS1)
+		assert.NoError(t, err)
+	})
+
+	t.Run("per topic subscribe qos", func(t *testing.T) {
+		addr, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		client, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("sub-per-topic"))
+		require.NoError(t, err)
+		defer client.Close()
+
+		r := New()
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/a"), WithSubscribeQoS(mqttv5.QoS0))
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/b"), WithSubscribeQoS(mqttv5.QoS1))
+
+		err = r.Subscribe(client, mqttv5.QoS2)
+		assert.NoError(t, err)
+	})
+
+	t.Run("mixed handlers with and without subscribe qos", func(t *testing.T) {
+		addr, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		client, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("sub-mixed"))
+		require.NoError(t, err)
+		defer client.Close()
+
 		r := New()
 		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/a"), WithSubscribeQoS(mqttv5.QoS0))
 		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/b"))
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/c"), WithSubscribeQoS(mqttv5.QoS2))
 
-		filters := r.Filters()
-		assert.Len(t, filters, 2)
-
-		perTopicQoS := r.FiltersWithQoS()
-		assert.Len(t, perTopicQoS, 1)
-		assert.Equal(t, mqttv5.QoS0, perTopicQoS["topic/a"])
-
-		// "topic/a" gets QoS0 from WithSubscribeQoS
-		// "topic/b" would get defaultQoS (not in perTopicQoS)
+		err = r.Subscribe(client, mqttv5.QoS1)
+		assert.NoError(t, err)
 	})
 }
