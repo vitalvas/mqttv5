@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/vitalvas/mqttv5/compare/v0.3.1...v0.4.0) (2026-03-08)
+
+
+### Features
+
+* add client inflight message inspection and fix Server.Clients namespace bug ([e67fc8d](https://github.com/vitalvas/mqttv5/commit/e67fc8d2f38bd34fac628a319e784e725fa0922e))
+* add per-topic subscription QoS to router ([3edc862](https://github.com/vitalvas/mqttv5/commit/3edc8621eba85b64ce99ee9f99aeb14fe9196765))
+
+
+### Bug Fixes
+
+* add integration tests for router Subscribe with real MQTT client ([87f115f](https://github.com/vitalvas/mqttv5/commit/87f115f9d24bbfae652c67f61f5c04ab7af6c2cd))
+
 ## [0.3.1](https://github.com/vitalvas/mqttv5/compare/v0.3.0...v0.3.1) (2026-03-08)
 
 
