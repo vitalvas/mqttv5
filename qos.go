@@ -203,6 +203,18 @@ func (t *QoS1Tracker) Count() int {
 	return len(t.messages)
 }
 
+// Messages returns a copy of all tracked QoS 1 messages.
+func (t *QoS1Tracker) Messages() []*QoS1Message {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	msgs := make([]*QoS1Message, 0, len(t.messages))
+	for _, msg := range t.messages {
+		msgs = append(msgs, msg)
+	}
+	return msgs
+}
+
 // CleanupExpired removes messages that have exceeded max retries.
 // Returns the number of removed messages.
 func (t *QoS1Tracker) CleanupExpired() int {
@@ -424,6 +436,18 @@ func (t *QoS2Tracker) Count() int {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return len(t.messages)
+}
+
+// Messages returns a copy of all tracked QoS 2 messages.
+func (t *QoS2Tracker) Messages() []*QoS2Message {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	msgs := make([]*QoS2Message, 0, len(t.messages))
+	for _, msg := range t.messages {
+		msgs = append(msgs, msg)
+	}
+	return msgs
 }
 
 // CleanupCompleted removes completed packet IDs older than the retry timeout.

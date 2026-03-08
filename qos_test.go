@@ -428,6 +428,79 @@ func TestQoS2TrackerPubrelRetransmission(t *testing.T) {
 	})
 }
 
+func TestQoS1TrackerMessages(t *testing.T) {
+	t.Run("empty tracker", func(t *testing.T) {
+		tracker := NewQoS1Tracker(time.Second, 3)
+		msgs := tracker.Messages()
+		assert.Empty(t, msgs)
+	})
+
+	t.Run("returns all tracked messages", func(t *testing.T) {
+		tracker := NewQoS1Tracker(time.Second, 3)
+		tracker.Track(1, &Message{Topic: "topic/a", Payload: []byte("a")})
+		tracker.Track(2, &Message{Topic: "topic/b", Payload: []byte("b")})
+		tracker.Track(3, &Message{Topic: "topic/c", Payload: []byte("c")})
+
+		msgs := tracker.Messages()
+		assert.Len(t, msgs, 3)
+
+		topics := make(map[string]struct{})
+		for _, msg := range msgs {
+			topics[msg.Message.Topic] = struct{}{}
+		}
+		assert.Contains(t, topics, "topic/a")
+		assert.Contains(t, topics, "topic/b")
+		assert.Contains(t, topics, "topic/c")
+	})
+
+	t.Run("does not include acknowledged", func(t *testing.T) {
+		tracker := NewQoS1Tracker(time.Second, 3)
+		tracker.Track(1, &Message{Topic: "topic/a"})
+		tracker.Track(2, &Message{Topic: "topic/b"})
+		tracker.Acknowledge(1)
+
+		msgs := tracker.Messages()
+		assert.Len(t, msgs, 1)
+		assert.Equal(t, "topic/b", msgs[0].Message.Topic)
+	})
+}
+
+func TestQoS2TrackerMessages(t *testing.T) {
+	t.Run("empty tracker", func(t *testing.T) {
+		tracker := NewQoS2Tracker(time.Second, 3)
+		msgs := tracker.Messages()
+		assert.Empty(t, msgs)
+	})
+
+	t.Run("returns all tracked messages", func(t *testing.T) {
+		tracker := NewQoS2Tracker(time.Second, 3)
+		tracker.TrackSend(1, &Message{Topic: "topic/a"})
+		tracker.TrackReceive(2, &Message{Topic: "topic/b"})
+
+		msgs := tracker.Messages()
+		assert.Len(t, msgs, 2)
+
+		topics := make(map[string]struct{})
+		for _, msg := range msgs {
+			topics[msg.Message.Topic] = struct{}{}
+		}
+		assert.Contains(t, topics, "topic/a")
+		assert.Contains(t, topics, "topic/b")
+	})
+
+	t.Run("does not include completed", func(t *testing.T) {
+		tracker := NewQoS2Tracker(time.Second, 3)
+		tracker.TrackSend(1, &Message{Topic: "topic/a"})
+		tracker.TrackSend(2, &Message{Topic: "topic/b"})
+		tracker.HandlePubrec(1)
+		tracker.HandlePubcomp(1)
+
+		msgs := tracker.Messages()
+		assert.Len(t, msgs, 1)
+		assert.Equal(t, "topic/b", msgs[0].Message.Topic)
+	})
+}
+
 func TestQoS2TrackerCleanupCompleted(t *testing.T) {
 	t.Run("CleanupCompleted removes old entries", func(t *testing.T) {
 		tracker := NewQoS2Tracker(10*time.Millisecond, 3)

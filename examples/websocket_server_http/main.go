@@ -52,7 +52,7 @@ func run() error {
 	mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
 		response := map[string]any{
 			"connected_clients": srv.ClientCount(),
-			"client_ids":        srv.Clients(),
+			"clients":           srv.Clients(),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)

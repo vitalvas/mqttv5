@@ -5975,3 +5975,62 @@ func TestClientUnsubscribeWriteFailure(t *testing.T) {
 	// Verify cleanup: packet ID released
 	assert.Equal(t, 0, c.packetIDMgr.InUse(), "packet ID should be released on write failure")
 }
+
+func TestClientInflightMessages(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty inflight", func(t *testing.T) {
+		c := &Client{
+			qos1Tracker: NewQoS1Tracker(time.Second, 3),
+			qos2Tracker: NewQoS2Tracker(time.Second, 3),
+		}
+
+		assert.Empty(t, c.InflightQoS1())
+		assert.Empty(t, c.InflightQoS2())
+	})
+
+	t.Run("returns qos1 inflight messages", func(t *testing.T) {
+		c := &Client{
+			qos1Tracker: NewQoS1Tracker(time.Second, 3),
+			qos2Tracker: NewQoS2Tracker(time.Second, 3),
+		}
+
+		c.qos1Tracker.Track(1, &Message{Topic: "topic/a", Payload: []byte("a")})
+		c.qos1Tracker.Track(2, &Message{Topic: "topic/b", Payload: []byte("b")})
+
+		msgs := c.InflightQoS1()
+		assert.Len(t, msgs, 2)
+		assert.Empty(t, c.InflightQoS2())
+	})
+
+	t.Run("returns qos2 inflight messages", func(t *testing.T) {
+		c := &Client{
+			qos1Tracker: NewQoS1Tracker(time.Second, 3),
+			qos2Tracker: NewQoS2Tracker(time.Second, 3),
+		}
+
+		c.qos2Tracker.TrackSend(1, &Message{Topic: "topic/a"})
+		c.qos2Tracker.TrackReceive(2, &Message{Topic: "topic/b"})
+
+		assert.Empty(t, c.InflightQoS1())
+		msgs := c.InflightQoS2()
+		assert.Len(t, msgs, 2)
+	})
+
+	t.Run("returns both qos1 and qos2", func(t *testing.T) {
+		c := &Client{
+			qos1Tracker: NewQoS1Tracker(time.Second, 3),
+			qos2Tracker: NewQoS2Tracker(time.Second, 3),
+		}
+
+		c.qos1Tracker.Track(1, &Message{Topic: "qos1/a"})
+		c.qos2Tracker.TrackSend(2, &Message{Topic: "qos2/a"})
+
+		qos1 := c.InflightQoS1()
+		qos2 := c.InflightQoS2()
+		assert.Len(t, qos1, 1)
+		assert.Len(t, qos2, 1)
+		assert.Equal(t, "qos1/a", qos1[0].Message.Topic)
+		assert.Equal(t, "qos2/a", qos2[0].Message.Topic)
+	})
+}

@@ -13,7 +13,7 @@ subscriptions at runtime.
 
 | Method | Description |
 |--------|-------------|
-| `Clients(namespaces ...string)` | List connected client IDs (filtered by namespaces if provided) |
+| `Clients(namespaces ...string)` | List connected clients as `[]ClientIdentifier` with `Namespace` and `ClientID` fields |
 | `ClientCount(namespaces ...string)` | Number of connected clients (filtered by namespaces if provided) |
 | `ClientsInfo(namespaces ...string)` | All clients with connection info and stats (filtered if provided) |
 | `GetClientInfo(namespace, clientID)` | Connection info for a specific client |

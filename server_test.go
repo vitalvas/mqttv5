@@ -2961,7 +2961,7 @@ func TestMultiTenantNamespaceIsolation(t *testing.T) {
 		assert.Equal(t, 2, len(srv.clients))
 	})
 
-	t.Run("Clients returns all clientIDs including duplicates across namespaces", func(t *testing.T) {
+	t.Run("Clients returns all clients with namespace info", func(t *testing.T) {
 		srv := NewServer()
 		defer srv.Close()
 
@@ -2975,17 +2975,12 @@ func TestMultiTenantNamespaceIsolation(t *testing.T) {
 		srv.clients[NamespaceKey("tenant-a", "unique-client")] = clientC
 		srv.mu.Unlock()
 
-		clientIDs := srv.Clients()
-		assert.Len(t, clientIDs, 3)
+		clients := srv.Clients()
+		assert.Len(t, clients, 3)
 
-		// Count occurrences of "shared-client"
-		sharedCount := 0
-		for _, id := range clientIDs {
-			if id == "shared-client" {
-				sharedCount++
-			}
-		}
-		assert.Equal(t, 2, sharedCount, "should have 2 clients with same ID from different namespaces")
+		assert.Contains(t, clients, ClientIdentifier{Namespace: "tenant-a", ClientID: "shared-client"})
+		assert.Contains(t, clients, ClientIdentifier{Namespace: "tenant-b", ClientID: "shared-client"})
+		assert.Contains(t, clients, ClientIdentifier{Namespace: "tenant-a", ClientID: "unique-client"})
 	})
 
 	t.Run("ClientsInfo provides namespace info", func(t *testing.T) {

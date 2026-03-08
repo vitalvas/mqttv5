@@ -675,6 +675,16 @@ func (c *Client) ClientID() string {
 	return c.options.clientID
 }
 
+// InflightQoS1 returns all in-flight QoS 1 messages awaiting acknowledgment.
+func (c *Client) InflightQoS1() []*QoS1Message {
+	return c.qos1Tracker.Messages()
+}
+
+// InflightQoS2 returns all in-flight QoS 2 messages in the publish flow.
+func (c *Client) InflightQoS2() []*QoS2Message {
+	return c.qos2Tracker.Messages()
+}
+
 // Publish sends a message to the broker.
 func (c *Client) Publish(msg *Message) error {
 	if c.closed.Load() {

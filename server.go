@@ -576,18 +576,24 @@ func (s *Server) Namespaces() []string {
 
 // Clients returns a list of connected client IDs.
 // If namespaces are provided, only clients in those namespaces are returned.
-func (s *Server) Clients(namespaces ...string) []string {
+// ClientIdentifier represents a connected client with its namespace and client ID.
+type ClientIdentifier struct {
+	Namespace string `json:"namespace"`
+	ClientID  string `json:"client_id"`
+}
+
+func (s *Server) Clients(namespaces ...string) []ClientIdentifier {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	filter := namespaceSet(namespaces)
-	ids := make([]string, 0, len(s.clients))
+	ids := make([]ClientIdentifier, 0, len(s.clients))
 	for key := range s.clients {
 		ns, clientID := ParseNamespaceKey(key)
 		if filter != nil && !filter[ns] {
 			continue
 		}
-		ids = append(ids, clientID)
+		ids = append(ids, ClientIdentifier{Namespace: ns, ClientID: clientID})
 	}
 	return ids
 }
