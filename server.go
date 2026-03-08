@@ -981,6 +981,11 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 	conn := client.Conn()
 
 	defer func() {
+		// Remove client from server map first so that introspection methods
+		// (ClientsInfo, ClientCount, etc.) no longer include this client
+		// when the OnDisconnect callback fires.
+		s.removeClient(clientKey, client)
+
 		// Metrics and logging
 		s.config.metrics.ConnectionClosed()
 		logger.Info("client disconnected", nil)
@@ -1013,9 +1018,6 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 				s.config.sessionStore.Delete(namespace, clientID)
 			}
 		}
-
-		// Pass client pointer to prevent race condition with new connections
-		s.removeClient(clientKey, client)
 	}()
 
 	for {
