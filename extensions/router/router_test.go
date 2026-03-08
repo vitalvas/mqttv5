@@ -589,3 +589,99 @@ func TestRouterConcurrentAccess(t *testing.T) {
 
 	assert.Equal(t, 10, r.Len())
 }
+
+func TestRouterSubscribeNoFilters(t *testing.T) {
+	r := New()
+	// Register handler without topic filter
+	r.Handle(func(_ *mqttv5.Message) {})
+
+	err := r.Subscribe(nil, mqttv5.QoS1)
+	assert.NoError(t, err)
+}
+
+func TestRouterFiltersWithQoS(t *testing.T) {
+	t.Run("handler with subscribe qos", func(t *testing.T) {
+		r := New()
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/a"), WithSubscribeQoS(mqttv5.QoS0))
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/b"), WithSubscribeQoS(mqttv5.QoS1))
+
+		result := r.FiltersWithQoS()
+		assert.Len(t, result, 2)
+		assert.Equal(t, mqttv5.QoS0, result["topic/a"])
+		assert.Equal(t, mqttv5.QoS1, result["topic/b"])
+	})
+
+	t.Run("handler without subscribe qos is skipped", func(t *testing.T) {
+		r := New()
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/a"))
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/b"), WithSubscribeQoS(mqttv5.QoS1))
+
+		result := r.FiltersWithQoS()
+		assert.Len(t, result, 1)
+		assert.Equal(t, mqttv5.QoS1, result["topic/b"])
+	})
+
+	t.Run("same filter different qos keeps highest", func(t *testing.T) {
+		r := New()
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/a"), WithSubscribeQoS(mqttv5.QoS0))
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/a"), WithSubscribeQoS(mqttv5.QoS2))
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/a"), WithSubscribeQoS(mqttv5.QoS1))
+
+		result := r.FiltersWithQoS()
+		assert.Len(t, result, 1)
+		assert.Equal(t, mqttv5.QoS2, result["topic/a"])
+	})
+
+	t.Run("handler without topic filter is skipped", func(t *testing.T) {
+		r := New()
+		r.Handle(func(_ *mqttv5.Message) {}, WithSubscribeQoS(mqttv5.QoS1))
+
+		result := r.FiltersWithQoS()
+		assert.Empty(t, result)
+	})
+
+	t.Run("mixed handlers merge correctly", func(t *testing.T) {
+		r := New()
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/a"), WithSubscribeQoS(mqttv5.QoS0))
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/b"))
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/c"), WithSubscribeQoS(mqttv5.QoS2))
+
+		result := r.FiltersWithQoS()
+		assert.Len(t, result, 2)
+		assert.Equal(t, mqttv5.QoS0, result["topic/a"])
+		assert.Equal(t, mqttv5.QoS2, result["topic/c"])
+	})
+}
+
+func TestRouterSubscribeWithPerTopicQoS(t *testing.T) {
+	t.Run("handler without subscribe qos uses default", func(t *testing.T) {
+		r := New()
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/a"))
+
+		// Cannot call Subscribe without a real client, but we can verify
+		// the filter map logic through FiltersWithQoS + Filters
+		filters := r.Filters()
+		assert.Len(t, filters, 1)
+
+		perTopicQoS := r.FiltersWithQoS()
+		assert.Empty(t, perTopicQoS)
+
+		// "topic/a" is not in perTopicQoS, so it would get defaultQoS
+	})
+
+	t.Run("handler with subscribe qos overrides default", func(t *testing.T) {
+		r := New()
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/a"), WithSubscribeQoS(mqttv5.QoS0))
+		r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/b"))
+
+		filters := r.Filters()
+		assert.Len(t, filters, 2)
+
+		perTopicQoS := r.FiltersWithQoS()
+		assert.Len(t, perTopicQoS, 1)
+		assert.Equal(t, mqttv5.QoS0, perTopicQoS["topic/a"])
+
+		// "topic/a" gets QoS0 from WithSubscribeQoS
+		// "topic/b" would get defaultQoS (not in perTopicQoS)
+	})
+}

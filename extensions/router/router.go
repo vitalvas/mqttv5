@@ -21,6 +21,7 @@ type Condition struct {
 	topicFilter         *string
 	namespace           *string
 	qos                 *byte
+	subscribeQoS        *byte
 	contentTypeRegexp   *regexp.Regexp
 	clientIDRegexp      *regexp.Regexp
 	responseTopicRegexp *regexp.Regexp
@@ -42,6 +43,15 @@ func WithTopic(filter string) ConditionOption {
 func WithNamespace(namespace string) ConditionOption {
 	return func(c *Condition) {
 		c.namespace = &namespace
+	}
+}
+
+// WithSubscribeQoS sets the subscription QoS for this handler's topic filter.
+// This controls the QoS used in the SUBSCRIBE packet, separate from WithQoS
+// which filters incoming messages by QoS level.
+func WithSubscribeQoS(qos byte) ConditionOption {
+	return func(c *Condition) {
+		c.subscribeQoS = &qos
 	}
 }
 
@@ -211,6 +221,29 @@ func (r *Router) Filters() []string {
 	return filters
 }
 
+// FiltersWithQoS returns a map of topic filters to their subscription QoS levels.
+// Only handlers with WithSubscribeQoS set are included. If multiple handlers
+// register the same filter with different QoS, the highest QoS is kept.
+func (r *Router) FiltersWithQoS() map[string]byte {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	result := make(map[string]byte)
+	for _, reg := range r.handlers {
+		if reg.condition.topicFilter == nil || reg.condition.subscribeQoS == nil {
+			continue
+		}
+
+		filter := *reg.condition.topicFilter
+		qos := *reg.condition.subscribeQoS
+
+		if existing, ok := result[filter]; !ok || qos > existing {
+			result[filter] = qos
+		}
+	}
+	return result
+}
+
 // Len returns the number of registered handlers.
 func (r *Router) Len() int {
 	r.mu.RLock()
@@ -231,4 +264,28 @@ func (r *Router) MessageHandler() mqttv5.MessageHandler {
 	return func(msg *mqttv5.Message) {
 		r.Route(msg)
 	}
+}
+
+// Subscribe subscribes to all registered topic filters on the given client.
+// Handlers with WithSubscribeQoS use their specified QoS; others use defaultQoS.
+// All filters are subscribed in a single SubscribeMultiple call, with the
+// router's MessageHandler as the callback.
+func (r *Router) Subscribe(client *mqttv5.Client, defaultQoS byte) error {
+	filters := r.Filters()
+	if len(filters) == 0 {
+		return nil
+	}
+
+	perTopicQoS := r.FiltersWithQoS()
+
+	filterMap := make(map[string]byte, len(filters))
+	for _, f := range filters {
+		if qos, ok := perTopicQoS[f]; ok {
+			filterMap[f] = qos
+		} else {
+			filterMap[f] = defaultQoS
+		}
+	}
+
+	return client.SubscribeMultiple(filterMap, r.MessageHandler())
 }

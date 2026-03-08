@@ -84,6 +84,35 @@ r.Handle(handler, router.WithTopic("data/#"), router.WithNamespace("tenant-123")
 r.Handle(handler)
 ```
 
+### Per-Topic Subscription QoS
+
+Use `WithSubscribeQoS` to set different QoS levels per topic filter in the SUBSCRIBE packet. Handlers without `WithSubscribeQoS` fall back to the default QoS passed to `Subscribe`.
+
+```go
+r := router.New()
+
+r.Handle(handleTask,
+    router.WithTopic("down/probe-1/measurement/task"),
+    router.WithSubscribeQoS(mqttv5.QoS0),
+)
+r.Handle(handleCommand,
+    router.WithTopic("down/probe-1/system/command"),
+    router.WithSubscribeQoS(mqttv5.QoS1),
+)
+// This handler has no WithSubscribeQoS, so it uses the default (QoS1)
+r.Handle(handleStatus,
+    router.WithTopic("down/probe-1/status/#"),
+)
+
+if err := r.Subscribe(client, mqttv5.QoS1); err != nil {
+    log.Printf("failed to subscribe: %v", err)
+}
+```
+
+If multiple handlers register the same topic filter with different QoS, the highest QoS is used.
+
+Use `FiltersWithQoS()` to get the filter-to-QoS map directly (only includes handlers with `WithSubscribeQoS` set).
+
 ### With MQTT Client
 
 ```go
@@ -144,6 +173,8 @@ type ConditionOption func(*Condition)
 | `Handle(handler, opts...)` | Register handler with conditions |
 | `Route(msg)` | Dispatch to all matching handlers |
 | `Filters() []string` | List registered topic filters |
+| `FiltersWithQoS() map[string]byte` | Topic filters with per-handler subscription QoS |
+| `Subscribe(client, defaultQoS)` | Subscribe to all filters with per-topic or default QoS |
 | `Len() int` | Number of registered handlers |
 | `Clear()` | Remove all handlers |
 | `MessageHandler()` | Returns `mqttv5.MessageHandler` for client |
@@ -154,7 +185,8 @@ type ConditionOption func(*Condition)
 |--------|-----------|-------------|
 | `WithTopic` | `string` | Topic filter with MQTT wildcards |
 | `WithNamespace` | `string` | Namespace for multi-tenancy |
-| `WithQoS` | `byte` | QoS level (0, 1, 2) |
+| `WithQoS` | `byte` | Filter incoming messages by QoS level |
+| `WithSubscribeQoS` | `byte` | Subscription QoS for SUBSCRIBE packet |
 | `WithContentType` | `*regexp.Regexp` | Content type pattern |
 | `WithClientID` | `*regexp.Regexp` | Client ID pattern |
 | `WithResponseTopic` | `*regexp.Regexp` | Response topic pattern |
