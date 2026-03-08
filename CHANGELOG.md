@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/vitalvas/mqttv5/compare/v0.3.0...v0.3.1) (2026-03-08)
+
+
+### Bug Fixes
+
+* remove client from map before OnDisconnect callback fires ([02eecfa](https://github.com/vitalvas/mqttv5/commit/02eecfad7e16b4a0348ca11a59a4fd56806ccf53))
+
 ## [0.3.0](https://github.com/vitalvas/mqttv5/compare/v0.2.0...v0.3.0) (2026-03-07)
 
 
