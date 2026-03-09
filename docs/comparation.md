@@ -119,7 +119,7 @@ This document compares the mqttv5 library with other popular open-source MQTT br
 |---------|--------|-----------|------|---------|--------|-----------|----------|------|
 | expvar Metrics | Yes | No | No | No | No | No | No | No |
 | Prometheus | Pluggable | Plugin | Yes | Yes | Yes | Plugin | Yes | Yes |
-| $SYS Topics | No | Yes | Yes | Yes | Yes | Yes | No | No |
+| $SYS Topics | Yes | Yes | Yes | Yes | Yes | Yes | No | No |
 | HTTP API | Pluggable | No | Yes | Yes | Yes | Plugin | Yes | Yes |
 | Dashboard | No | No | Yes | No | No | Enterprise | Yes | No |
 | Connection Metrics | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -166,7 +166,6 @@ This section highlights MQTT-related features available in other brokers that ar
 | Feature | Available In | Description |
 |---------|--------------|-------------|
 | MQTT 3.1.1 | All others | Legacy protocol version for older clients |
-| $SYS Topics | Mosquitto, EMQX, VerneMQ, NanoMQ, HiveMQ CE | System topics for broker statistics |
 | Native Clustering | EMQX, VerneMQ, HiveMQ (Enterprise) | Built-in distributed broker clustering |
 | Session Replication | EMQX, VerneMQ, HiveMQ (Enterprise) | Replicate client sessions across nodes |
 | Delayed Messages | EMQX, HiveMQ (Enterprise) | Schedule MQTT message delivery for future time |
@@ -179,7 +178,6 @@ This section highlights MQTT-related features available in other brokers that ar
 
 **May be added in future:**
 
-- $SYS topics for broker statistics
 - Offline message queuing
 - Delayed message delivery
 - Banned clients list

@@ -283,6 +283,7 @@ type Server struct {
 	running      atomic.Bool
 	done         chan struct{}
 	wg           sync.WaitGroup
+	startedAt    time.Time
 }
 
 // boolToByte converts a boolean to a byte (0 or 1) for MQTT properties.
@@ -320,6 +321,7 @@ func NewServer(opts ...ServerOption) *Server {
 		keepAlive:    ka,
 		wills:        NewWillManager(),
 		done:         make(chan struct{}),
+		startedAt:    time.Now(),
 	}
 }
 
@@ -429,6 +431,124 @@ func (s *Server) Close() error {
 // Metrics returns the server's metrics collector.
 func (s *Server) Metrics() MetricsCollector {
 	return s.config.metrics
+}
+
+// StartedAt returns the time when the server was created.
+func (s *Server) StartedAt() time.Time {
+	return s.startedAt
+}
+
+// metricsReader returns the MetricsReader if the configured metrics support it.
+func (s *Server) metricsReader() MetricsReader {
+	if r, ok := s.config.metrics.(MetricsReader); ok {
+		return r
+	}
+
+	return nil
+}
+
+// Connections returns the current number of active connections.
+func (s *Server) Connections() int64 {
+	if r := s.metricsReader(); r != nil {
+		return r.Connections()
+	}
+
+	return 0
+}
+
+// ConnectionsTotal returns the total number of connections since start.
+func (s *Server) ConnectionsTotal() int64 {
+	if r := s.metricsReader(); r != nil {
+		return r.ConnectionsTotal()
+	}
+
+	return 0
+}
+
+// MaxConnections returns the peak concurrent connection count.
+func (s *Server) MaxConnections() int64 {
+	if r := s.metricsReader(); r != nil {
+		return r.MaxConnections()
+	}
+
+	return 0
+}
+
+// Subscriptions returns the current number of active subscriptions.
+func (s *Server) Subscriptions() int64 {
+	if r := s.metricsReader(); r != nil {
+		return r.Subscriptions()
+	}
+
+	return 0
+}
+
+// RetainedMessages returns the current number of retained messages.
+func (s *Server) RetainedMessages() int64 {
+	if r := s.metricsReader(); r != nil {
+		return r.RetainedMessages()
+	}
+
+	return 0
+}
+
+// TotalBytesReceived returns total bytes received.
+func (s *Server) TotalBytesReceived() int64 {
+	if r := s.metricsReader(); r != nil {
+		return r.TotalBytesReceived()
+	}
+
+	return 0
+}
+
+// TotalBytesSent returns total bytes sent.
+func (s *Server) TotalBytesSent() int64 {
+	if r := s.metricsReader(); r != nil {
+		return r.TotalBytesSent()
+	}
+
+	return 0
+}
+
+// TotalMessagesReceived returns total messages received for a QoS level.
+func (s *Server) TotalMessagesReceived(qos byte) int64 {
+	if r := s.metricsReader(); r != nil {
+		return r.TotalMessagesReceived(qos)
+	}
+
+	return 0
+}
+
+// TotalMessagesSent returns total messages sent for a QoS level.
+func (s *Server) TotalMessagesSent(qos byte) int64 {
+	if r := s.metricsReader(); r != nil {
+		return r.TotalMessagesSent(qos)
+	}
+
+	return 0
+}
+
+// PacketsReceived returns the packet count for a type.
+func (s *Server) PacketsReceived(packetType PacketType) int64 {
+	if r := s.metricsReader(); r != nil {
+		return r.PacketsReceived(packetType)
+	}
+
+	return 0
+}
+
+// PacketsSent returns the packet count for a type.
+func (s *Server) PacketsSent(packetType PacketType) int64 {
+	if r := s.metricsReader(); r != nil {
+		return r.PacketsSent(packetType)
+	}
+
+	return 0
+}
+
+// TopicCount returns the number of tracked topics.
+func (s *Server) TopicCount() int64 {
+	return int64(s.topicMetrics.TopicCount(""))
 }
 
 // Publish sends a message to all matching subscribers.

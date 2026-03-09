@@ -70,6 +70,7 @@ const (
 type Metrics struct {
 	connections      *expvar.Int
 	connectionsTotal *expvar.Int
+	maxConnections   atomic.Int64
 	subscriptions    *expvar.Int
 	retainedMessages *expvar.Int
 	bytesReceived    *expvar.Int
@@ -131,6 +132,14 @@ func NewMetrics() *Metrics {
 func (m *Metrics) ConnectionOpened() {
 	m.connections.Add(1)
 	m.connectionsTotal.Add(1)
+
+	current := m.connections.Value()
+	for {
+		old := m.maxConnections.Load()
+		if current <= old || m.maxConnections.CompareAndSwap(old, current) {
+			break
+		}
+	}
 }
 
 // ConnectionClosed records a closed connection.
@@ -146,6 +155,39 @@ func (m *Metrics) Connections() int64 {
 // ConnectionsTotal returns the total connection count.
 func (m *Metrics) ConnectionsTotal() int64 {
 	return m.connectionsTotal.Value()
+}
+
+// MaxConnections returns the peak concurrent connection count.
+func (m *Metrics) MaxConnections() int64 {
+	return m.maxConnections.Load()
+}
+
+// TotalBytesReceived returns total bytes received.
+func (m *Metrics) TotalBytesReceived() int64 {
+	return m.bytesReceived.Value()
+}
+
+// TotalBytesSent returns total bytes sent.
+func (m *Metrics) TotalBytesSent() int64 {
+	return m.bytesSent.Value()
+}
+
+// TotalMessagesReceived returns the total received message count for a QoS level.
+func (m *Metrics) TotalMessagesReceived(qos byte) int64 {
+	if qos > 2 {
+		qos = 2
+	}
+
+	return m.messagesReceived[qos].Value()
+}
+
+// TotalMessagesSent returns the total sent message count for a QoS level.
+func (m *Metrics) TotalMessagesSent(qos byte) int64 {
+	if qos > 2 {
+		qos = 2
+	}
+
+	return m.messagesSent[qos].Value()
 }
 
 // MessageReceived records a received message.
@@ -246,6 +288,30 @@ func (m *Metrics) PacketSent(packetType PacketType) {
 	counter.Add(1)
 }
 
+// PacketsReceived returns the packet count for a type.
+func (m *Metrics) PacketsReceived(packetType PacketType) int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if counter, ok := m.packetsReceived[packetType]; ok {
+		return counter.Value()
+	}
+
+	return 0
+}
+
+// PacketsSent returns the packet count for a type.
+func (m *Metrics) PacketsSent(packetType PacketType) int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if counter, ok := m.packetsSent[packetType]; ok {
+		return counter.Value()
+	}
+
+	return 0
+}
+
 // BridgeForwardedToLocal records a message forwarded to local broker.
 func (m *Metrics) BridgeForwardedToLocal() {
 	m.bridgeForwardedToLocal.Add(1)
@@ -336,6 +402,21 @@ func (n *NoOpMetrics) ConnectionRateLimited() {}
 // MessageRateLimited does nothing.
 func (n *NoOpMetrics) MessageRateLimited() {}
 
+// MetricsReader defines the read-only interface for querying metric values.
+type MetricsReader interface {
+	Connections() int64
+	ConnectionsTotal() int64
+	MaxConnections() int64
+	Subscriptions() int64
+	RetainedMessages() int64
+	TotalBytesReceived() int64
+	TotalBytesSent() int64
+	TotalMessagesReceived(qos byte) int64
+	TotalMessagesSent(qos byte) int64
+	PacketsReceived(packetType PacketType) int64
+	PacketsSent(packetType PacketType) int64
+}
+
 // MetricsCollector defines the interface for metrics collection.
 type MetricsCollector interface {
 	ConnectionOpened()
@@ -363,6 +444,7 @@ type MetricsCollector interface {
 type MemoryMetrics struct {
 	connections      atomic.Int64
 	connectionsTotal atomic.Int64
+	maxConnections   atomic.Int64
 	subscriptions    atomic.Int64
 	retainedMessages atomic.Int64
 	bytesReceived    atomic.Int64
@@ -406,8 +488,15 @@ func NewMemoryMetrics() *MemoryMetrics {
 
 // ConnectionOpened records a new connection.
 func (m *MemoryMetrics) ConnectionOpened() {
-	m.connections.Add(1)
+	current := m.connections.Add(1)
 	m.connectionsTotal.Add(1)
+
+	for {
+		old := m.maxConnections.Load()
+		if current <= old || m.maxConnections.CompareAndSwap(old, current) {
+			break
+		}
+	}
 }
 
 // ConnectionClosed records a closed connection.
@@ -423,6 +512,11 @@ func (m *MemoryMetrics) Connections() int64 {
 // ConnectionsTotal returns the total connection count.
 func (m *MemoryMetrics) ConnectionsTotal() int64 {
 	return m.connectionsTotal.Load()
+}
+
+// MaxConnections returns the peak concurrent connection count.
+func (m *MemoryMetrics) MaxConnections() int64 {
+	return m.maxConnections.Load()
 }
 
 // MessageReceived records a received message.
@@ -455,6 +549,16 @@ func (m *MemoryMetrics) MessagesSent(qos byte) int64 {
 		qos = 2
 	}
 	return m.messagesSent[qos].Load()
+}
+
+// TotalMessagesReceived returns the total received message count for a QoS level.
+func (m *MemoryMetrics) TotalMessagesReceived(qos byte) int64 {
+	return m.MessagesReceived(qos)
+}
+
+// TotalMessagesSent returns the total sent message count for a QoS level.
+func (m *MemoryMetrics) TotalMessagesSent(qos byte) int64 {
+	return m.MessagesSent(qos)
 }
 
 // BytesReceived records received bytes.

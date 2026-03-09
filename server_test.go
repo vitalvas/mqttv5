@@ -9641,3 +9641,59 @@ func BenchmarkPingPong(b *testing.B) {
 		}
 	}
 }
+
+func TestServerMetricForwarding(t *testing.T) {
+	t.Run("with metrics reader", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+
+		metrics := NewMemoryMetrics()
+		srv := NewServer(WithListener(listener), WithMetrics(metrics))
+
+		metrics.ConnectionOpened()
+		metrics.ConnectionOpened()
+		metrics.ConnectionClosed()
+		metrics.BytesReceived(100)
+		metrics.BytesSent(200)
+		metrics.MessageReceived(0)
+		metrics.MessageSent(1)
+		metrics.SubscriptionAdded()
+		metrics.RetainedMessageSet()
+		metrics.PacketReceived(PacketCONNECT)
+		metrics.PacketSent(PacketCONNACK)
+
+		assert.Equal(t, int64(1), srv.Connections())
+		assert.Equal(t, int64(2), srv.ConnectionsTotal())
+		assert.Equal(t, int64(2), srv.MaxConnections())
+		assert.Equal(t, int64(100), srv.TotalBytesReceived())
+		assert.Equal(t, int64(200), srv.TotalBytesSent())
+		assert.Equal(t, int64(1), srv.TotalMessagesReceived(0))
+		assert.Equal(t, int64(1), srv.TotalMessagesSent(1))
+		assert.Equal(t, int64(1), srv.Subscriptions())
+		assert.Equal(t, int64(1), srv.RetainedMessages())
+		assert.Equal(t, int64(1), srv.PacketsReceived(PacketCONNECT))
+		assert.Equal(t, int64(1), srv.PacketsSent(PacketCONNACK))
+		assert.Equal(t, int64(0), srv.PacketsReceived(PacketDISCONNECT))
+		assert.Equal(t, int64(0), srv.TopicCount())
+	})
+
+	t.Run("without metrics reader", func(t *testing.T) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+
+		srv := NewServer(WithListener(listener), WithMetrics(&NoOpMetrics{}))
+
+		assert.Equal(t, int64(0), srv.Connections())
+		assert.Equal(t, int64(0), srv.ConnectionsTotal())
+		assert.Equal(t, int64(0), srv.MaxConnections())
+		assert.Equal(t, int64(0), srv.TotalBytesReceived())
+		assert.Equal(t, int64(0), srv.TotalBytesSent())
+		assert.Equal(t, int64(0), srv.TotalMessagesReceived(0))
+		assert.Equal(t, int64(0), srv.TotalMessagesSent(1))
+		assert.Equal(t, int64(0), srv.Subscriptions())
+		assert.Equal(t, int64(0), srv.RetainedMessages())
+		assert.Equal(t, int64(0), srv.PacketsReceived(PacketCONNECT))
+		assert.Equal(t, int64(0), srv.PacketsSent(PacketCONNACK))
+		assert.Equal(t, int64(0), srv.TopicCount())
+	})
+}
