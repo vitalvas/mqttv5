@@ -1,6 +1,9 @@
 package mqttv5
 
-import "net"
+import (
+	"crypto/tls"
+	"net"
+)
 
 // Maximum packet size constants for MQTT brokers.
 const (
@@ -23,6 +26,27 @@ type ServerOption func(*serverConfig)
 // Return an error to reject the connection with that namespace.
 type NamespaceValidator func(namespace string) error
 
+// ConnectFailedContext provides information about a failed connection attempt.
+type ConnectFailedContext struct {
+	// ClientID is the client identifier from the CONNECT packet (may be empty).
+	ClientID string
+
+	// Username is the username from the CONNECT packet (may be empty).
+	Username string
+
+	// RemoteAddr is the remote address of the client connection.
+	RemoteAddr net.Addr
+
+	// LocalAddr is the local address of the server connection.
+	LocalAddr net.Addr
+
+	// TLSConnectionState contains the TLS connection state, if available.
+	TLSConnectionState *tls.ConnectionState
+
+	// ReasonCode is the MQTT reason code sent in the CONNACK.
+	ReasonCode ReasonCode
+}
+
 type serverConfig struct {
 	listeners          []net.Listener
 	sessionStore       SessionStore
@@ -40,11 +64,12 @@ type serverConfig struct {
 	keepAliveOverride  uint16
 	topicAliasMax      uint16
 	receiveMaximum     uint16
-	onConnect          func(*ServerClient)
-	onDisconnect       func(*ServerClient)
-	onMessage          func(*ServerClient, *Message)
-	onSubscribe        func(*ServerClient, []Subscription)
-	onUnsubscribe      func(*ServerClient, []string)
+	onConnect          []func(*ServerClient)
+	onConnectFailed    []func(*ConnectFailedContext)
+	onDisconnect       []func(*ServerClient)
+	onMessage          []func(*ServerClient, *Message)
+	onSubscribe        []func(*ServerClient, []Subscription)
+	onUnsubscribe      []func(*ServerClient, []string)
 
 	// Server capabilities (MQTT v5 spec section 3.2.2.3)
 	maxQoS             byte // Maximum QoS level (0, 1, or 2)
@@ -210,38 +235,52 @@ func WithServerReceiveMaximum(maxVal uint16) ServerOption {
 	}
 }
 
-// OnConnect sets the callback for client connections.
-func OnConnect(fn func(*ServerClient)) ServerOption {
+// OnConnect adds callbacks for client connections.
+// Multiple callbacks can be registered; they are called in order.
+func OnConnect(fn ...func(*ServerClient)) ServerOption {
 	return func(c *serverConfig) {
-		c.onConnect = fn
+		c.onConnect = append(c.onConnect, fn...)
 	}
 }
 
-// OnDisconnect sets the callback for client disconnections.
-func OnDisconnect(fn func(*ServerClient)) ServerOption {
+// OnConnectFailed adds callbacks for failed connection attempts.
+// Called when a client connection is rejected (auth failure, max connections, protocol error, etc.).
+// Multiple callbacks can be registered; they are called in order.
+func OnConnectFailed(fn ...func(*ConnectFailedContext)) ServerOption {
 	return func(c *serverConfig) {
-		c.onDisconnect = fn
+		c.onConnectFailed = append(c.onConnectFailed, fn...)
 	}
 }
 
-// OnMessage sets the callback for received messages.
-func OnMessage(fn func(*ServerClient, *Message)) ServerOption {
+// OnDisconnect adds callbacks for client disconnections.
+// Multiple callbacks can be registered; they are called in order.
+func OnDisconnect(fn ...func(*ServerClient)) ServerOption {
 	return func(c *serverConfig) {
-		c.onMessage = fn
+		c.onDisconnect = append(c.onDisconnect, fn...)
 	}
 }
 
-// OnSubscribe sets the callback for subscribe requests.
-func OnSubscribe(fn func(*ServerClient, []Subscription)) ServerOption {
+// OnMessage adds callbacks for received messages.
+// Multiple callbacks can be registered; they are called in order.
+func OnMessage(fn ...func(*ServerClient, *Message)) ServerOption {
 	return func(c *serverConfig) {
-		c.onSubscribe = fn
+		c.onMessage = append(c.onMessage, fn...)
 	}
 }
 
-// OnUnsubscribe sets the callback for unsubscribe requests.
-func OnUnsubscribe(fn func(*ServerClient, []string)) ServerOption {
+// OnSubscribe adds callbacks for subscribe requests.
+// Multiple callbacks can be registered; they are called in order.
+func OnSubscribe(fn ...func(*ServerClient, []Subscription)) ServerOption {
 	return func(c *serverConfig) {
-		c.onUnsubscribe = fn
+		c.onSubscribe = append(c.onSubscribe, fn...)
+	}
+}
+
+// OnUnsubscribe adds callbacks for unsubscribe requests.
+// Multiple callbacks can be registered; they are called in order.
+func OnUnsubscribe(fn ...func(*ServerClient, []string)) ServerOption {
+	return func(c *serverConfig) {
+		c.onUnsubscribe = append(c.onUnsubscribe, fn...)
 	}
 }
 

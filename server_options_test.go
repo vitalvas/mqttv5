@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestServerOptions(t *testing.T) {
@@ -105,9 +106,70 @@ func TestServerOptions(t *testing.T) {
 			called = true
 		})(cfg)
 
-		assert.NotNil(t, cfg.onConnect)
-		cfg.onConnect(nil)
+		require.Len(t, cfg.onConnect, 1)
+		cfg.onConnect[0](nil)
 		assert.True(t, called)
+	})
+
+	t.Run("on connect multiple callbacks", func(t *testing.T) {
+		cfg := defaultServerConfig()
+		var order []int
+		OnConnect(func(_ *ServerClient) { order = append(order, 1) })(cfg)
+		OnConnect(func(_ *ServerClient) { order = append(order, 2) })(cfg)
+
+		require.Len(t, cfg.onConnect, 2)
+		for _, fn := range cfg.onConnect {
+			fn(nil)
+		}
+		assert.Equal(t, []int{1, 2}, order)
+	})
+
+	t.Run("on connect variadic callbacks", func(t *testing.T) {
+		cfg := defaultServerConfig()
+		var order []int
+		OnConnect(
+			func(_ *ServerClient) { order = append(order, 1) },
+			func(_ *ServerClient) { order = append(order, 2) },
+			func(_ *ServerClient) { order = append(order, 3) },
+		)(cfg)
+
+		require.Len(t, cfg.onConnect, 3)
+		for _, fn := range cfg.onConnect {
+			fn(nil)
+		}
+		assert.Equal(t, []int{1, 2, 3}, order)
+	})
+
+	t.Run("on connect failed callback", func(t *testing.T) {
+		cfg := defaultServerConfig()
+		var got *ConnectFailedContext
+		OnConnectFailed(func(ctx *ConnectFailedContext) {
+			got = ctx
+		})(cfg)
+
+		require.Len(t, cfg.onConnectFailed, 1)
+		ctx := &ConnectFailedContext{
+			ClientID:   "test",
+			Username:   "user",
+			ReasonCode: ReasonNotAuthorized,
+		}
+		cfg.onConnectFailed[0](ctx)
+		assert.Equal(t, ctx, got)
+	})
+
+	t.Run("on connect failed variadic callbacks", func(t *testing.T) {
+		cfg := defaultServerConfig()
+		var order []int
+		OnConnectFailed(
+			func(_ *ConnectFailedContext) { order = append(order, 1) },
+			func(_ *ConnectFailedContext) { order = append(order, 2) },
+		)(cfg)
+
+		require.Len(t, cfg.onConnectFailed, 2)
+		for _, fn := range cfg.onConnectFailed {
+			fn(nil)
+		}
+		assert.Equal(t, []int{1, 2}, order)
 	})
 
 	t.Run("on disconnect callback", func(t *testing.T) {
@@ -117,8 +179,8 @@ func TestServerOptions(t *testing.T) {
 			called = true
 		})(cfg)
 
-		assert.NotNil(t, cfg.onDisconnect)
-		cfg.onDisconnect(nil)
+		require.Len(t, cfg.onDisconnect, 1)
+		cfg.onDisconnect[0](nil)
 		assert.True(t, called)
 	})
 
@@ -129,8 +191,8 @@ func TestServerOptions(t *testing.T) {
 			called = true
 		})(cfg)
 
-		assert.NotNil(t, cfg.onMessage)
-		cfg.onMessage(nil, nil)
+		require.Len(t, cfg.onMessage, 1)
+		cfg.onMessage[0](nil, nil)
 		assert.True(t, called)
 	})
 
@@ -141,8 +203,8 @@ func TestServerOptions(t *testing.T) {
 			called = true
 		})(cfg)
 
-		assert.NotNil(t, cfg.onSubscribe)
-		cfg.onSubscribe(nil, nil)
+		require.Len(t, cfg.onSubscribe, 1)
+		cfg.onSubscribe[0](nil, nil)
 		assert.True(t, called)
 	})
 
@@ -153,8 +215,8 @@ func TestServerOptions(t *testing.T) {
 			called = true
 		})(cfg)
 
-		assert.NotNil(t, cfg.onUnsubscribe)
-		cfg.onUnsubscribe(nil, nil)
+		require.Len(t, cfg.onUnsubscribe, 1)
+		cfg.onUnsubscribe[0](nil, nil)
 		assert.True(t, called)
 	})
 

@@ -43,6 +43,7 @@ type authClientResult struct {
 	namespace          string
 	tlsConnectionState *tls.ConnectionState
 	tlsIdentity        *TLSIdentity
+	reasonCode         ReasonCode
 	ok                 bool
 }
 
@@ -60,13 +61,13 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 				ReasonCode: ReasonBadAuthMethod,
 			}
 			WritePacket(conn, connack, maxPacketSize)
-			return authClientResult{}
+			return authClientResult{reasonCode: ReasonBadAuthMethod}
 		}
 
 		// Perform enhanced authentication
 		enhancedResult, ok := s.performEnhancedAuth(conn, connect, clientID, authMethod, maxPacketSize, logger)
 		if !ok {
-			return authClientResult{}
+			return authClientResult{reasonCode: ReasonNotAuthorized}
 		}
 
 		// Convert enhanced auth result to standard auth result for CONNACK properties
@@ -134,7 +135,7 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 				ReasonCode: reasonCode,
 			}
 			WritePacket(conn, connack, maxPacketSize)
-			return authClientResult{}
+			return authClientResult{reasonCode: reasonCode}
 		}
 		logger.Debug("authentication successful", nil)
 		// Default empty namespace to DefaultNamespace
@@ -875,6 +876,12 @@ func (s *Server) Addrs() []net.Addr {
 	return addrs
 }
 
+func (s *Server) fireConnectFailed(ctx *ConnectFailedContext) {
+	for _, fn := range s.config.onConnectFailed {
+		fn(ctx)
+	}
+}
+
 func (s *Server) handleConnection(conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
@@ -924,6 +931,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 				ReasonCode: ReasonServerBusy,
 			}
 			WritePacket(conn, connack, clientMaxPacketSize)
+			s.fireConnectFailed(&ConnectFailedContext{
+				ClientID:           connect.ClientID,
+				Username:           connect.Username,
+				RemoteAddr:         conn.RemoteAddr(),
+				LocalAddr:          conn.LocalAddr(),
+				TLSConnectionState: getTLSConnectionState(conn),
+				ReasonCode:         ReasonServerBusy,
+			})
 			return
 		}
 	}
@@ -939,6 +954,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 				ReasonCode: ReasonClientIDNotValid,
 			}
 			WritePacket(conn, connack, clientMaxPacketSize)
+			s.fireConnectFailed(&ConnectFailedContext{
+				Username:           connect.Username,
+				RemoteAddr:         conn.RemoteAddr(),
+				LocalAddr:          conn.LocalAddr(),
+				TLSConnectionState: getTLSConnectionState(conn),
+				ReasonCode:         ReasonClientIDNotValid,
+			})
 			return
 		}
 		// CleanStart=true with empty ClientID: assign one
@@ -960,6 +982,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 				ReasonCode: ReasonProtocolError,
 			}
 			WritePacket(conn, connack, clientMaxPacketSize)
+			s.fireConnectFailed(&ConnectFailedContext{
+				ClientID:           clientID,
+				Username:           connect.Username,
+				RemoteAddr:         conn.RemoteAddr(),
+				LocalAddr:          conn.LocalAddr(),
+				TLSConnectionState: getTLSConnectionState(conn),
+				ReasonCode:         ReasonProtocolError,
+			})
 			return
 		}
 	}
@@ -971,13 +1001,29 @@ func (s *Server) handleConnection(conn net.Conn) {
 			ReasonCode: ReasonProtocolError,
 		}
 		WritePacket(conn, connack, clientMaxPacketSize)
+		s.fireConnectFailed(&ConnectFailedContext{
+			ClientID:           clientID,
+			Username:           connect.Username,
+			RemoteAddr:         conn.RemoteAddr(),
+			LocalAddr:          conn.LocalAddr(),
+			TLSConnectionState: getTLSConnectionState(conn),
+			ReasonCode:         ReasonProtocolError,
+		})
 		return
 	}
 
 	// Perform authentication (standard or enhanced)
 	authRes := s.authenticateClient(conn, connect, clientID, clientMaxPacketSize, logger)
 	if !authRes.ok {
-		return // Auth failed, connection closed
+		s.fireConnectFailed(&ConnectFailedContext{
+			ClientID:           clientID,
+			Username:           connect.Username,
+			RemoteAddr:         conn.RemoteAddr(),
+			LocalAddr:          conn.LocalAddr(),
+			TLSConnectionState: getTLSConnectionState(conn),
+			ReasonCode:         authRes.reasonCode,
+		})
+		return
 	}
 	authResult := authRes.authResult
 	namespace := authRes.namespace
@@ -998,6 +1044,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 			ReasonCode: ReasonNotAuthorized,
 		}
 		WritePacket(conn, connack, clientMaxPacketSize)
+		s.fireConnectFailed(&ConnectFailedContext{
+			ClientID:           clientID,
+			Username:           connect.Username,
+			RemoteAddr:         conn.RemoteAddr(),
+			LocalAddr:          conn.LocalAddr(),
+			TLSConnectionState: getTLSConnectionState(conn),
+			ReasonCode:         ReasonNotAuthorized,
+		})
 		return
 	}
 
@@ -1071,9 +1125,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 	s.config.metrics.ConnectionOpened()
 	logger.Info("client connected", nil)
 
-	// Callback
-	if s.config.onConnect != nil {
-		s.config.onConnect(client)
+	// Callbacks
+	for _, fn := range s.config.onConnect {
+		fn(client)
 	}
 
 	// Restore subscriptions from session
@@ -1116,9 +1170,9 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 		s.config.metrics.ConnectionClosed()
 		logger.Info("client disconnected", nil)
 
-		// Disconnect callback
-		if s.config.onDisconnect != nil {
-			s.config.onDisconnect(client)
+		// Disconnect callbacks
+		for _, fn := range s.config.onDisconnect {
+			fn(client)
 		}
 
 		// Trigger will if not clean disconnect
@@ -1321,8 +1375,8 @@ func (s *Server) handlePubrel(client *ServerClient, p *PubrelPacket) {
 	}
 
 	if msg != nil && msg.Message != nil {
-		if s.config.onMessage != nil {
-			s.config.onMessage(client, msg.Message)
+		for _, fn := range s.config.onMessage {
+			fn(client, msg.Message)
 		}
 		s.publishToSubscribers(client.ClientID(), msg.Message)
 	}
@@ -1583,9 +1637,9 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 		return
 	}
 
-	// Callback (QoS 0 and 1 only - QoS 2 callback happens on PUBREL)
-	if s.config.onMessage != nil {
-		s.config.onMessage(client, msg)
+	// Callbacks (QoS 0 and 1 only - QoS 2 callback happens on PUBREL)
+	for _, fn := range s.config.onMessage {
+		fn(client, msg)
 	}
 
 	// Publish to subscribers (QoS 0 and 1 only - QoS 2 delivery happens on PUBREL)
@@ -1773,8 +1827,8 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 		}
 	}
 
-	// Callback - only include successful subscriptions
-	if s.config.onSubscribe != nil {
+	// Callbacks - only include successful subscriptions
+	if len(s.config.onSubscribe) > 0 {
 		var grantedSubs []Subscription
 		for i, code := range reasonCodes {
 			if !code.IsError() && i < len(sub.Subscriptions) {
@@ -1782,7 +1836,9 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 			}
 		}
 		if len(grantedSubs) > 0 {
-			s.config.onSubscribe(client, grantedSubs)
+			for _, fn := range s.config.onSubscribe {
+				fn(client, grantedSubs)
+			}
 		}
 	}
 
@@ -1935,9 +1991,9 @@ func (s *Server) handleUnsubscribe(client *ServerClient, unsub *UnsubscribePacke
 		}
 	}
 
-	// Callback
-	if s.config.onUnsubscribe != nil {
-		s.config.onUnsubscribe(client, unsub.TopicFilters)
+	// Callbacks
+	for _, fn := range s.config.onUnsubscribe {
+		fn(client, unsub.TopicFilters)
 	}
 
 	// Send UNSUBACK

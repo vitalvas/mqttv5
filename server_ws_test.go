@@ -58,8 +58,8 @@ func TestNewWSServer(t *testing.T) {
 		defer srv.Close()
 
 		assert.Equal(t, 50, srv.config.maxConnections)
-		if srv.config.onConnect != nil {
-			srv.config.onConnect(nil)
+		for _, fn := range srv.config.onConnect {
+			fn(nil)
 		}
 		assert.True(t, connected)
 	})

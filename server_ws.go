@@ -104,6 +104,14 @@ func (s *WSServer) handleWSConn(conn Conn) {
 				ReasonCode: ReasonServerBusy,
 			}
 			WritePacket(conn, connack, clientMaxPacketSize)
+			s.fireConnectFailed(&ConnectFailedContext{
+				ClientID:           connect.ClientID,
+				Username:           connect.Username,
+				RemoteAddr:         conn.RemoteAddr(),
+				LocalAddr:          conn.LocalAddr(),
+				TLSConnectionState: getTLSConnectionState(conn),
+				ReasonCode:         ReasonServerBusy,
+			})
 			return
 		}
 	}
@@ -119,6 +127,14 @@ func (s *WSServer) handleWSConn(conn Conn) {
 				ReasonCode: ReasonProtocolError,
 			}
 			WritePacket(conn, connack, clientMaxPacketSize)
+			s.fireConnectFailed(&ConnectFailedContext{
+				ClientID:           connect.ClientID,
+				Username:           connect.Username,
+				RemoteAddr:         conn.RemoteAddr(),
+				LocalAddr:          conn.LocalAddr(),
+				TLSConnectionState: getTLSConnectionState(conn),
+				ReasonCode:         ReasonProtocolError,
+			})
 			return
 		}
 	}
@@ -130,6 +146,14 @@ func (s *WSServer) handleWSConn(conn Conn) {
 			ReasonCode: ReasonProtocolError,
 		}
 		WritePacket(conn, connack, clientMaxPacketSize)
+		s.fireConnectFailed(&ConnectFailedContext{
+			ClientID:           connect.ClientID,
+			Username:           connect.Username,
+			RemoteAddr:         conn.RemoteAddr(),
+			LocalAddr:          conn.LocalAddr(),
+			TLSConnectionState: getTLSConnectionState(conn),
+			ReasonCode:         ReasonProtocolError,
+		})
 		return
 	}
 
@@ -144,6 +168,13 @@ func (s *WSServer) handleWSConn(conn Conn) {
 				ReasonCode: ReasonClientIDNotValid,
 			}
 			WritePacket(conn, connack, clientMaxPacketSize)
+			s.fireConnectFailed(&ConnectFailedContext{
+				Username:           connect.Username,
+				RemoteAddr:         conn.RemoteAddr(),
+				LocalAddr:          conn.LocalAddr(),
+				TLSConnectionState: getTLSConnectionState(conn),
+				ReasonCode:         ReasonClientIDNotValid,
+			})
 			return
 		}
 		// CleanStart=true with empty ClientID: assign one
@@ -157,7 +188,15 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	// Perform authentication (standard or enhanced) - same as TCP path
 	authRes := s.authenticateClient(conn, connect, clientID, clientMaxPacketSize, logger)
 	if !authRes.ok {
-		return // Auth failed, connection closed
+		s.fireConnectFailed(&ConnectFailedContext{
+			ClientID:           clientID,
+			Username:           connect.Username,
+			RemoteAddr:         conn.RemoteAddr(),
+			LocalAddr:          conn.LocalAddr(),
+			TLSConnectionState: getTLSConnectionState(conn),
+			ReasonCode:         authRes.reasonCode,
+		})
+		return
 	}
 	authResult := authRes.authResult
 	namespace := authRes.namespace
@@ -178,6 +217,14 @@ func (s *WSServer) handleWSConn(conn Conn) {
 			ReasonCode: ReasonNotAuthorized,
 		}
 		WritePacket(conn, connack, clientMaxPacketSize)
+		s.fireConnectFailed(&ConnectFailedContext{
+			ClientID:           clientID,
+			Username:           connect.Username,
+			RemoteAddr:         conn.RemoteAddr(),
+			LocalAddr:          conn.LocalAddr(),
+			TLSConnectionState: getTLSConnectionState(conn),
+			ReasonCode:         ReasonNotAuthorized,
+		})
 		return
 	}
 
@@ -250,9 +297,9 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	s.config.metrics.ConnectionOpened()
 	logger.Info("client connected", nil)
 
-	// Callback
-	if s.config.onConnect != nil {
-		s.config.onConnect(client)
+	// Callbacks
+	for _, fn := range s.config.onConnect {
+		fn(client)
 	}
 
 	// Restore subscriptions from session

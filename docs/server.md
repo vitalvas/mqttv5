@@ -55,13 +55,16 @@ All options for configuring an MQTT v5.0 server/broker.
 
 ## Callbacks
 
+Multiple callbacks can be registered for the same event. They are called in registration order.
+
 | Option | Default | Description |
 |--------|---------|-------------|
-| `OnConnect(fn)` | - | Client connected callback |
-| `OnDisconnect(fn)` | - | Client disconnected callback |
-| `OnMessage(fn)` | - | Message received callback |
-| `OnSubscribe(fn)` | - | Subscribe request callback |
-| `OnUnsubscribe(fn)` | - | Unsubscribe request callback |
+| `OnConnect(fn...)` | - | Client connected callbacks |
+| `OnConnectFailed(fn...)` | - | Connection failed callbacks |
+| `OnDisconnect(fn...)` | - | Client disconnected callbacks |
+| `OnMessage(fn...)` | - | Message received callbacks |
+| `OnSubscribe(fn...)` | - | Subscribe request callbacks |
+| `OnUnsubscribe(fn...)` | - | Unsubscribe request callbacks |
 
 ## Interceptors
 
@@ -104,6 +107,23 @@ srv := mqttv5.NewServer(
     mqttv5.OnMessage(func(c *mqttv5.ServerClient, m *mqttv5.Message) {
         log.Printf("Message: %s", m.Topic)
     }),
+)
+```
+
+### Multiple Callbacks
+
+Multiple callbacks can be registered for the same event. Each `OnXxx` call
+appends to the list rather than replacing previous callbacks.
+
+```go
+srv := mqttv5.NewServer(
+    mqttv5.WithListener(listener),
+    // First callback: logging
+    mqttv5.OnConnect(func(c *mqttv5.ServerClient) {
+        log.Printf("Connected: %s", c.ClientID())
+    }),
+    // Second callback: lifecycle events
+    mqttv5.OnConnect(lc.OnConnect),
 )
 ```
 
