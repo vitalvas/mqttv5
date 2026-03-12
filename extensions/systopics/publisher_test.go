@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,25 +15,26 @@ import (
 )
 
 type mockBroker struct {
-	mu               sync.Mutex
-	clientCount      int
-	namespaces       []string
-	connections      int64
-	connectionsTotal int64
-	maxConnections   int64
-	subscriptions    int64
-	retainedMessages int64
-	bytesReceived    int64
-	bytesSent        int64
-	messagesRecv     [3]int64
-	messagesSent     [3]int64
-	packetsRecv      map[mqttv5.PacketType]int64
-	packetsSent      map[mqttv5.PacketType]int64
-	topicCount       int64
-	startedAt        time.Time
-	nsClientCounts   map[string]int
-	published        []*mqttv5.Message
-	publishErr       error
+	mu                sync.Mutex
+	clientCount       int
+	namespaces        []string
+	connections       int64
+	connectionsTotal  int64
+	maxConnections    int64
+	subscriptions     int64
+	retainedMessages  int64
+	bytesReceived     int64
+	bytesSent         int64
+	messagesRecv      [3]int64
+	messagesSent      [3]int64
+	packetsRecv       map[mqttv5.PacketType]int64
+	packetsSent       map[mqttv5.PacketType]int64
+	topicCount        int64
+	startedAt         time.Time
+	nsClientCounts    map[string]int
+	published         []*mqttv5.Message
+	publishErr        error
+	mockSubscriptions map[string][]string // namespace -> list of topic filter prefixes
 }
 
 func newMockBroker() *mockBroker {
@@ -170,6 +172,23 @@ func (m *mockBroker) StartedAt() time.Time {
 	defer m.mu.Unlock()
 
 	return m.startedAt
+}
+
+func (m *mockBroker) HasSubscribersWithPrefix(namespace, prefix string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.mockSubscriptions == nil {
+		return true
+	}
+
+	for _, p := range m.mockSubscriptions[namespace] {
+		if strings.HasPrefix(p, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (m *mockBroker) Publish(msg *mqttv5.Message) error {
@@ -511,6 +530,52 @@ func TestPublisher(t *testing.T) {
 
 		nsMsg := broker.findByTopic("$SYS/broker/namespace/ns1/clients/connected")
 		assert.Nil(t, nsMsg)
+	})
+
+	t.Run("isolated mode skips namespaces without sys subscribers", func(t *testing.T) {
+		broker := newMockBroker()
+		broker.namespaces = []string{"ns1", "ns2"}
+		broker.nsClientCounts = map[string]int{"ns1": 5, "ns2": 3}
+		broker.mockSubscriptions = map[string][]string{"ns1": {"$SYS/"}}
+
+		p := New(broker,
+			WithInterval(50*time.Millisecond),
+			WithNamespaceMode(NamespaceModeIsolated),
+			WithTopicGroups(TopicGroupNamespace),
+		)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		defer cancel()
+
+		p.Run(ctx)
+
+		msg := broker.findByTopicAndNamespace(TopicClientsConnected, "ns1")
+		require.NotNil(t, msg)
+		assert.Equal(t, "5", string(msg.Payload))
+
+		assert.Nil(t, broker.findByTopicAndNamespace(TopicClientsConnected, "ns2"))
+	})
+
+	t.Run("namespace count skipped for namespaces without sys subscribers", func(t *testing.T) {
+		broker := newMockBroker()
+		broker.namespaces = []string{"ns1", "ns2"}
+		broker.mockSubscriptions = map[string][]string{"ns1": {"$SYS/"}}
+
+		p := New(broker,
+			WithInterval(50*time.Millisecond),
+			WithTopicGroups(TopicGroupNamespace),
+		)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		defer cancel()
+
+		p.Run(ctx)
+
+		msg := broker.findByTopicAndNamespace(TopicNamespacesCount, "ns1")
+		require.NotNil(t, msg)
+		assert.Equal(t, "2", string(msg.Payload))
+
+		assert.Nil(t, broker.findByTopicAndNamespace(TopicNamespacesCount, "ns2"))
 	})
 
 	t.Run("no namespaces produces no namespace topics", func(t *testing.T) {
@@ -888,6 +953,71 @@ func TestPublishErrors(t *testing.T) {
 		pub.publish()
 
 		assert.Equal(t, TopicClientsConnected, gotTopic)
+	})
+}
+
+func TestGlobalTopicsPublishedToAllNamespaces(t *testing.T) {
+	t.Run("topics reach every namespace", func(t *testing.T) {
+		broker := newMockBroker()
+		broker.namespaces = []string{"ns1", "ns2"}
+		broker.connections = 5
+		broker.connectionsTotal = 10
+		broker.maxConnections = 8
+
+		pub := New(broker,
+			WithInterval(50*time.Millisecond),
+			WithTopicGroups(TopicGroupClients),
+		)
+
+		pub.publish()
+
+		for _, ns := range broker.namespaces {
+			msg := broker.findByTopicAndNamespace(TopicClientsConnected, ns)
+			require.NotNilf(t, msg, "TopicClientsConnected not published to namespace %s", ns)
+			assert.Equal(t, "5", string(msg.Payload))
+
+			msg = broker.findByTopicAndNamespace(TopicClientsTotal, ns)
+			require.NotNilf(t, msg, "TopicClientsTotal not published to namespace %s", ns)
+		}
+	})
+
+	t.Run("skips namespaces without sys subscribers", func(t *testing.T) {
+		broker := newMockBroker()
+		broker.namespaces = []string{"ns1", "ns2", "ns3"}
+		broker.connections = 5
+		broker.connectionsTotal = 10
+		broker.maxConnections = 8
+		broker.mockSubscriptions = map[string][]string{"ns1": {"$SYS/"}, "ns3": {"$SYS/"}}
+
+		pub := New(broker,
+			WithInterval(50*time.Millisecond),
+			WithTopicGroups(TopicGroupClients),
+		)
+
+		pub.publish()
+
+		// ns1 and ns3 should receive topics
+		require.NotNil(t, broker.findByTopicAndNamespace(TopicClientsConnected, "ns1"))
+		require.NotNil(t, broker.findByTopicAndNamespace(TopicClientsConnected, "ns3"))
+
+		// ns2 has no $SYS subscribers, should be skipped
+		assert.Nil(t, broker.findByTopicAndNamespace(TopicClientsConnected, "ns2"))
+	})
+
+	t.Run("no namespaces publishes with empty namespace", func(t *testing.T) {
+		broker := newMockBroker()
+		broker.connections = 3
+
+		pub := New(broker,
+			WithInterval(50*time.Millisecond),
+			WithTopicGroups(TopicGroupClients),
+		)
+
+		pub.publish()
+
+		msg := broker.findByTopicAndNamespace(TopicClientsConnected, "")
+		require.NotNil(t, msg)
+		assert.Equal(t, "3", string(msg.Payload))
 	})
 }
 

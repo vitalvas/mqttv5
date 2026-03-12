@@ -22,6 +22,12 @@ type SubscriptionSummary struct {
 	Subscriptions      []SubscriptionInfo `json:"subscriptions"`
 }
 
+// GetNamespaceSubscriptions returns all subscriptions in a namespace.
+// If namespace is empty, returns subscriptions across all namespaces.
+func (s *Server) GetNamespaceSubscriptions(namespace string) []SubscriptionInfo {
+	return s.subs.NamespaceSubscriptions(namespace)
+}
+
 // GetSubscriptionSummary returns subscription summary for a namespace.
 // If namespace is empty, returns subscriptions across all namespaces.
 func (s *Server) GetSubscriptionSummary(namespace string) SubscriptionSummary {

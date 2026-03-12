@@ -1,6 +1,7 @@
 package mqttv5
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -224,6 +225,23 @@ func (m *SubscriptionManager) SubscriberCount(namespace, topic string) int {
 	return count
 }
 
+// HasSubscribersWithPrefix reports whether any subscription in the given namespace
+// has a topic filter that starts with prefix.
+func (m *SubscriptionManager) HasSubscribersWithPrefix(namespace, prefix string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, entries := range m.subscriptions {
+		for _, entry := range entries {
+			if entry.Namespace == namespace && strings.HasPrefix(entry.Subscription.TopicFilter, prefix) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // match returns all matching subscriptions for a topic (internal use only).
 // This method does NOT filter by namespace - use MatchForDelivery for namespace-isolated matching.
 func (m *SubscriptionManager) match(topic string) []SubscriptionEntry {
@@ -406,6 +424,28 @@ func (m *SubscriptionManager) ClientCount() int {
 	defer m.mu.RUnlock()
 
 	return len(m.subscriptions)
+}
+
+// NamespaceSubscriptions returns all subscriptions in the given namespace.
+// If namespace is empty, returns subscriptions across all namespaces.
+func (m *SubscriptionManager) NamespaceSubscriptions(namespace string) []SubscriptionInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var infos []SubscriptionInfo
+
+	for key, entries := range m.subscriptions {
+		entryNamespace, clientID := ParseNamespaceKey(key)
+		if namespace != "" && entryNamespace != namespace {
+			continue
+		}
+
+		for _, entry := range entries {
+			infos = append(infos, buildSubscriptionInfo(clientID, entryNamespace, entry))
+		}
+	}
+
+	return infos
 }
 
 // Summary returns a subscription summary, optionally filtered by namespace.

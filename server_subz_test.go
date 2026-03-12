@@ -166,6 +166,109 @@ func TestSubscriptionManagerClientSubscriptionInfo(t *testing.T) {
 	})
 }
 
+func TestSubscriptionManagerHasSubscribersWithPrefix(t *testing.T) {
+	t.Run("no subscribers", func(t *testing.T) {
+		m := NewSubscriptionManager()
+		assert.False(t, m.HasSubscribersWithPrefix("ns1", "$SYS/"))
+	})
+
+	t.Run("has matching subscriber", func(t *testing.T) {
+		m := NewSubscriptionManager()
+		m.Subscribe("c1", "ns1", Subscription{TopicFilter: "$SYS/#", QoS: QoS0})
+
+		assert.True(t, m.HasSubscribersWithPrefix("ns1", "$SYS/"))
+		assert.False(t, m.HasSubscribersWithPrefix("ns2", "$SYS/"))
+	})
+
+	t.Run("no matching prefix", func(t *testing.T) {
+		m := NewSubscriptionManager()
+		m.Subscribe("c1", "ns1", Subscription{TopicFilter: "sensor/#", QoS: QoS0})
+
+		assert.False(t, m.HasSubscribersWithPrefix("ns1", "$SYS/"))
+	})
+
+	t.Run("specific sys topic", func(t *testing.T) {
+		m := NewSubscriptionManager()
+		m.Subscribe("c1", "ns1", Subscription{TopicFilter: "$SYS/broker/clients/connected", QoS: QoS0})
+
+		assert.True(t, m.HasSubscribersWithPrefix("ns1", "$SYS/"))
+	})
+}
+
+func TestServerHasSubscribersWithPrefix(t *testing.T) {
+	srv := NewServer()
+	srv.subs.Subscribe("c1", "ns1", Subscription{TopicFilter: "$SYS/#", QoS: QoS0})
+
+	assert.True(t, srv.HasSubscribersWithPrefix("ns1", "$SYS/"))
+	assert.False(t, srv.HasSubscribersWithPrefix("ns2", "$SYS/"))
+}
+
+func TestSubscriptionManagerNamespaceSubscriptions(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		m := NewSubscriptionManager()
+		infos := m.NamespaceSubscriptions("")
+		assert.Empty(t, infos)
+	})
+
+	t.Run("all namespaces", func(t *testing.T) {
+		m := NewSubscriptionManager()
+		m.Subscribe("c1", "ns1", Subscription{TopicFilter: "a/b", QoS: QoS0})
+		m.Subscribe("c2", "ns2", Subscription{TopicFilter: "c/d", QoS: QoS1})
+
+		infos := m.NamespaceSubscriptions("")
+		assert.Len(t, infos, 2)
+	})
+
+	t.Run("filtered by namespace", func(t *testing.T) {
+		m := NewSubscriptionManager()
+		m.Subscribe("c1", "ns1", Subscription{TopicFilter: "a/b", QoS: QoS0})
+		m.Subscribe("c2", "ns2", Subscription{TopicFilter: "c/d", QoS: QoS1})
+		m.Subscribe("c3", "ns1", Subscription{TopicFilter: "e/f", QoS: QoS2})
+
+		infos := m.NamespaceSubscriptions("ns1")
+		assert.Len(t, infos, 2)
+
+		for _, info := range infos {
+			assert.Equal(t, "ns1", info.Namespace)
+		}
+	})
+
+	t.Run("nonexistent namespace", func(t *testing.T) {
+		m := NewSubscriptionManager()
+		m.Subscribe("c1", "ns1", Subscription{TopicFilter: "a/b", QoS: QoS0})
+
+		infos := m.NamespaceSubscriptions("ns999")
+		assert.Empty(t, infos)
+	})
+}
+
+func TestServerGetNamespaceSubscriptions(t *testing.T) {
+	t.Run("empty server", func(t *testing.T) {
+		srv := NewServer()
+		infos := srv.GetNamespaceSubscriptions("")
+		assert.Empty(t, infos)
+	})
+
+	t.Run("with subscriptions", func(t *testing.T) {
+		srv := NewServer()
+		srv.subs.Subscribe("c1", DefaultNamespace, Subscription{TopicFilter: "a/b", QoS: QoS0})
+		srv.subs.Subscribe("c2", DefaultNamespace, Subscription{TopicFilter: "c/d", QoS: QoS1})
+
+		infos := srv.GetNamespaceSubscriptions(DefaultNamespace)
+		assert.Len(t, infos, 2)
+	})
+
+	t.Run("filtered by namespace", func(t *testing.T) {
+		srv := NewServer()
+		srv.subs.Subscribe("c1", "ns1", Subscription{TopicFilter: "a/b", QoS: QoS0})
+		srv.subs.Subscribe("c2", "ns2", Subscription{TopicFilter: "c/d", QoS: QoS1})
+
+		infos := srv.GetNamespaceSubscriptions("ns1")
+		require.Len(t, infos, 1)
+		assert.Equal(t, "a/b", infos[0].TopicFilter)
+	})
+}
+
 func TestServerGetSubscriptionSummary(t *testing.T) {
 	t.Run("empty server", func(t *testing.T) {
 		srv := NewServer()

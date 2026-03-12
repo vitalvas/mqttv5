@@ -552,6 +552,12 @@ func (s *Server) TopicCount() int64 {
 	return int64(s.topicMetrics.TopicCount(""))
 }
 
+// HasSubscribersWithPrefix reports whether any subscription in the given namespace
+// has a topic filter that starts with prefix.
+func (s *Server) HasSubscribersWithPrefix(namespace, prefix string) bool {
+	return s.subs.HasSubscribersWithPrefix(namespace, prefix)
+}
+
 // Publish sends a message to all matching subscribers.
 // The message's Namespace field determines the target namespace.
 func (s *Server) Publish(msg *Message) error {

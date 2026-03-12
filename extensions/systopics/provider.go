@@ -55,6 +55,10 @@ type Broker interface {
 	// StartedAt returns the time when the server was created.
 	StartedAt() time.Time
 
+	// HasSubscribersWithPrefix reports whether any subscription in a namespace
+	// has a topic filter that starts with prefix.
+	HasSubscribersWithPrefix(namespace, prefix string) bool
+
 	// Publish sends a message to subscribers.
 	Publish(msg *mqttv5.Message) error
 }

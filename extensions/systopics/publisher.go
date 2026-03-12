@@ -155,13 +155,29 @@ func (p *Publisher) publish() {
 		)
 	}
 
+	namespaces := p.broker.Namespaces()
+	if len(namespaces) == 0 {
+		namespaces = []string{""}
+	}
+
+	// Filter to namespaces that have $SYS/ subscribers.
+	sysNamespaces := make([]string, 0, len(namespaces))
+	for _, ns := range namespaces {
+		if p.broker.HasSubscribersWithPrefix(ns, sysPrefix) {
+			sysNamespaces = append(sysNamespaces, ns)
+		}
+	}
+
 	for _, tv := range topics {
-		if err := p.broker.Publish(&mqttv5.Message{
-			Topic:   tv.topic,
-			Payload: []byte(tv.value),
-			Retain:  true,
-		}); err != nil {
-			p.reportError(tv.topic, err)
+		for _, ns := range sysNamespaces {
+			if err := p.broker.Publish(&mqttv5.Message{
+				Topic:     tv.topic,
+				Payload:   []byte(tv.value),
+				Retain:    true,
+				Namespace: ns,
+			}); err != nil {
+				p.reportError(tv.topic, err)
+			}
 		}
 	}
 
@@ -172,13 +188,27 @@ func (p *Publisher) publish() {
 
 func (p *Publisher) publishNamespaceTopics() {
 	namespaces := p.broker.Namespaces()
+	nsCountPayload := []byte(formatInt(int64(len(namespaces))))
 
-	if err := p.broker.Publish(&mqttv5.Message{
-		Topic:   TopicNamespacesCount,
-		Payload: []byte(formatInt(int64(len(namespaces)))),
-		Retain:  true,
-	}); err != nil {
-		p.reportError(TopicNamespacesCount, err)
+	// Publish namespace count to all namespaces with $SYS subscribers.
+	targets := namespaces
+	if len(targets) == 0 {
+		targets = []string{""}
+	}
+
+	for _, ns := range targets {
+		if !p.broker.HasSubscribersWithPrefix(ns, sysPrefix) {
+			continue
+		}
+
+		if err := p.broker.Publish(&mqttv5.Message{
+			Topic:     TopicNamespacesCount,
+			Payload:   nsCountPayload,
+			Retain:    true,
+			Namespace: ns,
+		}); err != nil {
+			p.reportError(TopicNamespacesCount, err)
+		}
 	}
 
 	if len(namespaces) == 0 {
@@ -205,6 +235,10 @@ func (p *Publisher) publishNamespaceTopics() {
 		// so the server delivers them only to clients in that namespace.
 		// Clients never see the namespace name in the topic path.
 		for _, ns := range namespaces {
+			if !p.broker.HasSubscribersWithPrefix(ns, sysPrefix) {
+				continue
+			}
+
 			count := p.broker.ClientCount(ns)
 
 			if err := p.broker.Publish(&mqttv5.Message{
