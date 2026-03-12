@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.0](https://github.com/vitalvas/mqttv5/compare/v0.4.0...v0.5.0) (2026-03-12)
+
+
+### Features
+
+* add $SYS topic publisher extension with packet counters and topic metrics ([7c975a1](https://github.com/vitalvas/mqttv5/commit/7c975a140c26f70e64fbe574e6a37ffd75a96c95))
+* add device shadow extension with typed client SDK ([13eaf69](https://github.com/vitalvas/mqttv5/commit/13eaf697464a2ff27e72dd1950ea0bc019f9856c))
+* add file delivery extension with block-based transfer over MQTT ([26116d8](https://github.com/vitalvas/mqttv5/commit/26116d8b5713065896c0be237c9f77e2d0442cb9))
+* add lifecycle extension for client event publishing ([b187012](https://github.com/vitalvas/mqttv5/commit/b18701231462dbf0804edd5df30bc0f928f64494))
+* add Prometheus metrics export extension via expvar ([b363abc](https://github.com/vitalvas/mqttv5/commit/b363abce967d7e81776fdffc633d8b2908f170ac))
+
+
+### Bug Fixes
+
+* publish $SYS topics to all namespaces with subscriber filtering ([f121df2](https://github.com/vitalvas/mqttv5/commit/f121df25ff55200eab6693afbb891996c820cb59))
+
 ## [0.4.0](https://github.com/vitalvas/mqttv5/compare/v0.3.1...v0.4.0) (2026-03-08)
 
 
