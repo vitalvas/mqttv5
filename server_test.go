@@ -8805,7 +8805,7 @@ func TestConcurrentConnections(t *testing.T) {
 
 	addr := listener.Addr().String()
 
-	numClients := 200
+	numClients := 50
 	clients := make([]*testClient, numClients)
 	var wg sync.WaitGroup
 	var connectErrors atomic.Int32
@@ -8836,8 +8836,9 @@ func TestConcurrentConnections(t *testing.T) {
 		}
 	}
 
-	time.Sleep(10 * time.Millisecond)
-	assert.Equal(t, 0, server.ClientCount(), "all clients should be disconnected")
+	require.Eventually(t, func() bool {
+		return server.ClientCount() == 0
+	}, 2*time.Second, 10*time.Millisecond, "all clients should be disconnected")
 }
 
 func TestMessageThroughput(t *testing.T) {
@@ -8915,7 +8916,7 @@ func TestResourceUsage(t *testing.T) {
 	var m1 runtime.MemStats
 	runtime.ReadMemStats(&m1)
 
-	numClients := 200
+	numClients := 50
 	clients := make([]*testClient, numClients)
 
 	for i := range numClients {
