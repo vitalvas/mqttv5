@@ -198,3 +198,78 @@ func prometheusHandler(w http.ResponseWriter, r *http.Request) {
     })
 }
 ```
+
+### Using Prometheus Client SDK
+
+Integrate with `github.com/prometheus/client_golang` by implementing a custom
+`prometheus.Collector` that dynamically discovers all `mqtt_`-prefixed expvar variables:
+
+```go
+package main
+
+import (
+    "expvar"
+    "net"
+    "net/http"
+    "os"
+    "strconv"
+    "strings"
+
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/prometheus/client_golang/prometheus/promhttp"
+    "github.com/vitalvas/mqttv5"
+)
+
+// mqttCollector dynamically collects all mqtt_ expvar metrics.
+type mqttCollector struct{}
+
+func (c *mqttCollector) Describe(ch chan<- *prometheus.Desc) {
+    // Unchecked collector — metrics are discovered dynamically.
+}
+
+func (c *mqttCollector) Collect(ch chan<- prometheus.Metric) {
+    expvar.Do(func(kv expvar.KeyValue) {
+        if !strings.HasPrefix(kv.Key, "mqtt_") {
+            return
+        }
+
+        val, err := strconv.ParseFloat(kv.Value.String(), 64)
+        if err != nil {
+            return
+        }
+
+        valueType := prometheus.GaugeValue
+        if strings.HasSuffix(kv.Key, "_total") || strings.HasSuffix(kv.Key, "_count") || strings.HasSuffix(kv.Key, "_sum") {
+            valueType = prometheus.CounterValue
+        }
+
+        desc := prometheus.NewDesc(kv.Key, kv.Key, nil, nil)
+        ch <- prometheus.MustNewConstMetric(desc, valueType, val)
+    })
+}
+
+func main() {
+    listener, err := net.Listen("tcp", ":1883")
+    if err != nil {
+        panic(err)
+    }
+
+    metrics := mqttv5.NewMetrics()
+
+    srv := mqttv5.NewServer(
+        mqttv5.WithListener(listener),
+        mqttv5.WithMetrics(metrics),
+        mqttv5.WithLogger(mqttv5.NewStdLogger(os.Stdout, mqttv5.LogLevelInfo)),
+    )
+
+    // Register dynamic collector for all mqtt_ expvar metrics
+    prometheus.MustRegister(&mqttCollector{})
+
+    // Prometheus metrics endpoint
+    http.Handle("/metrics", promhttp.Handler())
+
+    go http.ListenAndServe(":8080", nil)
+
+    srv.ListenAndServe()
+}
+```
