@@ -616,8 +616,8 @@ func (m *MemoryMetrics) PublishLatency(d time.Duration) {
 	m.latencyCount.Add(1)
 	for {
 		old := m.latencySum.Load()
-		newSum := float64FromBits(old) + d.Seconds()
-		if m.latencySum.CompareAndSwap(old, float64ToBits(newSum)) {
+		newSum := math.Float64frombits(old) + d.Seconds()
+		if m.latencySum.CompareAndSwap(old, math.Float64bits(newSum)) {
 			break
 		}
 	}
@@ -630,7 +630,7 @@ func (m *MemoryMetrics) LatencyCount() int64 {
 
 // LatencySum returns the sum of latencies in seconds.
 func (m *MemoryMetrics) LatencySum() float64 {
-	return float64FromBits(m.latencySum.Load())
+	return math.Float64frombits(m.latencySum.Load())
 }
 
 // PacketReceived records a received packet.
@@ -747,14 +747,4 @@ func (m *MemoryMetrics) MessageRateLimited() {
 // MessagesRateLimitedTotal returns the total messages rejected by rate limiting.
 func (m *MemoryMetrics) MessagesRateLimitedTotal() int64 {
 	return m.messagesRateLimited.Load()
-}
-
-// float64ToBits converts a float64 to uint64 bits.
-func float64ToBits(f float64) uint64 {
-	return math.Float64bits(f)
-}
-
-// float64FromBits converts uint64 bits to float64.
-func float64FromBits(b uint64) float64 {
-	return math.Float64frombits(b)
 }

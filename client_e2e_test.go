@@ -221,8 +221,8 @@ func TestE2ESubscribeWildcard(t *testing.T) {
 			broker.shouldSkip(t)
 
 			baseTopic := fmt.Sprintf("mqttv5/e2e/wildcard/%d", time.Now().UnixNano())
-			wildcardFilter := baseTopic + "/+"
-			publishTopic := baseTopic + "/test"
+			wildcardFilter := fmt.Sprintf("%s/+", baseTopic)
+			publishTopic := fmt.Sprintf("%s/test", baseTopic)
 			payload := []byte("hello wildcard test")
 
 			client := broker.connect(t, "wild")
@@ -395,9 +395,9 @@ func TestE2EMultipleSubscriptions(t *testing.T) {
 			broker.shouldSkip(t)
 
 			base := fmt.Sprintf("mqttv5/e2e/multi/%d", time.Now().UnixNano())
-			topic1 := base + "/topic1"
-			topic2 := base + "/topic2"
-			topic3 := base + "/topic3"
+			topic1 := fmt.Sprintf("%s/topic1", base)
+			topic2 := fmt.Sprintf("%s/topic2", base)
+			topic3 := fmt.Sprintf("%s/topic3", base)
 
 			client := broker.connect(t, "multi")
 			defer client.Close()

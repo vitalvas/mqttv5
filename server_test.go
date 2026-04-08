@@ -5885,7 +5885,7 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 			authFunc: func(_ context.Context, authCtx *AuthContext) (*AuthResult, error) {
 				return &AuthResult{
 					Success:          true,
-					AssignedClientID: "server-assigned-" + authCtx.ClientID,
+					AssignedClientID: fmt.Sprintf("server-assigned-%s", authCtx.ClientID),
 				}, nil
 			},
 		}
@@ -6966,7 +6966,7 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 		// Authenticator that assigns namespaces based on username
 		auth := &testAuthenticator{
 			authFunc: func(_ context.Context, ctx *AuthContext) (*AuthResult, error) {
-				namespace := "tenant-" + ctx.Username
+				namespace := fmt.Sprintf("tenant-%s", ctx.Username)
 				return &AuthResult{
 					Success:   true,
 					Namespace: namespace,
@@ -9213,7 +9213,7 @@ func TestCommandResponseWith100Clients(t *testing.T) {
 
 		cmdServer, err := newTestClient(addr, "cmd-server")
 		require.NoError(t, err)
-		require.NoError(t, cmdServer.subscribe(responseTopicPrefix+"+", 0))
+		require.NoError(t, cmdServer.subscribe(fmt.Sprintf("%s+", responseTopicPrefix), 0))
 		defer cmdServer.close()
 
 		commandPayload := []byte(`{"cmd":"status","id":12345}`)

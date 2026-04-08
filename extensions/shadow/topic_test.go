@@ -1,6 +1,7 @@
 package shadow
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -478,7 +479,7 @@ func TestParseShadowTopic(t *testing.T) {
 		// Shadow name length limits
 		{
 			name:  "shadow name at 64 bytes",
-			topic: "$things/myDevice/shadow/name/" + strings.Repeat("a", 64) + "/update",
+			topic: fmt.Sprintf("$things/myDevice/shadow/name/%s/update", strings.Repeat("a", 64)),
 			expected: &parsedTopic{
 				ClientID:   "myDevice",
 				ShadowName: strings.Repeat("a", 64),
@@ -487,12 +488,12 @@ func TestParseShadowTopic(t *testing.T) {
 		},
 		{
 			name:     "shadow name exceeds 64 bytes",
-			topic:    "$things/myDevice/shadow/name/" + strings.Repeat("a", 65) + "/update",
+			topic:    fmt.Sprintf("$things/myDevice/shadow/name/%s/update", strings.Repeat("a", 65)),
 			expected: nil,
 		},
 		{
 			name:     "shared shadow name exceeds 64 bytes",
-			topic:    "$things/$shared/room-101/shadow/name/" + strings.Repeat("a", 65) + "/update",
+			topic:    fmt.Sprintf("$things/$shared/room-101/shadow/name/%s/update", strings.Repeat("a", 65)),
 			expected: nil,
 		},
 

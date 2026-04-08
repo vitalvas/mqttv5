@@ -1,6 +1,7 @@
 package mqttv5
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -575,7 +576,7 @@ func TestMemorySessionStoreConcurrency(_ *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			clientID := "client-" + string(rune(n))
+			clientID := fmt.Sprintf("client-%s", string(rune(n)))
 			session := NewMemorySession(clientID, testNS)
 			_ = store.Create(testNS, session)
 			_, _ = store.Get(testNS, session.ClientID())
@@ -665,7 +666,7 @@ func TestSessionFactory(t *testing.T) {
 	t.Run("custom session factory", func(t *testing.T) {
 		// Custom factory that adds a prefix
 		customFactory := func(clientID, namespace string) Session {
-			return NewMemorySession("prefix-"+clientID, namespace)
+			return NewMemorySession(fmt.Sprintf("prefix-%s", clientID), namespace)
 		}
 
 		session := customFactory("test-client", testNS)

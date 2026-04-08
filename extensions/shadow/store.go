@@ -2,6 +2,7 @@ package shadow
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -57,10 +58,10 @@ func NewMemoryStore() *MemoryStore {
 
 func shadowKey(key Key) string {
 	if key.GroupName != "" {
-		return key.Namespace + "/$shared/" + key.GroupName + "/" + key.ShadowName
+		return fmt.Sprintf("%s/$shared/%s/%s", key.Namespace, key.GroupName, key.ShadowName)
 	}
 
-	return key.Namespace + "/" + key.ClientID + "/" + key.ShadowName
+	return fmt.Sprintf("%s/%s/%s", key.Namespace, key.ClientID, key.ShadowName)
 }
 
 func (m *MemoryStore) storeKey(key Key) string {
@@ -72,10 +73,10 @@ func (m *MemoryStore) storeKey(key Key) string {
 // For shared: "namespace/$shared/groupName/"
 func storePrefix(key Key) string {
 	if key.GroupName != "" {
-		return key.Namespace + "/$shared/" + key.GroupName + "/"
+		return fmt.Sprintf("%s/$shared/%s/", key.Namespace, key.GroupName)
 	}
 
-	return key.Namespace + "/" + key.ClientID + "/"
+	return fmt.Sprintf("%s/%s/", key.Namespace, key.ClientID)
 }
 
 // CountNamedShadows returns the number of named shadows for a given owner.

@@ -3,6 +3,7 @@ package mqttv5
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"testing"
 	"time"
 
@@ -237,7 +238,7 @@ func TestWithClientSessionFactory(t *testing.T) {
 
 	t.Run("custom session factory", func(t *testing.T) {
 		customFactory := func(clientID, namespace string) Session {
-			return NewMemorySession("custom-"+clientID, namespace)
+			return NewMemorySession(fmt.Sprintf("custom-%s", clientID), namespace)
 		}
 		opts := applyOptions(WithClientSessionFactory(customFactory))
 

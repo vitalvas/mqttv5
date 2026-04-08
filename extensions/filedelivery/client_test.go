@@ -128,7 +128,7 @@ func (s *simulatedClient) simulateGet(parsed *parsedTopic, payload []byte) {
 		return
 	}
 
-	fileData, ok := s.files[parsed.StreamID+"/"+itoa(req.FileID)]
+	fileData, ok := s.files[fmt.Sprintf("%s/%s", parsed.StreamID, itoa(req.FileID))]
 	if !ok {
 		return // silently ignore, simulating no response from server
 	}
@@ -169,7 +169,7 @@ func (s *simulatedClient) simulateCreate(parsed *parsedTopic, payload []byte) {
 
 	// Allocate uploaded file storage
 	for _, f := range req.Files {
-		key := parsed.StreamID + "/" + itoa(f.FileID)
+		key := fmt.Sprintf("%s/%s", parsed.StreamID, itoa(f.FileID))
 		s.mu.Lock()
 		s.uploaded[key] = make([]byte, f.Size)
 		s.mu.Unlock()
@@ -191,7 +191,7 @@ func (s *simulatedClient) simulateUploadData(parsed *parsedTopic, payload []byte
 		return
 	}
 
-	key := parsed.StreamID + "/" + itoa(block.FileID)
+	key := fmt.Sprintf("%s/%s", parsed.StreamID, itoa(block.FileID))
 	s.mu.Lock()
 	fileData, ok := s.uploaded[key]
 	if ok {

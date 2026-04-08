@@ -751,8 +751,15 @@ func TestConnectFlagsRoundTrip(t *testing.T) {
 			expected: 0x40,
 		},
 		{
-			name:     "all flags",
-			packet:   ConnectPacket{CleanStart: true, WillFlag: true, WillQoS: 2, WillRetain: true, Username: "u", Password: []byte("p")},
+			name: "all flags",
+			packet: ConnectPacket{
+				CleanStart: true,
+				WillFlag:   true,
+				WillQoS:    2,
+				WillRetain: true,
+				Username:   "u",
+				Password:   []byte("p"),
+			},
 			expected: 0xF6,
 		},
 	}

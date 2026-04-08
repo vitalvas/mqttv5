@@ -3,6 +3,7 @@ package shadow
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -553,7 +554,7 @@ func TestHandler_HandleMessage(t *testing.T) {
 		h := NewHandler(
 			WithClassicShadow(),
 			WithClientIDResolver(func(clientID string) string {
-				return "resolved-" + clientID
+				return fmt.Sprintf("resolved-%s", clientID)
 			}),
 		)
 
@@ -798,12 +799,14 @@ func TestHandler_NullDeletion(t *testing.T) {
 
 			payload, _ := json.Marshal(UpdateRequest{State: tc.initState})
 			h.HandleMessage(client, &mqttv5.Message{
-				Topic: "$things/dev1/shadow/update", Payload: payload,
+				Topic:   "$things/dev1/shadow/update",
+				Payload: payload,
 			})
 
 			client.sent = nil
 			h.HandleMessage(client, &mqttv5.Message{
-				Topic: "$things/dev1/shadow/update", Payload: []byte(tc.nullJSON),
+				Topic:   "$things/dev1/shadow/update",
+				Payload: []byte(tc.nullJSON),
 			})
 
 			client.sent = nil
@@ -834,13 +837,15 @@ func TestHandler_NullDeletion(t *testing.T) {
 			State: UpdateState{Desired: map[string]any{"temp": 22.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		client.sent = nil
 		payload = []byte(`{"state":{"desired":{"temp":null}}}`)
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Get the full document
@@ -870,14 +875,16 @@ func TestHandler_NullDeletion(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Remove temp from desired
 		client.sent = nil
 		payload = []byte(`{"state":{"desired":{"temp":null}}}`)
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Get the full document
@@ -924,14 +931,16 @@ func TestHandler_NullDeletion(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Clear entire desired section with "desired": null
 		client.sent = nil
 		payload = []byte(`{"state":{"desired":null}}`)
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Get the full document
@@ -961,13 +970,15 @@ func TestHandler_NullDeletion(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		client.sent = nil
 		payload = []byte(`{"state":{"reported":null}}`)
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Get the full document
@@ -1013,7 +1024,8 @@ func TestHandler_RecursiveDelta(t *testing.T) {
 		})
 
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Verify delta via published delta topic
@@ -1066,7 +1078,8 @@ func TestHandler_ClientToken(t *testing.T) {
 
 		payload := []byte(`{"state":{"desired":{"temp":22}},"clientToken":"myToken123"}`)
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -1087,14 +1100,16 @@ func TestHandler_ClientToken(t *testing.T) {
 			State: UpdateState{Desired: map[string]any{"temp": 22.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Send version conflict with clientToken
 		payload = []byte(`{"state":{"desired":{"temp":25}},"version":99,"clientToken":"failToken"}`)
 		client.sent = nil
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -1122,7 +1137,8 @@ func TestHandler_ClientToken(t *testing.T) {
 
 		payload := []byte(`{"state":{"desired":{"temp":22}},"clientToken":"docToken"}`)
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		mu.Lock()
@@ -1148,7 +1164,8 @@ func TestHandler_ClientToken(t *testing.T) {
 			State: UpdateState{Desired: map[string]any{"temp": 22.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -1250,7 +1267,8 @@ func TestHandler_DocumentsMessage(t *testing.T) {
 			State: UpdateState{Desired: map[string]any{"temp": 22.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Second update
@@ -1260,7 +1278,8 @@ func TestHandler_DocumentsMessage(t *testing.T) {
 			State: UpdateState{Desired: map[string]any{"temp": 25.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		mu.Lock()
@@ -1300,7 +1319,8 @@ func TestHandler_DocumentsMessage(t *testing.T) {
 			State: UpdateState{Desired: map[string]any{"temp": 22.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		mu.Lock()
@@ -1334,7 +1354,8 @@ func TestHandler_AcceptedResponse(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Update only temp
@@ -1343,7 +1364,8 @@ func TestHandler_AcceptedResponse(t *testing.T) {
 			State: UpdateState{Desired: map[string]any{"temp": 25.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -1374,7 +1396,8 @@ func TestHandler_AcceptedResponse(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -1808,14 +1831,16 @@ func TestHandler_AcceptedNullEcho(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Clear desired
 		client.sent = nil
 		payload = []byte(`{"state":{"desired":null}}`)
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -1840,13 +1865,15 @@ func TestHandler_AcceptedNullEcho(t *testing.T) {
 			State: UpdateState{Reported: map[string]any{"temp": 20.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		client.sent = nil
 		payload = []byte(`{"state":{"reported":null}}`)
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -1871,7 +1898,8 @@ func TestHandler_DeleteAcceptedResponse(t *testing.T) {
 			State: UpdateState{Desired: map[string]any{"temp": 22.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		client.sent = nil
@@ -1906,7 +1934,8 @@ func TestHandler_VersionInheritance(t *testing.T) {
 			State: UpdateState{Desired: map[string]any{"temp": 22.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Update (version 2)
@@ -1915,7 +1944,8 @@ func TestHandler_VersionInheritance(t *testing.T) {
 			State: UpdateState{Desired: map[string]any{"temp": 25.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Delete
@@ -1930,7 +1960,8 @@ func TestHandler_VersionInheritance(t *testing.T) {
 			State: UpdateState{Desired: map[string]any{"temp": 30.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -1950,7 +1981,8 @@ func TestHandler_VersionInheritance(t *testing.T) {
 			State: UpdateState{Desired: map[string]any{"temp": 22.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Delete
@@ -1965,7 +1997,8 @@ func TestHandler_VersionInheritance(t *testing.T) {
 			State: UpdateState{Desired: map[string]any{"temp": 30.0}},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -2123,7 +2156,7 @@ func TestHandler_MaxNamedShadows(t *testing.T) {
 				State: UpdateState{Desired: map[string]any{"v": 1}},
 			})
 			h.HandleMessage(client, &mqttv5.Message{
-				Topic:   "$things/dev1/shadow/name/" + name + "/update",
+				Topic:   fmt.Sprintf("$things/dev1/shadow/name/%s/update", name),
 				Payload: payload,
 			})
 		}
@@ -2193,7 +2226,7 @@ func TestHandler_MaxNamedShadows(t *testing.T) {
 				State: UpdateState{Desired: map[string]any{"v": 1}},
 			})
 			h.HandleMessage(client, &mqttv5.Message{
-				Topic:   "$things/$shared/room-101/shadow/name/" + name + "/update",
+				Topic:   fmt.Sprintf("$things/$shared/room-101/shadow/name/%s/update", name),
 				Payload: payload,
 			})
 		}
@@ -2408,7 +2441,7 @@ func TestHandler_List(t *testing.T) {
 				State: UpdateState{Desired: map[string]any{"v": 1}},
 			})
 			h.HandleMessage(client, &mqttv5.Message{
-				Topic:   "$things/dev1/shadow/name/" + name + "/update",
+				Topic:   fmt.Sprintf("$things/dev1/shadow/name/%s/update", name),
 				Payload: payload,
 			})
 		}
@@ -2457,7 +2490,7 @@ func TestHandler_List(t *testing.T) {
 				State: UpdateState{Desired: map[string]any{"v": 1}},
 			})
 			h.HandleMessage(client, &mqttv5.Message{
-				Topic:   "$things/dev1/shadow/name/" + name + "/update",
+				Topic:   fmt.Sprintf("$things/dev1/shadow/name/%s/update", name),
 				Payload: payload,
 			})
 		}
@@ -2842,7 +2875,8 @@ func TestHandler_DeltaClearing(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Verify delta exists
@@ -2865,7 +2899,8 @@ func TestHandler_DeltaClearing(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// No delta should be published
@@ -2903,7 +2938,8 @@ func TestHandler_DeltaClearing(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Report only one matching value
@@ -2914,7 +2950,8 @@ func TestHandler_DeltaClearing(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Get document and verify partial delta
@@ -2947,7 +2984,8 @@ func TestHandler_DeltaClearing(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Report matching nested value (merge is shallow, must include all nested keys)
@@ -2960,7 +2998,8 @@ func TestHandler_DeltaClearing(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Verify delta is fully cleared
@@ -2989,7 +3028,8 @@ func TestHandler_AcceptedResponseFields(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -3014,7 +3054,8 @@ func TestHandler_AcceptedResponseFields(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -3039,7 +3080,8 @@ func TestHandler_AcceptedResponseFields(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -3065,7 +3107,8 @@ func TestHandler_AcceptedResponseFields(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Second update with only one key
@@ -3076,7 +3119,8 @@ func TestHandler_AcceptedResponseFields(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -3097,7 +3141,8 @@ func TestHandler_AcceptedResponseFields(t *testing.T) {
 
 		payload := []byte(`{"state":{"desired":{"temp":22}},"clientToken":"tok-123"}`)
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -3120,14 +3165,16 @@ func TestHandler_AcceptedResponseFields(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Clear desired
 		client.sent = nil
 		payload = []byte(`{"state":{"desired":null}}`)
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		msg := client.lastMessage()
@@ -3273,14 +3320,16 @@ func TestHandler_NullAllReportedKeys(t *testing.T) {
 			},
 		})
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		// Null both reported keys individually
 		client.sent = nil
 		payload = []byte(`{"state":{"reported":{"temp":null,"mode":null}}}`)
 		h.HandleMessage(client, &mqttv5.Message{
-			Topic: "$things/dev1/shadow/update", Payload: payload,
+			Topic:   "$things/dev1/shadow/update",
+			Payload: payload,
 		})
 
 		client.sent = nil

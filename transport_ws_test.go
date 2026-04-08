@@ -2,6 +2,7 @@ package mqttv5
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,7 +38,7 @@ func TestWSConnReadWrite(t *testing.T) {
 	defer server.Close()
 
 	// Connect client
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	wsURL := fmt.Sprintf("ws%s", strings.TrimPrefix(server.URL, "http"))
 	dialer := NewWSDialer()
 	conn, err := dialer.Dial(context.Background(), wsURL)
 	require.NoError(t, err)
@@ -68,7 +69,7 @@ func TestWSConnAddresses(t *testing.T) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	wsURL := fmt.Sprintf("ws%s", strings.TrimPrefix(server.URL, "http"))
 	dialer := NewWSDialer()
 	conn, err := dialer.Dial(context.Background(), wsURL)
 	require.NoError(t, err)
@@ -91,7 +92,7 @@ func TestWSConnUnderlyingConn(t *testing.T) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	wsURL := fmt.Sprintf("ws%s", strings.TrimPrefix(server.URL, "http"))
 	dialer := NewWSDialer()
 	conn, err := dialer.Dial(context.Background(), wsURL)
 	require.NoError(t, err)
@@ -121,7 +122,7 @@ func TestWSConnDeadlines(t *testing.T) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	wsURL := fmt.Sprintf("ws%s", strings.TrimPrefix(server.URL, "http"))
 	dialer := NewWSDialer()
 	conn, err := dialer.Dial(context.Background(), wsURL)
 	require.NoError(t, err)
@@ -158,7 +159,7 @@ func TestWSDialerWithSubprotocol(t *testing.T) {
 	}))
 	defer server.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	wsURL := fmt.Sprintf("ws%s", strings.TrimPrefix(server.URL, "http"))
 	dialer := NewWSDialer()
 	conn, err := dialer.Dial(context.Background(), wsURL)
 	require.NoError(t, err)
@@ -191,7 +192,7 @@ func TestWSHandlerMQTTPackets(t *testing.T) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	wsURL := fmt.Sprintf("ws%s", strings.TrimPrefix(server.URL, "http"))
 	dialer := NewWSDialer()
 	conn, err := dialer.Dial(context.Background(), wsURL)
 	require.NoError(t, err)
@@ -225,7 +226,7 @@ func TestWSHandlerOriginValidation(t *testing.T) {
 		server := httptest.NewServer(handler)
 		defer server.Close()
 
-		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		wsURL := fmt.Sprintf("ws%s", strings.TrimPrefix(server.URL, "http"))
 		dialer := &websocket.Dialer{
 			Subprotocols: []string{WebSocketSubprotocol},
 		}
@@ -243,7 +244,7 @@ func TestWSHandlerOriginValidation(t *testing.T) {
 		server := httptest.NewServer(handler)
 		defer server.Close()
 
-		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		wsURL := fmt.Sprintf("ws%s", strings.TrimPrefix(server.URL, "http"))
 		origin := server.URL // Same origin as server
 
 		dialer := &websocket.Dialer{
@@ -263,7 +264,7 @@ func TestWSHandlerOriginValidation(t *testing.T) {
 		server := httptest.NewServer(handler)
 		defer server.Close()
 
-		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		wsURL := fmt.Sprintf("ws%s", strings.TrimPrefix(server.URL, "http"))
 
 		dialer := &websocket.Dialer{
 			Subprotocols: []string{WebSocketSubprotocol},
@@ -282,7 +283,7 @@ func TestWSHandlerOriginValidation(t *testing.T) {
 		server := httptest.NewServer(handler)
 		defer server.Close()
 
-		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		wsURL := fmt.Sprintf("ws%s", strings.TrimPrefix(server.URL, "http"))
 
 		dialer := &websocket.Dialer{
 			Subprotocols: []string{WebSocketSubprotocol},
@@ -302,7 +303,7 @@ func TestWSHandlerOriginValidation(t *testing.T) {
 		server := httptest.NewServer(handler)
 		defer server.Close()
 
-		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		wsURL := fmt.Sprintf("ws%s", strings.TrimPrefix(server.URL, "http"))
 
 		dialer := &websocket.Dialer{
 			Subprotocols: []string{WebSocketSubprotocol},
@@ -381,7 +382,7 @@ func BenchmarkWSRoundTrip(b *testing.B) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	wsURL := fmt.Sprintf("ws%s", strings.TrimPrefix(server.URL, "http"))
 	dialer := NewWSDialer()
 	conn, err := dialer.Dial(context.Background(), wsURL)
 	require.NoError(b, err)

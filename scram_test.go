@@ -193,7 +193,7 @@ func testSCRAMAuthFlow(t *testing.T, hashType SCRAMHash, password string, salt [
 
 	// Parse server-first-message
 	serverFirst := string(result.AuthData)
-	assert.Contains(t, serverFirst, "r="+clientNonce)
+	assert.Contains(t, serverFirst, fmt.Sprintf("r=%s", clientNonce))
 	assert.Contains(t, serverFirst, "s=")
 	assert.Contains(t, serverFirst, "i=")
 

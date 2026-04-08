@@ -1,6 +1,7 @@
 package mqttv5
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -24,7 +25,7 @@ func TestValidateNamespace(t *testing.T) {
 			"tenant-123",
 			"sub.domain.example",
 			strings.Repeat("a", 63), // max label length
-			strings.Repeat("a", 63) + "." + strings.Repeat("b", 63), // multiple max labels
+			fmt.Sprintf("%s.%s", strings.Repeat("a", 63), strings.Repeat("b", 63)), // multiple max labels
 		}
 
 		for _, ns := range validNamespaces {
@@ -63,7 +64,7 @@ func TestValidateNamespace(t *testing.T) {
 		err := ValidateNamespace(longLabel)
 		assert.ErrorIs(t, err, ErrNamespaceLabelTooLong)
 
-		err = ValidateNamespace("valid." + longLabel)
+		err = ValidateNamespace(fmt.Sprintf("valid.%s", longLabel))
 		assert.ErrorIs(t, err, ErrNamespaceLabelTooLong)
 	})
 

@@ -2,6 +2,7 @@ package mqttv5
 
 import (
 	"bytes"
+	"fmt"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -380,7 +381,7 @@ func BenchmarkEncodeString(b *testing.B) {
 
 	for _, size := range sizes {
 		s := strings.Repeat("a", size)
-		b.Run(strings.ReplaceAll(b.Name(), "/", "_")+"_"+string(rune('0'+size/100)), func(b *testing.B) {
+		b.Run(fmt.Sprintf("%s_%s", strings.ReplaceAll(b.Name(), "/", "_"), string(rune('0'+size/100))), func(b *testing.B) {
 			var buf bytes.Buffer
 			buf.Grow(size + 2)
 
@@ -403,7 +404,7 @@ func BenchmarkDecodeString(b *testing.B) {
 		_, _ = encodeString(&encoded, strings.Repeat("a", size))
 		data := encoded.Bytes()
 
-		b.Run(strings.ReplaceAll(b.Name(), "/", "_")+"_"+string(rune('0'+size/100)), func(b *testing.B) {
+		b.Run(fmt.Sprintf("%s_%s", strings.ReplaceAll(b.Name(), "/", "_"), string(rune('0'+size/100))), func(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 

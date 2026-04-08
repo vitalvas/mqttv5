@@ -1,6 +1,7 @@
 package shadow
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -620,7 +621,7 @@ func TestCheckAccess_FeatureFlags(t *testing.T) {
 		for _, suffix := range []string{"update", "get", "delete"} {
 			result := h.CheckAccess(&mqttv5.AuthzContext{
 				ClientID: "dev1",
-				Topic:    "$things/dev1/shadow/" + suffix,
+				Topic:    fmt.Sprintf("$things/dev1/shadow/%s", suffix),
 				Action:   mqttv5.AuthzActionPublish,
 			})
 			require.NotNil(t, result, "suffix: %s", suffix)

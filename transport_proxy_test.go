@@ -3,6 +3,7 @@ package mqttv5
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -213,7 +214,7 @@ func TestProxyDialerHTTPConnect(t *testing.T) {
 	}()
 
 	// Test the proxy dialer
-	proxyAddr := "http://" + proxyListener.Addr().String()
+	proxyAddr := fmt.Sprintf("http://%s", proxyListener.Addr().String())
 	dialer, err := NewProxyDialer(proxyAddr, "", "")
 	require.NoError(t, err)
 
@@ -265,7 +266,7 @@ func TestProxyDialerHTTPConnectWithAuth(t *testing.T) {
 		conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
 	}()
 
-	proxyAddr := "http://" + proxyListener.Addr().String()
+	proxyAddr := fmt.Sprintf("http://%s", proxyListener.Addr().String())
 	dialer, err := NewProxyDialer(proxyAddr, "user", "pass")
 	require.NoError(t, err)
 
@@ -406,7 +407,7 @@ func TestProxyDialerSOCKS5(t *testing.T) {
 	}()
 
 	// Test the proxy dialer
-	proxyAddr := "socks5://" + proxyListener.Addr().String()
+	proxyAddr := fmt.Sprintf("socks5://%s", proxyListener.Addr().String())
 	dialer, err := NewProxyDialer(proxyAddr, "", "")
 	require.NoError(t, err)
 
@@ -484,7 +485,7 @@ func TestProxyDialerSOCKS5WithAuth(t *testing.T) {
 		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 	}()
 
-	proxyAddr := "socks5://" + proxyListener.Addr().String()
+	proxyAddr := fmt.Sprintf("socks5://%s", proxyListener.Addr().String())
 	dialer, err := NewProxyDialer(proxyAddr, "user", "pass")
 	require.NoError(t, err)
 
@@ -513,7 +514,7 @@ func TestProxyDialerSOCKS5ContextCancellation(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}()
 
-	proxyAddr := "socks5://" + proxyListener.Addr().String()
+	proxyAddr := fmt.Sprintf("socks5://%s", proxyListener.Addr().String())
 	dialer, err := NewProxyDialer(proxyAddr, "", "")
 	require.NoError(t, err)
 
@@ -582,7 +583,7 @@ func TestProxyDialerHTTPConnectProxyReject(t *testing.T) {
 		conn.Write([]byte("HTTP/1.1 403 Forbidden\r\n\r\n"))
 	}()
 
-	proxyAddr := "http://" + proxyListener.Addr().String()
+	proxyAddr := fmt.Sprintf("http://%s", proxyListener.Addr().String())
 	dialer, err := NewProxyDialer(proxyAddr, "", "")
 	require.NoError(t, err)
 

@@ -1,6 +1,7 @@
 package mqttv5
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -230,7 +231,7 @@ func TestBridgeManagerP2MPIntegration(t *testing.T) {
 
 		// Add bridge to remote1 for "sensors" topics
 		_, err = manager.Add(BridgeConfig{
-			RemoteAddr: "tcp://" + remote1Listener.Addr().String(),
+			RemoteAddr: fmt.Sprintf("tcp://%s", remote1Listener.Addr().String()),
 			ClientID:   "bridge-sensors",
 			Topics: []BridgeTopic{
 				{LocalPrefix: "sensors", RemotePrefix: "data/sensors", Direction: BridgeDirectionIn, QoS: 1},
@@ -240,7 +241,7 @@ func TestBridgeManagerP2MPIntegration(t *testing.T) {
 
 		// Add bridge to remote2 for "alerts" topics
 		_, err = manager.Add(BridgeConfig{
-			RemoteAddr: "tcp://" + remote2Listener.Addr().String(),
+			RemoteAddr: fmt.Sprintf("tcp://%s", remote2Listener.Addr().String()),
 			ClientID:   "bridge-alerts",
 			Topics: []BridgeTopic{
 				{LocalPrefix: "alerts", RemotePrefix: "notifications", Direction: BridgeDirectionIn, QoS: 1},
@@ -262,7 +263,7 @@ func TestBridgeManagerP2MPIntegration(t *testing.T) {
 		// Subscribe to local broker
 		var receivedMsgs []*Message
 		var mu sync.Mutex
-		localSubscriber, err := Dial(WithServers("tcp://"+localListener.Addr().String()),
+		localSubscriber, err := Dial(WithServers(fmt.Sprintf("tcp://%s", localListener.Addr().String())),
 			WithClientID("local-subscriber"),
 		)
 		require.NoError(t, err)
@@ -278,7 +279,7 @@ func TestBridgeManagerP2MPIntegration(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 
 		// Publish to remote1 (sensors)
-		remote1Client, err := Dial(WithServers("tcp://"+remote1Listener.Addr().String()),
+		remote1Client, err := Dial(WithServers(fmt.Sprintf("tcp://%s", remote1Listener.Addr().String())),
 			WithClientID("remote1-publisher"),
 		)
 		require.NoError(t, err)
@@ -292,7 +293,7 @@ func TestBridgeManagerP2MPIntegration(t *testing.T) {
 		require.NoError(t, err)
 
 		// Publish to remote2 (alerts)
-		remote2Client, err := Dial(WithServers("tcp://"+remote2Listener.Addr().String()),
+		remote2Client, err := Dial(WithServers(fmt.Sprintf("tcp://%s", remote2Listener.Addr().String())),
 			WithClientID("remote2-publisher"),
 		)
 		require.NoError(t, err)
@@ -372,7 +373,7 @@ func BenchmarkBridgeManagerAdd(b *testing.B) {
 		manager := NewBridgeManager(srv)
 		config := BridgeConfig{
 			RemoteAddr: "tcp://localhost:1883",
-			ClientID:   "bridge-" + string(rune('a'+i%26)),
+			ClientID:   fmt.Sprintf("bridge-%s", string(rune('a'+i%26))),
 			Topics: []BridgeTopic{
 				{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionBoth},
 			},
@@ -391,7 +392,7 @@ func BenchmarkBridgeManagerGet(b *testing.B) {
 	for i := range 10 {
 		config := BridgeConfig{
 			RemoteAddr: "tcp://localhost:1883",
-			ClientID:   "bridge-" + string(rune('a'+i)),
+			ClientID:   fmt.Sprintf("bridge-%s", string(rune('a'+i))),
 			Topics: []BridgeTopic{
 				{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionBoth},
 			},
@@ -417,7 +418,7 @@ func BenchmarkBridgeManagerList(b *testing.B) {
 	for i := range 10 {
 		config := BridgeConfig{
 			RemoteAddr: "tcp://localhost:1883",
-			ClientID:   "bridge-" + string(rune('a'+i)),
+			ClientID:   fmt.Sprintf("bridge-%s", string(rune('a'+i))),
 			Topics: []BridgeTopic{
 				{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionBoth},
 			},
@@ -461,7 +462,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 
 		// Add bridge with DirectionOut (local -> remote)
 		_, err = manager.Add(BridgeConfig{
-			RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+			RemoteAddr: fmt.Sprintf("tcp://%s", remoteListener.Addr().String()),
 			ClientID:   "bridge-out",
 			Topics: []BridgeTopic{
 				{LocalPrefix: "sensors", RemotePrefix: "data/sensors", Direction: BridgeDirectionOut, QoS: 1},
@@ -481,7 +482,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 		var mu sync.Mutex
 
 		remoteSubscriber, err := Dial(
-			WithServers("tcp://"+remoteListener.Addr().String()),
+			WithServers(fmt.Sprintf("tcp://%s", remoteListener.Addr().String())),
 			WithClientID("remote-subscriber"),
 		)
 		require.NoError(t, err)
@@ -546,7 +547,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 		manager := NewBridgeManager(localServer)
 
 		_, err = manager.Add(BridgeConfig{
-			RemoteAddr: "tcp://" + remote1Listener.Addr().String(),
+			RemoteAddr: fmt.Sprintf("tcp://%s", remote1Listener.Addr().String()),
 			ClientID:   "bridge-1",
 			Topics: []BridgeTopic{
 				{LocalPrefix: "sensors", RemotePrefix: "remote1/sensors", Direction: BridgeDirectionOut, QoS: 1},
@@ -555,7 +556,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = manager.Add(BridgeConfig{
-			RemoteAddr: "tcp://" + remote2Listener.Addr().String(),
+			RemoteAddr: fmt.Sprintf("tcp://%s", remote2Listener.Addr().String()),
 			ClientID:   "bridge-2",
 			Topics: []BridgeTopic{
 				{LocalPrefix: "sensors", RemotePrefix: "remote2/sensors", Direction: BridgeDirectionOut, QoS: 1},
@@ -574,7 +575,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 		var msgs1, msgs2 []*Message
 		var mu sync.Mutex
 
-		sub1, err := Dial(WithServers("tcp://"+remote1Listener.Addr().String()), WithClientID("sub1"))
+		sub1, err := Dial(WithServers(fmt.Sprintf("tcp://%s", remote1Listener.Addr().String())), WithClientID("sub1"))
 		require.NoError(t, err)
 		defer sub1.Close()
 
@@ -585,7 +586,7 @@ func TestBridgeManagerForwardToRemote(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		sub2, err := Dial(WithServers("tcp://"+remote2Listener.Addr().String()), WithClientID("sub2"))
+		sub2, err := Dial(WithServers(fmt.Sprintf("tcp://%s", remote2Listener.Addr().String())), WithClientID("sub2"))
 		require.NoError(t, err)
 		defer sub2.Close()
 
@@ -643,9 +644,9 @@ func BenchmarkBridgeManagerForwardToRemote(b *testing.B) {
 	for i, prefix := range prefixes {
 		config := BridgeConfig{
 			RemoteAddr: "tcp://localhost:1883",
-			ClientID:   "bridge-" + string(rune('a'+i)),
+			ClientID:   fmt.Sprintf("bridge-%s", string(rune('a'+i))),
 			Topics: []BridgeTopic{
-				{LocalPrefix: prefix, RemotePrefix: "remote/" + prefix, Direction: BridgeDirectionOut},
+				{LocalPrefix: prefix, RemotePrefix: fmt.Sprintf("remote/%s", prefix), Direction: BridgeDirectionOut},
 			},
 		}
 		manager.Add(config)
@@ -676,9 +677,9 @@ func BenchmarkBridgeManagerForwardToRemoteParallel(b *testing.B) {
 	for i, prefix := range prefixes {
 		config := BridgeConfig{
 			RemoteAddr: "tcp://localhost:1883",
-			ClientID:   "bridge-" + string(rune('a'+i)),
+			ClientID:   fmt.Sprintf("bridge-%s", string(rune('a'+i))),
 			Topics: []BridgeTopic{
-				{LocalPrefix: prefix, RemotePrefix: "remote/" + prefix, Direction: BridgeDirectionOut},
+				{LocalPrefix: prefix, RemotePrefix: fmt.Sprintf("remote/%s", prefix), Direction: BridgeDirectionOut},
 			},
 		}
 		manager.Add(config)
@@ -717,7 +718,7 @@ func TestBridgeManagerConcurrency(t *testing.T) {
 			defer wg.Done()
 			config := BridgeConfig{
 				RemoteAddr: "tcp://localhost:1883",
-				ClientID:   "bridge-" + string(rune('a'+idx)),
+				ClientID:   fmt.Sprintf("bridge-%s", string(rune('a'+idx))),
 				Topics: []BridgeTopic{
 					{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionBoth},
 				},

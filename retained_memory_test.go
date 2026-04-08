@@ -1,6 +1,7 @@
 package mqttv5
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -523,7 +524,7 @@ func TestMemoryRetainedStoreConcurrency(_ *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			topic := "test/" + string(rune(n))
+			topic := fmt.Sprintf("test/%s", string(rune(n)))
 			store.Set(testNS, &RetainedMessage{Topic: topic, Payload: []byte("data")})
 			store.Get(testNS, topic)
 			store.Match(testNS, "test/#")
@@ -564,7 +565,7 @@ func BenchmarkMemoryRetainedStoreGet(b *testing.B) {
 func BenchmarkMemoryRetainedStoreMatch(b *testing.B) {
 	store := NewMemoryRetainedStore()
 	for i := range 100 {
-		topic := "sensor/" + string(rune(i)) + "/temperature"
+		topic := fmt.Sprintf("sensor/%s/temperature", string(rune(i)))
 		store.Set(testNS, &RetainedMessage{Topic: topic, Payload: []byte("data")})
 	}
 

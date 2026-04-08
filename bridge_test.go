@@ -1,6 +1,7 @@
 package mqttv5
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -401,7 +402,7 @@ func BenchmarkBridgeRemapTopicWithCustomRemapper(b *testing.B) {
 		},
 		TopicRemapper: func(topic string, direction BridgeDirection) string {
 			if direction == BridgeDirectionOut {
-				return "custom/" + topic
+				return fmt.Sprintf("custom/%s", topic)
 			}
 			return ""
 		},
@@ -528,7 +529,7 @@ func TestBridgeIntegration(t *testing.T) {
 		// Connect a subscriber to local broker to receive forwarded messages
 		var receivedMsg *Message
 		var mu sync.Mutex
-		localSubscriber, err := Dial(WithServers("tcp://"+localListener.Addr().String()),
+		localSubscriber, err := Dial(WithServers(fmt.Sprintf("tcp://%s", localListener.Addr().String())),
 			WithClientID("local-subscriber"),
 		)
 		require.NoError(t, err)
@@ -545,7 +546,7 @@ func TestBridgeIntegration(t *testing.T) {
 
 		// Create and start bridge
 		config := BridgeConfig{
-			RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+			RemoteAddr: fmt.Sprintf("tcp://%s", remoteListener.Addr().String()),
 			ClientID:   "test-bridge",
 			Topics: []BridgeTopic{
 				{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionIn, QoS: 1},
@@ -564,7 +565,7 @@ func TestBridgeIntegration(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 
 		// Publish to remote broker
-		remoteClient, err := Dial(WithServers("tcp://"+remoteListener.Addr().String()),
+		remoteClient, err := Dial(WithServers(fmt.Sprintf("tcp://%s", remoteListener.Addr().String())),
 			WithClientID("remote-publisher"),
 		)
 		require.NoError(t, err)
@@ -736,7 +737,7 @@ func TestBridgeStartAlreadyRunning(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 
 	config := BridgeConfig{
-		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		RemoteAddr: fmt.Sprintf("tcp://%s", remoteListener.Addr().String()),
 		ClientID:   "test-bridge",
 		Topics: []BridgeTopic{
 			{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionBoth},
@@ -799,7 +800,7 @@ func TestBridgeWithCredentials(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 
 	config := BridgeConfig{
-		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		RemoteAddr: fmt.Sprintf("tcp://%s", remoteListener.Addr().String()),
 		ClientID:   "test-bridge",
 		Username:   "testuser",
 		Password:   "testpass",
@@ -870,7 +871,7 @@ func TestBridgeForwardToRemoteSuccess(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 
 	// Create a subscriber on remote to verify messages arrive
-	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
+	remoteSubscriber, err := Dial(WithServers(fmt.Sprintf("tcp://%s", remoteListener.Addr().String())))
 	require.NoError(t, err)
 	defer remoteSubscriber.Close()
 
@@ -884,7 +885,7 @@ func TestBridgeForwardToRemoteSuccess(t *testing.T) {
 
 	// Create bridge with OUT direction
 	config := BridgeConfig{
-		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		RemoteAddr: fmt.Sprintf("tcp://%s", remoteListener.Addr().String()),
 		ClientID:   "forward-test-bridge",
 		Topics: []BridgeTopic{
 			{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionOut, QoS: 0},
@@ -947,7 +948,7 @@ func TestBridgeForwardToRemoteWithBothDirection(t *testing.T) {
 
 	time.Sleep(2 * time.Millisecond)
 
-	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
+	remoteSubscriber, err := Dial(WithServers(fmt.Sprintf("tcp://%s", remoteListener.Addr().String())))
 	require.NoError(t, err)
 	defer remoteSubscriber.Close()
 
@@ -961,7 +962,7 @@ func TestBridgeForwardToRemoteWithBothDirection(t *testing.T) {
 
 	// Create bridge with BOTH direction
 	config := BridgeConfig{
-		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		RemoteAddr: fmt.Sprintf("tcp://%s", remoteListener.Addr().String()),
 		ClientID:   "both-direction-bridge",
 		Topics: []BridgeTopic{
 			{LocalPrefix: "device", RemotePrefix: "cloud", Direction: BridgeDirectionBoth, QoS: 1},
@@ -1013,7 +1014,7 @@ func TestBridgeForwardToRemoteTopicMismatch(t *testing.T) {
 
 	time.Sleep(2 * time.Millisecond)
 
-	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
+	remoteSubscriber, err := Dial(WithServers(fmt.Sprintf("tcp://%s", remoteListener.Addr().String())))
 	require.NoError(t, err)
 	defer remoteSubscriber.Close()
 
@@ -1026,7 +1027,7 @@ func TestBridgeForwardToRemoteTopicMismatch(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 
 	config := BridgeConfig{
-		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		RemoteAddr: fmt.Sprintf("tcp://%s", remoteListener.Addr().String()),
 		ClientID:   "mismatch-bridge",
 		Topics: []BridgeTopic{
 			{LocalPrefix: "sensors", RemotePrefix: "data", Direction: BridgeDirectionOut},
@@ -1078,7 +1079,7 @@ func TestBridgeForwardToRemoteWithTopicRemapper(t *testing.T) {
 
 	time.Sleep(2 * time.Millisecond)
 
-	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
+	remoteSubscriber, err := Dial(WithServers(fmt.Sprintf("tcp://%s", remoteListener.Addr().String())))
 	require.NoError(t, err)
 	defer remoteSubscriber.Close()
 
@@ -1092,14 +1093,14 @@ func TestBridgeForwardToRemoteWithTopicRemapper(t *testing.T) {
 
 	// Create bridge with custom topic remapper
 	config := BridgeConfig{
-		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		RemoteAddr: fmt.Sprintf("tcp://%s", remoteListener.Addr().String()),
 		ClientID:   "remapper-bridge",
 		Topics: []BridgeTopic{
 			{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionOut},
 		},
 		TopicRemapper: func(topic string, direction BridgeDirection) string {
 			if direction == BridgeDirectionOut {
-				return "custom/" + topic
+				return fmt.Sprintf("custom/%s", topic)
 			}
 			return ""
 		},
@@ -1150,7 +1151,7 @@ func TestBridgeForwardToRemoteEmptyNamespace(t *testing.T) {
 
 	time.Sleep(2 * time.Millisecond)
 
-	remoteSubscriber, err := Dial(WithServers("tcp://" + remoteListener.Addr().String()))
+	remoteSubscriber, err := Dial(WithServers(fmt.Sprintf("tcp://%s", remoteListener.Addr().String())))
 	require.NoError(t, err)
 	defer remoteSubscriber.Close()
 
@@ -1164,7 +1165,7 @@ func TestBridgeForwardToRemoteEmptyNamespace(t *testing.T) {
 
 	// Bridge with default namespace (empty = DefaultNamespace)
 	config := BridgeConfig{
-		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		RemoteAddr: fmt.Sprintf("tcp://%s", remoteListener.Addr().String()),
 		ClientID:   "namespace-bridge",
 		Topics: []BridgeTopic{
 			{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionOut},
@@ -1219,7 +1220,7 @@ func TestBridgeForwardToRemotePublishError(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 
 	config := BridgeConfig{
-		RemoteAddr: "tcp://" + remoteListener.Addr().String(),
+		RemoteAddr: fmt.Sprintf("tcp://%s", remoteListener.Addr().String()),
 		ClientID:   "error-bridge",
 		Topics: []BridgeTopic{
 			{LocalPrefix: "local", RemotePrefix: "remote", Direction: BridgeDirectionOut},

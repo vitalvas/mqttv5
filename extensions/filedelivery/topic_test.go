@@ -1,6 +1,7 @@
 package filedelivery
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -127,12 +128,12 @@ func TestParseStreamTopic(t *testing.T) {
 
 	t.Run("stream ID too long", func(t *testing.T) {
 		longID := strings.Repeat("a", MaxStreamIDLen+1)
-		assert.Nil(t, parseStreamTopic("$things/dev1/streams/"+longID+"/describe/json"))
+		assert.Nil(t, parseStreamTopic(fmt.Sprintf("$things/dev1/streams/%s/describe/json", longID)))
 	})
 
 	t.Run("stream ID at max length", func(t *testing.T) {
 		maxID := strings.Repeat("a", MaxStreamIDLen)
-		p := parseStreamTopic("$things/dev1/streams/" + maxID + "/describe/json")
+		p := parseStreamTopic(fmt.Sprintf("$things/dev1/streams/%s/describe/json", maxID))
 		require.NotNil(t, p)
 		assert.Equal(t, maxID, p.StreamID)
 	})

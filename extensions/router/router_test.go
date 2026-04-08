@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"net"
 	"regexp"
 	"sync/atomic"
@@ -585,7 +586,7 @@ func TestRouterConcurrentAccess(t *testing.T) {
 	done := make(chan struct{})
 	for i := range 10 {
 		go func(n int) {
-			r.Handle(func(_ *mqttv5.Message) {}, WithTopic("topic/"+string(rune('a'+n))))
+			r.Handle(func(_ *mqttv5.Message) {}, WithTopic(fmt.Sprintf("topic/%s", string(rune('a'+n)))))
 			done <- struct{}{}
 		}(i)
 	}
@@ -674,7 +675,7 @@ func TestRouterSubscribe(t *testing.T) {
 		addr, cleanup := setupTestServer(t)
 		defer cleanup()
 
-		client, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("sub-default"))
+		client, err := mqttv5.Dial(mqttv5.WithServers(fmt.Sprintf("tcp://%s", addr)), mqttv5.WithClientID("sub-default"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -690,7 +691,7 @@ func TestRouterSubscribe(t *testing.T) {
 		addr, cleanup := setupTestServer(t)
 		defer cleanup()
 
-		client, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("sub-per-topic"))
+		client, err := mqttv5.Dial(mqttv5.WithServers(fmt.Sprintf("tcp://%s", addr)), mqttv5.WithClientID("sub-per-topic"))
 		require.NoError(t, err)
 		defer client.Close()
 
@@ -706,7 +707,7 @@ func TestRouterSubscribe(t *testing.T) {
 		addr, cleanup := setupTestServer(t)
 		defer cleanup()
 
-		client, err := mqttv5.Dial(mqttv5.WithServers("tcp://"+addr), mqttv5.WithClientID("sub-mixed"))
+		client, err := mqttv5.Dial(mqttv5.WithServers(fmt.Sprintf("tcp://%s", addr)), mqttv5.WithClientID("sub-mixed"))
 		require.NoError(t, err)
 		defer client.Close()
 

@@ -3,6 +3,7 @@ package mqttv5
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -106,7 +107,7 @@ func NewBridge(server *Server, config BridgeConfig) (*Bridge, error) {
 
 	id := config.ClientID
 	if id == "" {
-		id = "bridge-" + generateClientID()
+		id = fmt.Sprintf("bridge-%s", generateClientID())
 	}
 
 	// Default namespace to DefaultNamespace if not specified
@@ -400,7 +401,7 @@ func (b *Bridge) remapTopic(topic, fromPrefix, toPrefix string, direction Bridge
 	// Default prefix-based remapping
 	if suffix, found := strings.CutPrefix(topic, fromPrefix); found {
 		if fromPrefix == "" && toPrefix != "" {
-			return toPrefix + "/" + suffix
+			return fmt.Sprintf("%s/%s", toPrefix, suffix)
 		}
 		return toPrefix + suffix
 	}
@@ -420,7 +421,7 @@ func (b *Bridge) topicMatchesPrefix(topic, prefix string) bool {
 	}
 	// Prefix match requires the topic to have prefix followed by "/"
 	// e.g., prefix "foo" matches "foo/bar" but not "foobar"
-	return strings.HasPrefix(topic, prefix+"/")
+	return strings.HasPrefix(topic, fmt.Sprintf("%s/", prefix))
 }
 
 // isFromBridge checks if a message originated from this bridge (loop detection).

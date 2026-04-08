@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -65,7 +66,7 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 		}
 
 		// Perform enhanced authentication
-		enhancedResult, ok := s.performEnhancedAuth(conn, connect, clientID, authMethod, maxPacketSize, logger)
+		enhancedResult, ok := s.performEnhancedAuth(conn, connect, enhancedAuthRequest{clientID: clientID, authMethod: authMethod, maxPacketSize: maxPacketSize}, logger)
 		if !ok {
 			return authClientResult{reasonCode: ReasonNotAuthorized}
 		}
@@ -1862,7 +1863,7 @@ func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, log
 
 func (s *Server) validateSubscriptionSupport(subscription Subscription, logger Logger) ReasonCode {
 	// Check wildcard subscription support
-	if !s.config.wildcardSubAvail && containsWildcard(subscription.TopicFilter) {
+	if !s.config.wildcardSubAvail && strings.ContainsAny(subscription.TopicFilter, "#+") {
 		logger.Warn("wildcard subscriptions not supported", LogFields{
 			LogFieldTopic: subscription.TopicFilter,
 		})
@@ -1870,7 +1871,7 @@ func (s *Server) validateSubscriptionSupport(subscription Subscription, logger L
 	}
 
 	// Check shared subscription support
-	if !s.config.sharedSubAvailable && isSharedSubscription(subscription.TopicFilter) {
+	if !s.config.sharedSubAvailable && strings.HasPrefix(subscription.TopicFilter, "$share/") {
 		logger.Warn("shared subscriptions not supported", LogFields{
 			LogFieldTopic: subscription.TopicFilter,
 		})
@@ -2392,9 +2393,18 @@ func (s *Server) checkCredentialExpiry() {
 	}
 }
 
+type enhancedAuthRequest struct {
+	clientID      string
+	authMethod    string
+	maxPacketSize uint32
+}
+
 // performEnhancedAuth performs enhanced authentication with AUTH packet exchanges.
 // Returns the final EnhancedAuthResult and true if successful, or nil and false if failed.
-func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, clientID, authMethod string, maxPacketSize uint32, logger Logger) (*EnhancedAuthResult, bool) {
+func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, req enhancedAuthRequest, logger Logger) (*EnhancedAuthResult, bool) {
+	clientID := req.clientID
+	authMethod := req.authMethod
+	maxPacketSize := req.maxPacketSize
 	// Build initial context from CONNECT
 	eaCtx := &EnhancedAuthContext{
 		ClientID:   clientID,

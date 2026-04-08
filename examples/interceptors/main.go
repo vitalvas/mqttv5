@@ -71,7 +71,7 @@ type TopicPrefixInterceptor struct {
 }
 
 func (i *TopicPrefixInterceptor) OnSend(msg *mqttv5.Message) *mqttv5.Message {
-	msg.Topic = i.prefix + "/" + msg.Topic
+	msg.Topic = fmt.Sprintf("%s/%s", i.prefix, msg.Topic)
 	return msg
 }
 

@@ -1,6 +1,7 @@
 package mqttv5
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -230,7 +231,7 @@ func TestServerOptions(t *testing.T) {
 
 	t.Run("with session factory", func(t *testing.T) {
 		customFactory := func(clientID, namespace string) Session {
-			return NewMemorySession("custom-"+clientID, namespace)
+			return NewMemorySession(fmt.Sprintf("custom-%s", clientID), namespace)
 		}
 		cfg := defaultServerConfig()
 		WithSessionFactory(customFactory)(cfg)

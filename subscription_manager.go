@@ -1,6 +1,7 @@
 package mqttv5
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,7 +72,7 @@ func (m *SubscriptionManager) Subscribe(clientID, namespace string, sub Subscrip
 		matchFilter = sharedSub.TopicFilter
 		entry.ShareGroup = sharedSub.ShareName
 		// Create a unique key for the share group + filter combination (namespace-scoped)
-		shareGroupKey = NamespaceKey(namespace, sharedSub.ShareName+"/"+sharedSub.TopicFilter)
+		shareGroupKey = NamespaceKey(namespace, fmt.Sprintf("%s/%s", sharedSub.ShareName, sharedSub.TopicFilter))
 	} else {
 		// Regular subscription
 		matchFilter = sub.TopicFilter
@@ -118,7 +119,7 @@ func (m *SubscriptionManager) removeSubscriptionLocked(clientID, namespace, filt
 			var shareGroupKey string
 			if sharedSub, _ := ParseSharedSubscription(filter); sharedSub != nil {
 				matchFilter = sharedSub.TopicFilter
-				shareGroupKey = NamespaceKey(namespace, sharedSub.ShareName+"/"+sharedSub.TopicFilter)
+				shareGroupKey = NamespaceKey(namespace, fmt.Sprintf("%s/%s", sharedSub.ShareName, sharedSub.TopicFilter))
 			}
 
 			// Remove from matcher
@@ -162,7 +163,7 @@ func (m *SubscriptionManager) UnsubscribeAll(clientID, namespace string) {
 		var shareGroupKey string
 		if sharedSub, _ := ParseSharedSubscription(entry.Subscription.TopicFilter); sharedSub != nil {
 			matchFilter = sharedSub.TopicFilter
-			shareGroupKey = NamespaceKey(namespace, sharedSub.ShareName+"/"+sharedSub.TopicFilter)
+			shareGroupKey = NamespaceKey(namespace, fmt.Sprintf("%s/%s", sharedSub.ShareName, sharedSub.TopicFilter))
 		}
 
 		m.matcher.Unsubscribe(matchFilter, entry)
@@ -299,7 +300,7 @@ func (m *SubscriptionManager) MatchForDelivery(topic, publisherID, publisherName
 			// Shared subscription - group by share group + effective filter (namespace-scoped)
 			sharedSub, _ := ParseSharedSubscription(entry.Subscription.TopicFilter)
 			if sharedSub != nil {
-				shareGroupKey := NamespaceKey(entry.Namespace, sharedSub.ShareName+"/"+sharedSub.TopicFilter)
+				shareGroupKey := NamespaceKey(entry.Namespace, fmt.Sprintf("%s/%s", sharedSub.ShareName, sharedSub.TopicFilter))
 				if sharedGroups[shareGroupKey] == nil {
 					sharedGroups[shareGroupKey] = &sharedGroupState{}
 				}

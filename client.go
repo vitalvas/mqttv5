@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -811,11 +812,11 @@ func (c *Client) SubscribeMultiple(filters map[string]byte, handler MessageHandl
 			return err
 		}
 		// Check server capability: wildcard subscriptions
-		if !c.serverWildcardSubAvail && containsWildcard(filter) {
+		if !c.serverWildcardSubAvail && strings.ContainsAny(filter, "#+") {
 			return ErrWildcardSubNotSupported
 		}
 		// Check server capability: shared subscriptions
-		if !c.serverSharedSubAvailable && isSharedSubscription(filter) {
+		if !c.serverSharedSubAvailable && strings.HasPrefix(filter, "$share/") {
 			return ErrSharedSubNotSupported
 		}
 		// Enforce server's Maximum QoS - cap subscription QoS to what server supports

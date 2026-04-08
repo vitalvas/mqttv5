@@ -2,6 +2,7 @@ package mqttv5
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -243,7 +244,7 @@ func TestWSServerWithHTTPMux(t *testing.T) {
 		defer ts.Close()
 
 		// Make a regular HTTP request (not WebSocket)
-		resp, err := http.Get(ts.URL + "/mqtt")
+		resp, err := http.Get(fmt.Sprintf("%s/mqtt", ts.URL))
 		require.NoError(t, err)
 
 		// Should get some response (likely error since not WebSocket)
@@ -281,7 +282,7 @@ func TestWSServerHandleWSConnection(t *testing.T) {
 		ts := httptest.NewServer(mux)
 
 		// Connect via WebSocket
-		wsURL := "ws" + ts.URL[4:] + "/mqtt"
+		wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 		dialer := testWSDialer()
 
 		conn, _, err := dialer.Dial(wsURL, nil)
@@ -347,7 +348,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		mux.Handle("/mqtt", srv)
 		ts := httptest.NewServer(mux)
 
-		wsURL := "ws" + ts.URL[4:] + "/mqtt"
+		wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 		dialer := testWSDialer()
 
 		conn, _, err := dialer.Dial(wsURL, nil)
@@ -414,7 +415,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		mux.Handle("/mqtt", srv)
 		ts := httptest.NewServer(mux)
 
-		wsURL := "ws" + ts.URL[4:] + "/mqtt"
+		wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 		dialer := testWSDialer()
 
 		// First connection should succeed
@@ -482,7 +483,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		mux.Handle("/mqtt", srv)
 		ts := httptest.NewServer(mux)
 
-		wsURL := "ws" + ts.URL[4:] + "/mqtt"
+		wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 		dialer := testWSDialer()
 
 		conn, _, err := dialer.Dial(wsURL, nil)
@@ -560,7 +561,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 			mux.Handle("/mqtt", srv)
 			ts := httptest.NewServer(mux)
 
-			wsURL := "ws" + ts.URL[4:] + "/mqtt"
+			wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 			dialer := testWSDialer()
 
 			conn, _, err := dialer.Dial(wsURL, nil)
@@ -601,7 +602,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		mux.Handle("/mqtt", srv)
 		ts := httptest.NewServer(mux)
 
-		wsURL := "ws" + ts.URL[4:] + "/mqtt"
+		wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 		dialer := testWSDialer()
 
 		conn, _, err := dialer.Dial(wsURL, nil)
@@ -652,7 +653,7 @@ func TestWSServerHandleWSConn(t *testing.T) {
 		mux.Handle("/mqtt", srv)
 		ts := httptest.NewServer(mux)
 
-		wsURL := "ws" + ts.URL[4:] + "/mqtt"
+		wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 		dialer := testWSDialer()
 
 		conn, _, err := dialer.Dial(wsURL, nil)
@@ -708,7 +709,7 @@ func TestWSServerHandleWSConnProperties(t *testing.T) {
 		mux.Handle("/mqtt", srv)
 		ts := httptest.NewServer(mux)
 
-		wsURL := "ws" + ts.URL[4:] + "/mqtt"
+		wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 		dialer := testWSDialer()
 
 		conn, _, err := dialer.Dial(wsURL, nil)
@@ -759,7 +760,7 @@ func TestWSServerHandleWSConnProperties(t *testing.T) {
 		mux.Handle("/mqtt", srv)
 		ts := httptest.NewServer(mux)
 
-		wsURL := "ws" + ts.URL[4:] + "/mqtt"
+		wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 		dialer := testWSDialer()
 
 		conn, _, err := dialer.Dial(wsURL, nil)
@@ -823,7 +824,7 @@ func TestWSServerHandleWSConnProperties(t *testing.T) {
 			mux.Handle("/mqtt", srv)
 			ts := httptest.NewServer(mux)
 
-			wsURL := "ws" + ts.URL[4:] + "/mqtt"
+			wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 			dialer := testWSDialer()
 
 			conn, _, err := dialer.Dial(wsURL, nil)
@@ -872,7 +873,7 @@ func TestWSServerHandleWSConnSession(t *testing.T) {
 		mux.Handle("/mqtt", srv)
 		ts := httptest.NewServer(mux)
 
-		wsURL := "ws" + ts.URL[4:] + "/mqtt"
+		wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 		dialer := testWSDialer()
 
 		// First connection
@@ -928,7 +929,7 @@ func TestWSServerHandleWSConnSession(t *testing.T) {
 		mux.Handle("/mqtt", srv)
 		ts := httptest.NewServer(mux)
 
-		wsURL := "ws" + ts.URL[4:] + "/mqtt"
+		wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 		dialer := testWSDialer()
 
 		// First connection - create session and subscription
@@ -1001,7 +1002,7 @@ func TestWSServerHandleWSConnSession(t *testing.T) {
 		mux.Handle("/mqtt", srv)
 		ts := httptest.NewServer(mux)
 
-		wsURL := "ws" + ts.URL[4:] + "/mqtt"
+		wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 		dialer := testWSDialer()
 
 		conn, _, err := dialer.Dial(wsURL, nil)
@@ -1036,7 +1037,7 @@ func TestWSServerHandleWSConnSession(t *testing.T) {
 		mux.Handle("/mqtt", srv)
 		ts := httptest.NewServer(mux)
 
-		wsURL := "ws" + ts.URL[4:] + "/mqtt"
+		wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 		dialer := testWSDialer()
 
 		conn, _, err := dialer.Dial(wsURL, nil)
@@ -1085,7 +1086,7 @@ func TestWSServerHandleWSConnSession(t *testing.T) {
 		mux.Handle("/mqtt", srv)
 		ts := httptest.NewServer(mux)
 
-		wsURL := "ws" + ts.URL[4:] + "/mqtt"
+		wsURL := fmt.Sprintf("ws%s/mqtt", ts.URL[4:])
 		dialer := testWSDialer()
 
 		conn, _, err := dialer.Dial(wsURL, nil)

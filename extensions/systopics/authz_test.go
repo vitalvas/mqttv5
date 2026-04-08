@@ -1,6 +1,7 @@
 package systopics
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,7 +40,7 @@ func TestCheckAccess(t *testing.T) {
 			TopicLoadMessagesRecv1min,
 			TopicNamespacesCount,
 			TopicTopicsCount,
-			TopicPacketsReceivedPrefix + "connect",
+			fmt.Sprintf("%sconnect", TopicPacketsReceivedPrefix),
 			"$SYS/broker/clients/namespace/tenant1/connected",
 			"$SYS/broker/unknown/topic",
 		} {

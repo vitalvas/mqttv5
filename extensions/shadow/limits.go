@@ -114,7 +114,7 @@ func validatePayload(payload []byte, limits Limits) (*UpdateRequest, error) {
 	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(&raw); err != nil {
-		return nil, &ErrorResponse{Code: ErrCodeBadRequest, Message: "invalid JSON: " + err.Error()}
+		return nil, &ErrorResponse{Code: ErrCodeBadRequest, Message: fmt.Sprintf("invalid JSON: %s", err.Error())}
 	}
 
 	if limits.MaxClientTokenLength > 0 && len(raw.ClientToken) > limits.MaxClientTokenLength {
@@ -136,7 +136,7 @@ func validatePayload(payload []byte, limits Limits) (*UpdateRequest, error) {
 		} else {
 			var desired map[string]any
 			if err := json.Unmarshal(raw.State.Desired, &desired); err != nil {
-				return req, &ErrorResponse{Code: ErrCodeBadRequest, Message: "invalid desired state: " + err.Error()}
+				return req, &ErrorResponse{Code: ErrCodeBadRequest, Message: fmt.Sprintf("invalid desired state: %s", err.Error())}
 			}
 
 			req.State.Desired = desired
@@ -150,7 +150,7 @@ func validatePayload(payload []byte, limits Limits) (*UpdateRequest, error) {
 		} else {
 			var reported map[string]any
 			if err := json.Unmarshal(raw.State.Reported, &reported); err != nil {
-				return req, &ErrorResponse{Code: ErrCodeBadRequest, Message: "invalid reported state: " + err.Error()}
+				return req, &ErrorResponse{Code: ErrCodeBadRequest, Message: fmt.Sprintf("invalid reported state: %s", err.Error())}
 			}
 
 			req.State.Reported = reported

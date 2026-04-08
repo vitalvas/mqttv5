@@ -79,8 +79,8 @@ func (p *Publisher) publish() {
 	if p.enabled(TopicGroupBrokerInfo) {
 		topics = append(topics,
 			sysMessage{topic: TopicVersion, value: p.config.version},
-			sysMessage{topic: TopicUptime, value: formatInt(int64(now.Sub(p.broker.StartedAt()).Seconds()))},
-			sysMessage{topic: TopicTimestamp, value: formatInt(now.Unix())},
+			sysMessage{topic: TopicUptime, value: strconv.FormatInt(int64(now.Sub(p.broker.StartedAt()).Seconds()), 10)},
+			sysMessage{topic: TopicTimestamp, value: strconv.FormatInt(now.Unix(), 10)},
 		)
 	}
 
@@ -92,52 +92,52 @@ func (p *Publisher) publish() {
 		// because publishNamespaceTopics publishes it per-namespace.
 		if p.config.namespaceMode == NamespaceModeIsolated && p.enabled(TopicGroupNamespace) {
 			topics = append(topics,
-				sysMessage{topic: TopicClientsTotal, value: formatInt(totalConns)},
-				sysMessage{topic: TopicClientsMaximum, value: formatInt(p.broker.MaxConnections())},
-				sysMessage{topic: TopicClientsDisconnected, value: formatInt(disconnected)},
+				sysMessage{topic: TopicClientsTotal, value: strconv.FormatInt(totalConns, 10)},
+				sysMessage{topic: TopicClientsMaximum, value: strconv.FormatInt(p.broker.MaxConnections(), 10)},
+				sysMessage{topic: TopicClientsDisconnected, value: strconv.FormatInt(disconnected, 10)},
 			)
 		} else {
 			topics = append(topics,
-				sysMessage{topic: TopicClientsConnected, value: formatInt(connected)},
-				sysMessage{topic: TopicClientsTotal, value: formatInt(totalConns)},
-				sysMessage{topic: TopicClientsMaximum, value: formatInt(p.broker.MaxConnections())},
-				sysMessage{topic: TopicClientsDisconnected, value: formatInt(disconnected)},
+				sysMessage{topic: TopicClientsConnected, value: strconv.FormatInt(connected, 10)},
+				sysMessage{topic: TopicClientsTotal, value: strconv.FormatInt(totalConns, 10)},
+				sysMessage{topic: TopicClientsMaximum, value: strconv.FormatInt(p.broker.MaxConnections(), 10)},
+				sysMessage{topic: TopicClientsDisconnected, value: strconv.FormatInt(disconnected, 10)},
 			)
 		}
 	}
 
 	if p.enabled(TopicGroupMessages) {
 		topics = append(topics,
-			sysMessage{topic: TopicMessagesReceived, value: formatInt(totalMsgRecv)},
-			sysMessage{topic: TopicMessagesSent, value: formatInt(totalMsgSent)},
-			sysMessage{topic: TopicMessagesStored, value: formatInt(p.broker.RetainedMessages())},
-			sysMessage{topic: TopicMessagesPublishRecv, value: formatInt(totalMsgRecv)},
-			sysMessage{topic: TopicMessagesPublishSent, value: formatInt(totalMsgSent)},
-			sysMessage{topic: TopicMessagesReceivedQoS0, value: formatInt(p.broker.TotalMessagesReceived(0))},
-			sysMessage{topic: TopicMessagesReceivedQoS1, value: formatInt(p.broker.TotalMessagesReceived(1))},
-			sysMessage{topic: TopicMessagesReceivedQoS2, value: formatInt(p.broker.TotalMessagesReceived(2))},
-			sysMessage{topic: TopicMessagesSentQoS0, value: formatInt(p.broker.TotalMessagesSent(0))},
-			sysMessage{topic: TopicMessagesSentQoS1, value: formatInt(p.broker.TotalMessagesSent(1))},
-			sysMessage{topic: TopicMessagesSentQoS2, value: formatInt(p.broker.TotalMessagesSent(2))},
+			sysMessage{topic: TopicMessagesReceived, value: strconv.FormatInt(totalMsgRecv, 10)},
+			sysMessage{topic: TopicMessagesSent, value: strconv.FormatInt(totalMsgSent, 10)},
+			sysMessage{topic: TopicMessagesStored, value: strconv.FormatInt(p.broker.RetainedMessages(), 10)},
+			sysMessage{topic: TopicMessagesPublishRecv, value: strconv.FormatInt(totalMsgRecv, 10)},
+			sysMessage{topic: TopicMessagesPublishSent, value: strconv.FormatInt(totalMsgSent, 10)},
+			sysMessage{topic: TopicMessagesReceivedQoS0, value: strconv.FormatInt(p.broker.TotalMessagesReceived(0), 10)},
+			sysMessage{topic: TopicMessagesReceivedQoS1, value: strconv.FormatInt(p.broker.TotalMessagesReceived(1), 10)},
+			sysMessage{topic: TopicMessagesReceivedQoS2, value: strconv.FormatInt(p.broker.TotalMessagesReceived(2), 10)},
+			sysMessage{topic: TopicMessagesSentQoS0, value: strconv.FormatInt(p.broker.TotalMessagesSent(0), 10)},
+			sysMessage{topic: TopicMessagesSentQoS1, value: strconv.FormatInt(p.broker.TotalMessagesSent(1), 10)},
+			sysMessage{topic: TopicMessagesSentQoS2, value: strconv.FormatInt(p.broker.TotalMessagesSent(2), 10)},
 		)
 	}
 
 	if p.enabled(TopicGroupBytes) {
 		topics = append(topics,
-			sysMessage{topic: TopicBytesReceived, value: formatInt(totalBytesRecv)},
-			sysMessage{topic: TopicBytesSent, value: formatInt(totalBytesSent)},
+			sysMessage{topic: TopicBytesReceived, value: strconv.FormatInt(totalBytesRecv, 10)},
+			sysMessage{topic: TopicBytesSent, value: strconv.FormatInt(totalBytesSent, 10)},
 		)
 	}
 
 	if p.enabled(TopicGroupSubscriptions) {
 		topics = append(topics,
-			sysMessage{topic: TopicSubscriptionsCount, value: formatInt(p.broker.Subscriptions())},
+			sysMessage{topic: TopicSubscriptionsCount, value: strconv.FormatInt(p.broker.Subscriptions(), 10)},
 		)
 	}
 
 	if p.enabled(TopicGroupRetained) {
 		topics = append(topics,
-			sysMessage{topic: TopicRetainedMessagesCount, value: formatInt(p.broker.RetainedMessages())},
+			sysMessage{topic: TopicRetainedMessagesCount, value: strconv.FormatInt(p.broker.RetainedMessages(), 10)},
 		)
 	}
 
@@ -151,7 +151,7 @@ func (p *Publisher) publish() {
 
 	if p.enabled(TopicGroupTopics) {
 		topics = append(topics,
-			sysMessage{topic: TopicTopicsCount, value: formatInt(p.broker.TopicCount())},
+			sysMessage{topic: TopicTopicsCount, value: strconv.FormatInt(p.broker.TopicCount(), 10)},
 		)
 	}
 
@@ -188,7 +188,7 @@ func (p *Publisher) publish() {
 
 func (p *Publisher) publishNamespaceTopics() {
 	namespaces := p.broker.Namespaces()
-	nsCountPayload := []byte(formatInt(int64(len(namespaces))))
+	nsCountPayload := []byte(strconv.FormatInt(int64(len(namespaces)), 10))
 
 	// Publish namespace count to all namespaces with $SYS subscribers.
 	targets := namespaces
@@ -223,7 +223,7 @@ func (p *Publisher) publishNamespaceTopics() {
 
 			if err := p.broker.Publish(&mqttv5.Message{
 				Topic:   topic,
-				Payload: []byte(formatInt(int64(count))),
+				Payload: []byte(strconv.FormatInt(int64(count), 10)),
 				Retain:  true,
 			}); err != nil {
 				p.reportError(topic, err)
@@ -243,7 +243,7 @@ func (p *Publisher) publishNamespaceTopics() {
 
 			if err := p.broker.Publish(&mqttv5.Message{
 				Topic:     TopicClientsConnected,
-				Payload:   []byte(formatInt(int64(count))),
+				Payload:   []byte(strconv.FormatInt(int64(count), 10)),
 				Retain:    true,
 				Namespace: ns,
 			}); err != nil {
@@ -279,21 +279,21 @@ func (p *Publisher) loadTopics() []sysMessage {
 	conns := p.load.Rates(loadConnections)
 
 	return []sysMessage{
-		{topic: TopicLoadMessagesRecv1min, value: formatFloat(msgRecv.Min1)},
-		{topic: TopicLoadMessagesRecv5min, value: formatFloat(msgRecv.Min5)},
-		{topic: TopicLoadMessagesRecv15min, value: formatFloat(msgRecv.Min15)},
-		{topic: TopicLoadMessagesSent1min, value: formatFloat(msgSent.Min1)},
-		{topic: TopicLoadMessagesSent5min, value: formatFloat(msgSent.Min5)},
-		{topic: TopicLoadMessagesSent15min, value: formatFloat(msgSent.Min15)},
-		{topic: TopicLoadBytesRecv1min, value: formatFloat(bytesRecv.Min1)},
-		{topic: TopicLoadBytesRecv5min, value: formatFloat(bytesRecv.Min5)},
-		{topic: TopicLoadBytesRecv15min, value: formatFloat(bytesRecv.Min15)},
-		{topic: TopicLoadBytesSent1min, value: formatFloat(bytesSent.Min1)},
-		{topic: TopicLoadBytesSent5min, value: formatFloat(bytesSent.Min5)},
-		{topic: TopicLoadBytesSent15min, value: formatFloat(bytesSent.Min15)},
-		{topic: TopicLoadConnections1min, value: formatFloat(conns.Min1)},
-		{topic: TopicLoadConnections5min, value: formatFloat(conns.Min5)},
-		{topic: TopicLoadConnections15min, value: formatFloat(conns.Min15)},
+		{topic: TopicLoadMessagesRecv1min, value: strconv.FormatFloat(msgRecv.Min1, 'f', 2, 64)},
+		{topic: TopicLoadMessagesRecv5min, value: strconv.FormatFloat(msgRecv.Min5, 'f', 2, 64)},
+		{topic: TopicLoadMessagesRecv15min, value: strconv.FormatFloat(msgRecv.Min15, 'f', 2, 64)},
+		{topic: TopicLoadMessagesSent1min, value: strconv.FormatFloat(msgSent.Min1, 'f', 2, 64)},
+		{topic: TopicLoadMessagesSent5min, value: strconv.FormatFloat(msgSent.Min5, 'f', 2, 64)},
+		{topic: TopicLoadMessagesSent15min, value: strconv.FormatFloat(msgSent.Min15, 'f', 2, 64)},
+		{topic: TopicLoadBytesRecv1min, value: strconv.FormatFloat(bytesRecv.Min1, 'f', 2, 64)},
+		{topic: TopicLoadBytesRecv5min, value: strconv.FormatFloat(bytesRecv.Min5, 'f', 2, 64)},
+		{topic: TopicLoadBytesRecv15min, value: strconv.FormatFloat(bytesRecv.Min15, 'f', 2, 64)},
+		{topic: TopicLoadBytesSent1min, value: strconv.FormatFloat(bytesSent.Min1, 'f', 2, 64)},
+		{topic: TopicLoadBytesSent5min, value: strconv.FormatFloat(bytesSent.Min5, 'f', 2, 64)},
+		{topic: TopicLoadBytesSent15min, value: strconv.FormatFloat(bytesSent.Min15, 'f', 2, 64)},
+		{topic: TopicLoadConnections1min, value: strconv.FormatFloat(conns.Min1, 'f', 2, 64)},
+		{topic: TopicLoadConnections5min, value: strconv.FormatFloat(conns.Min5, 'f', 2, 64)},
+		{topic: TopicLoadConnections15min, value: strconv.FormatFloat(conns.Min15, 'f', 2, 64)},
 	}
 }
 
@@ -318,8 +318,8 @@ func (p *Publisher) packetTopics() []sysMessage {
 		sent := p.broker.PacketsSent(pt)
 
 		msgs = append(msgs,
-			sysMessage{topic: TopicPacketsReceivedPrefix + name, value: formatInt(recv)},
-			sysMessage{topic: TopicPacketsSentPrefix + name, value: formatInt(sent)},
+			sysMessage{topic: TopicPacketsReceivedPrefix + name, value: strconv.FormatInt(recv, 10)},
+			sysMessage{topic: TopicPacketsSentPrefix + name, value: strconv.FormatInt(sent, 10)},
 		)
 	}
 
@@ -335,12 +335,4 @@ func (p *Publisher) reportError(topic string, err error) {
 type sysMessage struct {
 	topic string
 	value string
-}
-
-func formatInt(v int64) string {
-	return strconv.FormatInt(v, 10)
-}
-
-func formatFloat(v float64) string {
-	return strconv.FormatFloat(v, 'f', 2, 64)
 }

@@ -1,6 +1,7 @@
 package mqttv5
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -143,7 +144,7 @@ func TestMemoryMessageStoreConcurrency(_ *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			id := "msg-" + string(rune(n))
+			id := fmt.Sprintf("msg-%s", string(rune(n)))
 			store.Store(msgStoreTestNS, id, &Message{}, 0)
 			store.Get(msgStoreTestNS, id)
 			store.Delete(msgStoreTestNS, id)

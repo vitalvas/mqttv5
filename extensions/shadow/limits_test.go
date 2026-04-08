@@ -286,7 +286,7 @@ func TestValidatePayload(t *testing.T) {
 
 	t.Run("clientToken too long rejected", func(t *testing.T) {
 		longToken := strings.Repeat("x", 65)
-		payload := []byte(`{"state":{"desired":{"temp":22}},"clientToken":"` + longToken + `"}`)
+		payload := []byte(fmt.Sprintf(`{"state":{"desired":{"temp":22}},"clientToken":"%s"}`, longToken))
 
 		req, err := validatePayload(payload, defaultLimits())
 		require.Error(t, err)
@@ -301,7 +301,7 @@ func TestValidatePayload(t *testing.T) {
 
 	t.Run("clientToken at limit allowed", func(t *testing.T) {
 		token := strings.Repeat("x", 64)
-		payload := []byte(`{"state":{"desired":{"temp":22}},"clientToken":"` + token + `"}`)
+		payload := []byte(fmt.Sprintf(`{"state":{"desired":{"temp":22}},"clientToken":"%s"}`, token))
 
 		req, err := validatePayload(payload, defaultLimits())
 		require.NoError(t, err)

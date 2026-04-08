@@ -3,6 +3,7 @@ package systopics
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -767,24 +768,24 @@ func TestPacketsGroup(t *testing.T) {
 
 		pub.publish()
 
-		msg := broker.findByTopic(TopicPacketsReceivedPrefix + "connect")
+		msg := broker.findByTopic(fmt.Sprintf("%sconnect", TopicPacketsReceivedPrefix))
 		require.NotNil(t, msg)
 		assert.Equal(t, "100", string(msg.Payload))
 
-		msg = broker.findByTopic(TopicPacketsSentPrefix + "connack")
+		msg = broker.findByTopic(fmt.Sprintf("%sconnack", TopicPacketsSentPrefix))
 		require.NotNil(t, msg)
 		assert.Equal(t, "100", string(msg.Payload))
 
-		msg = broker.findByTopic(TopicPacketsReceivedPrefix + "subscribe")
+		msg = broker.findByTopic(fmt.Sprintf("%ssubscribe", TopicPacketsReceivedPrefix))
 		require.NotNil(t, msg)
 		assert.Equal(t, "50", string(msg.Payload))
 
-		msg = broker.findByTopic(TopicPacketsSentPrefix + "suback")
+		msg = broker.findByTopic(fmt.Sprintf("%ssuback", TopicPacketsSentPrefix))
 		require.NotNil(t, msg)
 		assert.Equal(t, "50", string(msg.Payload))
 
 		// Zero counters still published.
-		msg = broker.findByTopic(TopicPacketsReceivedPrefix + "publish")
+		msg = broker.findByTopic(fmt.Sprintf("%spublish", TopicPacketsReceivedPrefix))
 		require.NotNil(t, msg)
 		assert.Equal(t, "0", string(msg.Payload))
 	})
@@ -800,7 +801,7 @@ func TestPacketsGroup(t *testing.T) {
 
 		pub.publish()
 
-		assert.Nil(t, broker.findByTopic(TopicPacketsReceivedPrefix+"connect"))
+		assert.Nil(t, broker.findByTopic(fmt.Sprintf("%sconnect", TopicPacketsReceivedPrefix)))
 	})
 }
 
@@ -1018,21 +1019,5 @@ func TestGlobalTopicsPublishedToAllNamespaces(t *testing.T) {
 		msg := broker.findByTopicAndNamespace(TopicClientsConnected, "")
 		require.NotNil(t, msg)
 		assert.Equal(t, "3", string(msg.Payload))
-	})
-}
-
-func TestFormatHelpers(t *testing.T) {
-	t.Run("formatInt", func(t *testing.T) {
-		assert.Equal(t, "0", formatInt(0))
-		assert.Equal(t, "42", formatInt(42))
-		assert.Equal(t, "-1", formatInt(-1))
-		assert.Equal(t, "1000000", formatInt(1000000))
-	})
-
-	t.Run("formatFloat", func(t *testing.T) {
-		assert.Equal(t, "0.00", formatFloat(0))
-		assert.Equal(t, "3.14", formatFloat(3.14))
-		assert.Equal(t, "10.50", formatFloat(10.5))
-		assert.Equal(t, "100.00", formatFloat(100.0))
 	})
 }

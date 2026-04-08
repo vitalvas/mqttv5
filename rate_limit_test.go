@@ -1,6 +1,7 @@
 package mqttv5
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -453,7 +454,7 @@ func TestMessageRateLimiterCleanup(t *testing.T) {
 		})
 		limiter.AllowMessage("client1", "default", "sensor/temp")
 
-		key := "default" + namespaceDelimiter + "client1" + namespaceDelimiter + "sensor/temp"
+		key := fmt.Sprintf("default%sclient1%ssensor/temp", namespaceDelimiter, namespaceDelimiter)
 		limiter.mu.Lock()
 		require.Len(t, limiter.clientTopicLimiters, 1)
 		limiter.clientTopicLimiters[key].lastSeen = time.Now().Add(-2 * time.Hour)

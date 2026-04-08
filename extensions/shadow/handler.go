@@ -209,11 +209,11 @@ func (h *Handler) HandleMessage(client ServerClient, msg *mqttv5.Message) bool {
 		if h.sharedResolver == nil {
 			// No resolver: read-only access (get only)
 			if parsed.Suffix != suffixGet {
-				h.sendError(client, parsed, rejectedSuffix(parsed.Suffix), ErrCodeForbidden, "forbidden", "", corrData)
+				h.sendError(client, parsed, rejectedSuffix(parsed.Suffix), shadowErrorDetail{code: ErrCodeForbidden, message: "forbidden"}, corrData)
 				return true
 			}
 		} else if !h.sharedResolver(client.ClientID(), parsed.GroupName) {
-			h.sendError(client, parsed, rejectedSuffix(parsed.Suffix), ErrCodeForbidden, "forbidden", "", corrData)
+			h.sendError(client, parsed, rejectedSuffix(parsed.Suffix), shadowErrorDetail{code: ErrCodeForbidden, message: "forbidden"}, corrData)
 			return true
 		}
 	} else {
@@ -237,7 +237,7 @@ func (h *Handler) HandleMessage(client ServerClient, msg *mqttv5.Message) bool {
 
 	// Throttle concurrent requests per client
 	if !h.acquireInflight(client.ClientID()) {
-		h.sendError(client, parsed, rejectedSuffix(parsed.Suffix), ErrCodeTooManyRequests, "too many requests", "", corrData)
+		h.sendError(client, parsed, rejectedSuffix(parsed.Suffix), shadowErrorDetail{code: ErrCodeTooManyRequests, message: "too many requests"}, corrData)
 		return true
 	}
 	defer h.releaseInflight(client.ClientID())
@@ -424,7 +424,7 @@ func (h *Handler) handleGet(client ServerClient, key Key, parsed *parsedTopic, p
 	if len(payload) > 0 {
 		var req getRequest
 		if err := json.Unmarshal(payload, &req); err != nil {
-			h.sendError(client, parsed, suffixGetRejected, ErrCodeBadRequest, "invalid payload", "", corrData)
+			h.sendError(client, parsed, suffixGetRejected, shadowErrorDetail{code: ErrCodeBadRequest, message: "invalid payload"}, corrData)
 			return
 		}
 
@@ -433,12 +433,12 @@ func (h *Handler) handleGet(client ServerClient, key Key, parsed *parsedTopic, p
 
 	doc, err := h.store.Get(key)
 	if err != nil {
-		h.sendError(client, parsed, suffixGetRejected, ErrCodeInternal, "internal error", clientToken, corrData)
+		h.sendError(client, parsed, suffixGetRejected, shadowErrorDetail{code: ErrCodeInternal, message: "internal error", clientToken: clientToken}, corrData)
 		return
 	}
 
 	if doc == nil {
-		h.sendError(client, parsed, suffixGetRejected, ErrCodeNotFound, "shadow not found", clientToken, corrData)
+		h.sendError(client, parsed, suffixGetRejected, shadowErrorDetail{code: ErrCodeNotFound, message: "shadow not found", clientToken: clientToken}, corrData)
 		return
 	}
 
@@ -464,7 +464,7 @@ func (h *Handler) handleUpdate(client ServerClient, key Key, parsed *parsedTopic
 			clientToken = req.ClientToken
 		}
 
-		h.sendError(client, parsed, suffixUpdateRejected, errResp.Code, errResp.Message, clientToken, corrData)
+		h.sendError(client, parsed, suffixUpdateRejected, shadowErrorDetail{code: errResp.Code, message: errResp.Message, clientToken: clientToken}, corrData)
 
 		return
 	}
@@ -473,7 +473,7 @@ func (h *Handler) handleUpdate(client ServerClient, key Key, parsed *parsedTopic
 	if err != nil {
 		errResp := &ErrorResponse{Code: ErrCodeInternal, Message: "internal error"}
 		errors.As(err, &errResp)
-		h.sendError(client, parsed, suffixUpdateRejected, errResp.Code, errResp.Message, req.ClientToken, corrData)
+		h.sendError(client, parsed, suffixUpdateRejected, shadowErrorDetail{code: errResp.Code, message: errResp.Message, clientToken: req.ClientToken}, corrData)
 
 		return
 	}
@@ -498,7 +498,7 @@ func (h *Handler) handleDelete(client ServerClient, key Key, parsed *parsedTopic
 	if len(payload) > 0 {
 		var req deleteRequest
 		if err := json.Unmarshal(payload, &req); err != nil {
-			h.sendError(client, parsed, suffixDeleteRejected, ErrCodeBadRequest, "invalid payload", "", corrData)
+			h.sendError(client, parsed, suffixDeleteRejected, shadowErrorDetail{code: ErrCodeBadRequest, message: "invalid payload"}, corrData)
 			return
 		}
 
@@ -510,12 +510,12 @@ func (h *Handler) handleDelete(client ServerClient, key Key, parsed *parsedTopic
 
 	doc, err := h.store.Delete(key)
 	if err != nil {
-		h.sendError(client, parsed, suffixDeleteRejected, ErrCodeInternal, "internal error", clientToken, corrData)
+		h.sendError(client, parsed, suffixDeleteRejected, shadowErrorDetail{code: ErrCodeInternal, message: "internal error", clientToken: clientToken}, corrData)
 		return
 	}
 
 	if doc == nil {
-		h.sendError(client, parsed, suffixDeleteRejected, ErrCodeNotFound, "shadow not found", clientToken, corrData)
+		h.sendError(client, parsed, suffixDeleteRejected, shadowErrorDetail{code: ErrCodeNotFound, message: "shadow not found", clientToken: clientToken}, corrData)
 		return
 	}
 
@@ -535,20 +535,20 @@ func (h *Handler) handleDelete(client ServerClient, key Key, parsed *parsedTopic
 
 func (h *Handler) handleList(client ServerClient, key Key, parsed *parsedTopic, payload []byte, corrData []byte) {
 	if !h.namedEnabled {
-		h.sendError(client, parsed, suffixListRejected, ErrCodeForbidden, "named shadows not enabled", "", corrData)
+		h.sendError(client, parsed, suffixListRejected, shadowErrorDetail{code: ErrCodeForbidden, message: "named shadows not enabled"}, corrData)
 		return
 	}
 
 	lister, ok := h.store.(Lister)
 	if !ok {
-		h.sendError(client, parsed, suffixListRejected, ErrCodeInternal, "listing not supported", "", corrData)
+		h.sendError(client, parsed, suffixListRejected, shadowErrorDetail{code: ErrCodeInternal, message: "listing not supported"}, corrData)
 		return
 	}
 
 	var req listRequest
 	if len(payload) > 0 {
 		if err := json.Unmarshal(payload, &req); err != nil {
-			h.sendError(client, parsed, suffixListRejected, ErrCodeBadRequest, "invalid payload", "", corrData)
+			h.sendError(client, parsed, suffixListRejected, shadowErrorDetail{code: ErrCodeBadRequest, message: "invalid payload"}, corrData)
 			return
 		}
 	}
@@ -560,7 +560,7 @@ func (h *Handler) handleList(client ServerClient, key Key, parsed *parsedTopic, 
 
 	result, err := lister.ListNamedShadows(key, pageSize, req.NextToken)
 	if err != nil {
-		h.sendError(client, parsed, suffixListRejected, ErrCodeInternal, "internal error", req.ClientToken, corrData)
+		h.sendError(client, parsed, suffixListRejected, shadowErrorDetail{code: ErrCodeInternal, message: "internal error", clientToken: req.ClientToken}, corrData)
 		return
 	}
 
@@ -914,11 +914,17 @@ func (h *Handler) sendJSON(client ServerClient, parsed *parsedTopic, suffix stri
 	})
 }
 
-func (h *Handler) sendError(client ServerClient, parsed *parsedTopic, suffix string, code int, message string, clientToken string, correlationData []byte) {
+type shadowErrorDetail struct {
+	code        int
+	message     string
+	clientToken string
+}
+
+func (h *Handler) sendError(client ServerClient, parsed *parsedTopic, suffix string, detail shadowErrorDetail, correlationData []byte) {
 	h.sendJSON(client, parsed, suffix, &ErrorResponse{
-		Code:        code,
-		Message:     message,
+		Code:        detail.code,
+		Message:     detail.message,
 		Timestamp:   time.Now().Unix(),
-		ClientToken: clientToken,
+		ClientToken: detail.clientToken,
 	}, correlationData)
 }

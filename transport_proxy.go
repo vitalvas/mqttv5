@@ -93,9 +93,9 @@ func (d *ProxyDialer) dialHTTPConnect(ctx context.Context, targetAddr string) (n
 
 	// Add proxy authentication if configured
 	if d.username != "" {
-		auth := d.username + ":" + d.password
+		auth := fmt.Sprintf("%s:%s", d.username, d.password)
 		basicAuth := base64.StdEncoding.EncodeToString([]byte(auth))
-		req.Header.Set("Proxy-Authorization", "Basic "+basicAuth)
+		req.Header.Set("Proxy-Authorization", fmt.Sprintf("Basic %s", basicAuth))
 	}
 
 	// Send CONNECT request
@@ -195,7 +195,7 @@ func ProxyFromEnvironment(targetAddr string) (*url.URL, error) {
 				if strings.HasSuffix(host, pattern) || host == pattern[1:] {
 					return nil, nil
 				}
-			} else if host == pattern || strings.HasSuffix(host, "."+pattern) {
+			} else if host == pattern || strings.HasSuffix(host, fmt.Sprintf(".%s", pattern)) {
 				return nil, nil
 			}
 		}

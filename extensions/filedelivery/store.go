@@ -38,7 +38,7 @@ func NewMemoryStore() *MemoryStore {
 }
 
 func storeKey(key StreamKey) string {
-	return key.Namespace + "/" + key.ClientID + "/" + key.StreamID
+	return fmt.Sprintf("%s/%s/%s", key.Namespace, key.ClientID, key.StreamID)
 }
 
 func fileKey(key StreamKey, fileID int) string {

@@ -2,6 +2,7 @@ package metricsexport
 
 import (
 	"expvar"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -94,7 +95,7 @@ func TestPrometheusHandler(t *testing.T) {
 
 		body := rec.Body.String()
 		for _, name := range names {
-			assert.Contains(t, body, "# TYPE "+name+" counter")
+			assert.Contains(t, body, fmt.Sprintf("# TYPE %s counter", name))
 		}
 	})
 

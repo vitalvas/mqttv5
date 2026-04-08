@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -660,7 +661,7 @@ func TestHandleGetStream(t *testing.T) {
 		client := newMockServerClient("dev1", "ns1")
 
 		// Sparse bitmap: only one bit set but byte length exceeds max
-		oversized := "01" + strings.Repeat("00", MaxNumberBlocks/8)
+		oversized := fmt.Sprintf("01%s", strings.Repeat("00", MaxNumberBlocks/8))
 		payload, _ := json.Marshal(GetRequest{
 			FileID:    0,
 			BlockSize: 256,

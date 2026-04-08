@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/vitalvas/mqttv5"
@@ -102,7 +103,7 @@ func (tc *TypedClient) ensureSubscribed(group string) error {
 
 	sg, ok := opGroups[group]
 	if !ok {
-		return errors.New("shadow: unknown operation group: " + group)
+		return fmt.Errorf("shadow: unknown operation group: %s", group)
 	}
 
 	acceptedTopic := tc.topicBuilder(tc.shadowName, sg.accepted)
