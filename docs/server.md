@@ -1,6 +1,6 @@
 # Server Options
 
-All options for configuring an MQTT v5.0 server/broker.
+All options for configuring an MQTT server/broker.
 
 ## Listeners
 
@@ -42,6 +42,12 @@ All options for configuring an MQTT v5.0 server/broker.
 |--------|---------|-------------|
 | `WithConnectionRateLimiter(limiter)` | nil | Connection rate limiter interface |
 | `WithMessageRateLimiter(limiter)` | nil | Message rate limiter interface |
+
+## Protocol
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithAcceptProtocolVersions(v...)` | `[ProtocolV5]` | Accepted protocol versions |
 
 ## Capabilities
 

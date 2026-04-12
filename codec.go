@@ -10,9 +10,43 @@ var (
 	ErrUnknownPacketType = errors.New("unknown packet type")
 )
 
-// ReadPacket reads a complete MQTT packet from the reader.
-// If maxSize is greater than 0, packets larger than maxSize will return ErrPacketTooLarge.
-func ReadPacket(r io.Reader, maxSize uint32) (Packet, int, error) {
+// codec provides version-aware MQTT packet reading and writing for an
+// individual connection. It is an internal implementation detail shared by
+// Client and Server to remember the negotiated protocol version and dispatch
+// packet I/O accordingly.
+type codec struct {
+	ver ProtocolVersion
+}
+
+// newCodec creates a new codec for the given protocol version.
+func newCodec(version ProtocolVersion) *codec {
+	return &codec{ver: version}
+}
+
+// readPacket reads a complete MQTT packet using the codec's protocol version.
+func (c *codec) readPacket(r io.Reader, maxSize uint32) (Packet, int, error) {
+	if c.ver == ProtocolV311 {
+		return readPacketV311(r, maxSize)
+	}
+	return readPacketV5(r, maxSize)
+}
+
+// writePacket writes a complete MQTT packet using the codec's protocol version.
+func (c *codec) writePacket(w io.Writer, packet Packet, maxSize uint32) (int, error) {
+	if c.ver == ProtocolV311 {
+		return writePacketV311(w, packet, maxSize)
+	}
+	return writePacketRaw(w, packet, maxSize)
+}
+
+// readPacketV5 reads a complete MQTT packet from the reader.
+// If maxSize is greater than 0, packets larger than maxSize return ErrPacketTooLarge.
+//
+// readPacketV5 auto-detects the MQTT protocol version for CONNECT packets by
+// inspecting the protocol level byte in the variable header, and dispatches
+// to the v3.1.1 or v5 decoder accordingly. All other packet types are decoded
+// as MQTT 5.0.
+func readPacketV5(r io.Reader, maxSize uint32) (Packet, int, error) {
 	var header FixedHeader
 	n, err := header.Decode(r)
 	if err != nil {
@@ -38,6 +72,20 @@ func ReadPacket(r io.Reader, maxSize uint32) (Packet, int, error) {
 		if err != nil {
 			return nil, n, err
 		}
+	}
+
+	// Auto-detect v3.1.1 CONNECT packets from the protocol level byte.
+	// CONNECT variable header layout: 2-byte protocol-name length, N-byte
+	// protocol name, 1-byte protocol level. For "MQTT" (length 4) the level
+	// byte is at offset 6.
+	if header.PacketType == PacketCONNECT && len(remaining) > 6 && remaining[6] == byte(ProtocolV311) {
+		reader := getBytesReader(remaining)
+		pkt, err := decodePacketV311(reader, header)
+		putBytesReader(reader)
+		if err != nil {
+			return nil, n, err
+		}
+		return pkt, n, nil
 	}
 
 	// Create packet based on type
@@ -93,9 +141,13 @@ func ReadPacket(r io.Reader, maxSize uint32) (Packet, int, error) {
 	return packet, n, nil
 }
 
-// WritePacket writes a complete MQTT packet to the writer.
-// If maxSize is greater than 0, packets larger than maxSize will return ErrPacketTooLarge.
-func WritePacket(w io.Writer, packet Packet, maxSize uint32) (int, error) {
+// writePacketRaw writes a complete MQTT packet to the writer.
+// If maxSize is greater than 0, packets larger than maxSize return ErrPacketTooLarge.
+//
+// writePacketRaw produces MQTT 5.0 wire format for every packet type except
+// CONNECT: a ConnectPacket whose ProtocolVersion is ProtocolV311 is encoded
+// as MQTT 3.1.1 through ConnectPacket.Encode.
+func writePacketRaw(w io.Writer, packet Packet, maxSize uint32) (int, error) {
 	if err := packet.Validate(); err != nil {
 		return 0, err
 	}
@@ -112,7 +164,7 @@ func WritePacket(w io.Writer, packet Packet, maxSize uint32) (int, error) {
 			putBytesBuffer(buf)
 			return 0, ErrPacketTooLarge
 		}
-		written, err := w.Write(buf.Bytes())
+		written, err := w.Write(buf.bytes())
 		putBytesBuffer(buf)
 		return written, err
 	}
@@ -145,6 +197,6 @@ func (b *bytesBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (b *bytesBuffer) Bytes() []byte {
+func (b *bytesBuffer) bytes() []byte {
 	return b.data
 }

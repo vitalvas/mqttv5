@@ -91,12 +91,12 @@ func TestGetBytesBuffer(t *testing.T) {
 		n, err := buf.Write([]byte("hello"))
 		assert.NoError(t, err)
 		assert.Equal(t, 5, n)
-		assert.Equal(t, []byte("hello"), buf.Bytes())
+		assert.Equal(t, []byte("hello"), buf.bytes())
 
 		n, err = buf.Write([]byte(" world"))
 		assert.NoError(t, err)
 		assert.Equal(t, 6, n)
-		assert.Equal(t, []byte("hello world"), buf.Bytes())
+		assert.Equal(t, []byte("hello world"), buf.bytes())
 
 		putBytesBuffer(buf)
 	})
@@ -175,7 +175,7 @@ func TestPoolConcurrency(t *testing.T) {
 				buf := getBytesBuffer()
 
 				buf.Write([]byte("concurrent write"))
-				_ = buf.Bytes()
+				_ = buf.bytes()
 
 				putBytesBuffer(buf)
 			}()
@@ -208,7 +208,7 @@ func BenchmarkBytesBufferPool(b *testing.B) {
 	for b.Loop() {
 		buf := getBytesBuffer()
 		buf.Write(writeData)
-		_ = buf.Bytes()
+		_ = buf.bytes()
 		putBytesBuffer(buf)
 	}
 }
@@ -239,7 +239,7 @@ func BenchmarkBytesBufferPoolParallel(b *testing.B) {
 		for pb.Next() {
 			buf := getBytesBuffer()
 			buf.Write(writeData)
-			_ = buf.Bytes()
+			_ = buf.bytes()
 			putBytesBuffer(buf)
 		}
 	})

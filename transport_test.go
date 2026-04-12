@@ -69,7 +69,7 @@ func TestTCPRoundTrip(t *testing.T) {
 		defer conn.Close()
 
 		// Read packet
-		packet, _, err := ReadPacket(conn, 0)
+		packet, _, err := readPacketV5(conn, 0)
 		if err != nil {
 			return
 		}
@@ -77,7 +77,7 @@ func TestTCPRoundTrip(t *testing.T) {
 		// Send response
 		if packet.Type() == PacketCONNECT {
 			response := &ConnackPacket{ReasonCode: ReasonSuccess}
-			_, _ = WritePacket(conn, response, 0)
+			_, _ = writePacketRaw(conn, response, 0)
 		}
 	}()
 
@@ -93,11 +93,11 @@ func TestTCPRoundTrip(t *testing.T) {
 		CleanStart: true,
 		KeepAlive:  60,
 	}
-	_, err = WritePacket(conn, connectPacket, 0)
+	_, err = writePacketRaw(conn, connectPacket, 0)
 	require.NoError(t, err)
 
 	// Read CONNACK
-	packet, _, err := ReadPacket(conn, 0)
+	packet, _, err := readPacketV5(conn, 0)
 	require.NoError(t, err)
 	assert.Equal(t, PacketCONNACK, packet.Type())
 
@@ -154,12 +154,12 @@ func BenchmarkTCPRoundTrip(b *testing.B) {
 			go func(c net.Conn) {
 				defer c.Close()
 				for {
-					packet, _, err := ReadPacket(c, 0)
+					packet, _, err := readPacketV5(c, 0)
 					if err != nil {
 						return
 					}
 					if packet.Type() == PacketPINGREQ {
-						_, _ = WritePacket(c, &PingrespPacket{}, 0)
+						_, _ = writePacketRaw(c, &PingrespPacket{}, 0)
 					}
 				}
 			}(conn)
@@ -175,7 +175,7 @@ func BenchmarkTCPRoundTrip(b *testing.B) {
 	b.ReportAllocs()
 
 	for b.Loop() {
-		_, _ = WritePacket(conn, &PingreqPacket{}, 0)
-		_, _, _ = ReadPacket(conn, 0)
+		_, _ = writePacketRaw(conn, &PingreqPacket{}, 0)
+		_, _, _ = readPacketV5(conn, 0)
 	}
 }

@@ -621,11 +621,11 @@ func TestServerClose(t *testing.T) {
 
 		// Send CONNECT
 		connect := &ConnectPacket{ClientID: "test-client"}
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		// Read CONNACK
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -637,7 +637,7 @@ func TestServerClose(t *testing.T) {
 		go func() {
 			defer close(disconnectDone)
 			// Read DISCONNECT from server
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			if err == nil {
 				if disc, ok := pkt.(*DisconnectPacket); ok {
 					mu.Lock()
@@ -688,16 +688,16 @@ func TestServerClose(t *testing.T) {
 
 		// Send CONNECT on both
 		connect1 := &ConnectPacket{ClientID: "client1"}
-		_, err = WritePacket(conn1, connect1, 256*1024)
+		_, err = writePacketRaw(conn1, connect1, 256*1024)
 		require.NoError(t, err)
 
 		connect2 := &ConnectPacket{ClientID: "client2"}
-		_, err = WritePacket(conn2, connect2, 256*1024)
+		_, err = writePacketRaw(conn2, connect2, 256*1024)
 		require.NoError(t, err)
 
 		// Read CONNACKs
-		_, _, _ = ReadPacket(conn1, 256*1024)
-		_, _, _ = ReadPacket(conn2, 256*1024)
+		_, _, _ = readPacketV5(conn1, 256*1024)
+		_, _, _ = readPacketV5(conn2, 256*1024)
 
 		// Wait for both clients to be registered (with retry for CI)
 		require.Eventually(t, func() bool {
@@ -866,11 +866,11 @@ func TestServerEmptyTopicValidation(t *testing.T) {
 			ClientID:   "test-client",
 			CleanStart: true,
 		}
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		// Read CONNACK
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		connack, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -882,12 +882,12 @@ func TestServerEmptyTopicValidation(t *testing.T) {
 			Payload: []byte("test"),
 			QoS:     0,
 		}
-		_, err = WritePacket(conn, publish, 256*1024)
+		_, err = writePacketRaw(conn, publish, 256*1024)
 		require.NoError(t, err)
 
 		// Server should disconnect us - read should fail or return DISCONNECT
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 
 		// Either we get a DISCONNECT or connection closed
 		if err == nil {
@@ -1175,11 +1175,11 @@ func TestServerAuthentication(t *testing.T) {
 				Username: tt.username,
 				Password: []byte(tt.password),
 			}
-			_, err = WritePacket(conn, connect, 256*1024)
+			_, err = writePacketRaw(conn, connect, 256*1024)
 			require.NoError(t, err)
 
 			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			require.NoError(t, err)
 
 			connack, ok := pkt.(*ConnackPacket)
@@ -1246,11 +1246,11 @@ func TestServerEnhancedAuthEmptyNamespace(t *testing.T) {
 	}
 	connect.Props.Set(PropAuthenticationMethod, "PLAIN")
 
-	_, err = WritePacket(conn, connect, 256*1024)
+	_, err = writePacketRaw(conn, connect, 256*1024)
 	require.NoError(t, err)
 
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err := ReadPacket(conn, 256*1024)
+	pkt, _, err := readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 
 	connack, ok := pkt.(*ConnackPacket)
@@ -1398,12 +1398,12 @@ func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
 		connect.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
 		connect.Props.Set(PropAuthenticationData, []byte("n,,n=testuser,r=clientnonce"))
 
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		// Expect AUTH packet with challenge
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		authPkt, ok := pkt.(*AuthPacket)
@@ -1418,12 +1418,12 @@ func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
 		clientFinal.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
 		clientFinal.Props.Set(PropAuthenticationData, []byte("c=biws,r=clientnoncesrv123,p=proof-testpass"))
 
-		_, err = WritePacket(conn, clientFinal, 256*1024)
+		_, err = writePacketRaw(conn, clientFinal, 256*1024)
 		require.NoError(t, err)
 
 		// Expect CONNACK with success
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		connack, ok := pkt.(*ConnackPacket)
@@ -1462,12 +1462,12 @@ func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
 		connect.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
 		connect.Props.Set(PropAuthenticationData, []byte("n,,n=testuser,r=nonce1"))
 
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		// Get AUTH challenge
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		_, ok := pkt.(*AuthPacket)
@@ -1478,12 +1478,12 @@ func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
 		clientFinal.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
 		clientFinal.Props.Set(PropAuthenticationData, []byte("c=biws,r=nonce1srv123,p=proof-wrongpass"))
 
-		_, err = WritePacket(conn, clientFinal, 256*1024)
+		_, err = writePacketRaw(conn, clientFinal, 256*1024)
 		require.NoError(t, err)
 
 		// Expect CONNACK with failure
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		connack, ok := pkt.(*ConnackPacket)
@@ -1546,11 +1546,11 @@ func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
 				connect.Props.Set(PropAuthenticationMethod, tc.authMethod)
 				connect.Props.Set(PropAuthenticationData, tc.authData)
 
-				_, err = WritePacket(conn, connect, 256*1024)
+				_, err = writePacketRaw(conn, connect, 256*1024)
 				require.NoError(t, err)
 
 				conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-				pkt, _, err := ReadPacket(conn, 256*1024)
+				pkt, _, err := readPacketV5(conn, 256*1024)
 				require.NoError(t, err)
 
 				connack, ok := pkt.(*ConnackPacket)
@@ -1591,12 +1591,12 @@ func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
 		connect.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
 		connect.Props.Set(PropAuthenticationData, []byte("n,,n=tenant1,r=tnonce"))
 
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		// Get AUTH challenge
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		_, ok := pkt.(*AuthPacket)
@@ -1607,12 +1607,12 @@ func TestServerSCRAMSHA256EnhancedAuth(t *testing.T) {
 		clientFinal.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
 		clientFinal.Props.Set(PropAuthenticationData, []byte("c=biws,r=tnoncesrv123,p=proof-secret"))
 
-		_, err = WritePacket(conn, clientFinal, 256*1024)
+		_, err = writePacketRaw(conn, clientFinal, 256*1024)
 		require.NoError(t, err)
 
 		// Expect CONNACK with success
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		connack, ok := pkt.(*ConnackPacket)
@@ -1654,11 +1654,11 @@ func TestServerAuthorization(t *testing.T) {
 
 		// Connect
 		connect := &ConnectPacket{ClientID: "test-client"}
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -1670,10 +1670,10 @@ func TestServerAuthorization(t *testing.T) {
 			Payload:  []byte("data"),
 			QoS:      1,
 		}
-		_, err = WritePacket(conn, publish, 256*1024)
+		_, err = writePacketRaw(conn, publish, 256*1024)
 		require.NoError(t, err)
 
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		puback, ok := pkt.(*PubackPacket)
@@ -1706,11 +1706,11 @@ func TestServerAuthorization(t *testing.T) {
 
 		// Connect
 		connect := &ConnectPacket{ClientID: "test-client"}
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -1722,10 +1722,10 @@ func TestServerAuthorization(t *testing.T) {
 				{TopicFilter: "test/topic", QoS: 0},
 			},
 		}
-		_, err = WritePacket(conn, subscribe, 256*1024)
+		_, err = writePacketRaw(conn, subscribe, 256*1024)
 		require.NoError(t, err)
 
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		suback, ok := pkt.(*SubackPacket)
@@ -1785,11 +1785,11 @@ func TestServerAuthorization(t *testing.T) {
 			Username: "user1",
 			Password: []byte("pass1"),
 		}
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		connack, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -1802,10 +1802,10 @@ func TestServerAuthorization(t *testing.T) {
 				{TopicFilter: "user1/data", QoS: 0},
 			},
 		}
-		_, err = WritePacket(conn, subscribe, 256*1024)
+		_, err = writePacketRaw(conn, subscribe, 256*1024)
 		require.NoError(t, err)
 
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		suback, ok := pkt.(*SubackPacket)
 		require.True(t, ok)
@@ -1819,10 +1819,10 @@ func TestServerAuthorization(t *testing.T) {
 				{TopicFilter: "other/topic", QoS: 0},
 			},
 		}
-		_, err = WritePacket(conn, subscribe2, 256*1024)
+		_, err = writePacketRaw(conn, subscribe2, 256*1024)
 		require.NoError(t, err)
 
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		suback2, ok := pkt.(*SubackPacket)
 		require.True(t, ok)
@@ -1859,11 +1859,11 @@ func TestServerReceiveMaximumEnforcement(t *testing.T) {
 
 		// Connect
 		connect := &ConnectPacket{ClientID: "test-client"}
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -1876,7 +1876,7 @@ func TestServerReceiveMaximumEnforcement(t *testing.T) {
 				Payload:  []byte("data"),
 				QoS:      1,
 			}
-			_, err = WritePacket(conn, publish, 256*1024)
+			_, err = writePacketRaw(conn, publish, 256*1024)
 			if err != nil {
 				// Connection may be closed by server
 				break
@@ -1888,7 +1888,7 @@ func TestServerReceiveMaximumEnforcement(t *testing.T) {
 		var gotQuotaError bool
 		for i := 0; i < 5; i++ {
 			conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			if err != nil {
 				// Connection closed by server - this is expected
 				gotDisconnect = true
@@ -1935,11 +1935,11 @@ func TestServerReceiveMaximumEnforcement(t *testing.T) {
 		require.NoError(t, err)
 
 		connect := &ConnectPacket{ClientID: "test-client"}
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -1952,14 +1952,14 @@ func TestServerReceiveMaximumEnforcement(t *testing.T) {
 				Payload:  []byte("data"),
 				QoS:      1,
 			}
-			_, err = WritePacket(conn, publish, 256*1024)
+			_, err = writePacketRaw(conn, publish, 256*1024)
 			require.NoError(t, err)
 		}
 
 		// Read PUBACKs - both should succeed
 		for i := 0; i < 2; i++ {
 			conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			require.NoError(t, err)
 			puback, ok := pkt.(*PubackPacket)
 			require.True(t, ok)
@@ -2001,11 +2001,11 @@ func TestServerMaxQoSDowngrade(t *testing.T) {
 		require.NoError(t, err)
 
 		connect := &ConnectPacket{ClientID: "test-client"}
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -2017,10 +2017,10 @@ func TestServerMaxQoSDowngrade(t *testing.T) {
 				{TopicFilter: "test/topic", QoS: 2},
 			},
 		}
-		_, err = WritePacket(conn, subscribe, 256*1024)
+		_, err = writePacketRaw(conn, subscribe, 256*1024)
 		require.NoError(t, err)
 
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		suback, ok := pkt.(*SubackPacket)
@@ -2072,11 +2072,11 @@ func TestServerMaxQoSDowngrade(t *testing.T) {
 		require.NoError(t, err)
 
 		connect := &ConnectPacket{ClientID: "test-client"}
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -2089,12 +2089,12 @@ func TestServerMaxQoSDowngrade(t *testing.T) {
 			Payload:  []byte("data"),
 			QoS:      1,
 		}
-		_, err = WritePacket(conn, publish, 256*1024)
+		_, err = writePacketRaw(conn, publish, 256*1024)
 		require.NoError(t, err)
 
 		// Server sends PUBACK to acknowledge receipt from client
 		conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		puback, ok := pkt.(*PubackPacket)
 		require.True(t, ok)
@@ -2140,12 +2140,12 @@ func TestServerSessionRecoveryErrorHandling(t *testing.T) {
 			ClientID:   "new-client",
 			CleanStart: false, // Request session resumption
 		}
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		// Read CONNACK
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		connack, ok := pkt.(*ConnackPacket)
@@ -2190,11 +2190,11 @@ func TestServerSessionRecoveryErrorHandling(t *testing.T) {
 			ClientID:   "existing-client",
 			CleanStart: false, // Request session resumption
 		}
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		connack, ok := pkt.(*ConnackPacket)
@@ -2239,11 +2239,11 @@ func TestServerClientMaxPacketSize(t *testing.T) {
 		}
 		connect.Props.Set(PropMaximumPacketSize, uint32(1024))
 
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		connack, ok := pkt.(*ConnackPacket)
@@ -2289,11 +2289,11 @@ func TestServerClientMaxPacketSize(t *testing.T) {
 		}
 		connect.Props.Set(PropMaximumPacketSize, uint32(256*1024))
 
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		connack, ok := pkt.(*ConnackPacket)
@@ -2335,11 +2335,11 @@ func TestServerClientMaxPacketSize(t *testing.T) {
 			CleanStart: true,
 		}
 
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		connack, ok := pkt.(*ConnackPacket)
@@ -2387,11 +2387,11 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 		}
 		connect.Props.Set(PropSessionExpiryInterval, uint32(3600)) // 1 hour
 
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		connack, ok := pkt.(*ConnackPacket)
@@ -2434,11 +2434,11 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 		}
 		connect.Props.Set(PropSessionExpiryInterval, uint32(3600))
 
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -2449,7 +2449,7 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 		}
 		disconnect.Props.Set(PropSessionExpiryInterval, uint32(7200)) // Update to 2 hours
 
-		_, err = WritePacket(conn, disconnect, 256*1024)
+		_, err = writePacketRaw(conn, disconnect, 256*1024)
 		require.NoError(t, err)
 
 		// Give server time to process disconnect
@@ -2484,11 +2484,11 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 			CleanStart: true,
 		}
 
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -2533,11 +2533,11 @@ func TestServerSessionExpiryInterval(t *testing.T) {
 		connect.WillProps.Set(PropWillDelayInterval, uint32(3600)) // 1 hour will delay
 		connect.Props.Set(PropSessionExpiryInterval, uint32(60))   // 1 minute session expiry
 
-		_, err = WritePacket(conn, connect, 256*1024)
+		_, err = writePacketRaw(conn, connect, 256*1024)
 		require.NoError(t, err)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		connack, ok := pkt.(*ConnackPacket)
@@ -2689,7 +2689,7 @@ func TestServerSubscribeHelpers(t *testing.T) {
 		sub := Subscription{TopicFilter: "test/retained", QoS: QoS0, RetainAsPublish: false}
 		srv.deliverRetainedMessages(client, sub, DefaultNamespace, "test-client")
 
-		pkt, _, err := ReadPacket(bytes.NewReader(writeBuf.Bytes()), 256*1024)
+		pkt, _, err := readPacketV5(bytes.NewReader(writeBuf.Bytes()), 256*1024)
 		require.NoError(t, err)
 		pub, ok := pkt.(*PublishPacket)
 		require.True(t, ok)
@@ -2699,7 +2699,7 @@ func TestServerSubscribeHelpers(t *testing.T) {
 		sub = Subscription{TopicFilter: "test/retained", QoS: QoS0, RetainAsPublish: true}
 		srv.deliverRetainedMessages(client, sub, DefaultNamespace, "test-client")
 
-		pkt, _, err = ReadPacket(bytes.NewReader(writeBuf.Bytes()), 256*1024)
+		pkt, _, err = readPacketV5(bytes.NewReader(writeBuf.Bytes()), 256*1024)
 		require.NoError(t, err)
 		pub, ok = pkt.(*PublishPacket)
 		require.True(t, ok)
@@ -3411,7 +3411,7 @@ func TestClientDisconnectWithWill(t *testing.T) {
 
 			// Verify the packet encodes correctly
 			var buf bytes.Buffer
-			_, err := WritePacket(&buf, disconnectPkt, MaxPacketSizeDefault)
+			_, err := writePacketRaw(&buf, disconnectPkt, MaxPacketSizeDefault)
 			require.NoError(t, err)
 
 			// Verify the reason code is preserved
@@ -4643,11 +4643,11 @@ func TestServerKeepAliveTimeout(t *testing.T) {
 		CleanStart: true,
 		KeepAlive:  1, // Very short keepalive
 	}
-	_, err = WritePacket(conn, connect, 0)
+	_, err = writePacketRaw(conn, connect, 0)
 	require.NoError(t, err)
 
 	// Read CONNACK
-	pkt, _, err := ReadPacket(conn, 0)
+	pkt, _, err := readPacketV5(conn, 0)
 	require.NoError(t, err)
 	_, ok := pkt.(*ConnackPacket)
 	require.True(t, ok)
@@ -4979,10 +4979,10 @@ func TestServerPublishQoSDowngrade(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connectPkt, 256*1024)
+		writePacketRaw(conn, connectPkt, 256*1024)
 
 		// Read CONNACK
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		require.IsType(t, &ConnackPacket{}, pkt)
 
@@ -4993,10 +4993,10 @@ func TestServerPublishQoSDowngrade(t *testing.T) {
 				{TopicFilter: "test/downgrade", QoS: QoS0},
 			},
 		}
-		WritePacket(conn, subPkt, 256*1024)
+		writePacketRaw(conn, subPkt, 256*1024)
 
 		// Read SUBACK
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		require.IsType(t, &SubackPacket{}, pkt)
 
@@ -5016,7 +5016,7 @@ func TestServerPublishQoSDowngrade(t *testing.T) {
 
 		// Read the PUBLISH from the client connection
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		pubPkt, ok := pkt.(*PublishPacket)
@@ -5050,10 +5050,10 @@ func TestServerPublishSubscriptionIdentifiers(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connectPkt, 256*1024)
+		writePacketRaw(conn, connectPkt, 256*1024)
 
 		// Read CONNACK
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		require.IsType(t, &ConnackPacket{}, pkt)
 
@@ -5065,10 +5065,10 @@ func TestServerPublishSubscriptionIdentifiers(t *testing.T) {
 			},
 		}
 		subPkt.Props.Set(PropSubscriptionIdentifier, uint32(42))
-		WritePacket(conn, subPkt, 256*1024)
+		writePacketRaw(conn, subPkt, 256*1024)
 
 		// Read SUBACK
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		require.IsType(t, &SubackPacket{}, pkt)
 
@@ -5085,7 +5085,7 @@ func TestServerPublishSubscriptionIdentifiers(t *testing.T) {
 
 		// Read the PUBLISH from the client connection
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		pubPkt, ok := pkt.(*PublishPacket)
@@ -5449,10 +5449,10 @@ func TestServerPublishAuthorizationError(t *testing.T) {
 
 	// Send CONNECT
 	connect := &ConnectPacket{ClientID: "publish-authz-error"}
-	WritePacket(conn, connect, 256*1024)
+	writePacketRaw(conn, connect, 256*1024)
 
 	// Read CONNACK
-	_, _, err = ReadPacket(conn, 256*1024)
+	_, _, err = readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 
 	// Send PUBLISH QoS 1
@@ -5462,7 +5462,7 @@ func TestServerPublishAuthorizationError(t *testing.T) {
 		QoS:      QoS1,
 		PacketID: 1,
 	}
-	WritePacket(conn, pub, 256*1024)
+	writePacketRaw(conn, pub, 256*1024)
 
 	// Should receive PUBACK with error
 	time.Sleep(10 * time.Millisecond)
@@ -5498,10 +5498,10 @@ func TestServerHandleSubscribeAuthorizationError(t *testing.T) {
 
 	// Send CONNECT
 	connect := &ConnectPacket{ClientID: "subscribe-authz-error"}
-	WritePacket(conn, connect, 256*1024)
+	writePacketRaw(conn, connect, 256*1024)
 
 	// Read CONNACK
-	_, _, err = ReadPacket(conn, 256*1024)
+	_, _, err = readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 
 	// Send SUBSCRIBE
@@ -5511,10 +5511,10 @@ func TestServerHandleSubscribeAuthorizationError(t *testing.T) {
 			{TopicFilter: "test/topic", QoS: QoS1},
 		},
 	}
-	WritePacket(conn, sub, 256*1024)
+	writePacketRaw(conn, sub, 256*1024)
 
 	// Should receive SUBACK
-	pkt, _, err := ReadPacket(conn, 256*1024)
+	pkt, _, err := readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	suback, ok := pkt.(*SubackPacket)
 	assert.True(t, ok)
@@ -5543,7 +5543,7 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 			Topic:   "test/topic",
 			Payload: []byte("hello"),
 		}
-		WritePacket(conn, pub, 256*1024)
+		writePacketRaw(conn, pub, 256*1024)
 
 		// Connection should be closed by server
 		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
@@ -5572,9 +5572,9 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 		defer conn1.Close()
 
 		connect1 := &ConnectPacket{ClientID: "client1"}
-		WritePacket(conn1, connect1, 256*1024)
+		writePacketRaw(conn1, connect1, 256*1024)
 
-		pkt, _, err := ReadPacket(conn1, 256*1024)
+		pkt, _, err := readPacketV5(conn1, 256*1024)
 		require.NoError(t, err)
 		connack1, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -5586,9 +5586,9 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 		defer conn2.Close()
 
 		connect2 := &ConnectPacket{ClientID: "client2"}
-		WritePacket(conn2, connect2, 256*1024)
+		writePacketRaw(conn2, connect2, 256*1024)
 
-		pkt2, _, err := ReadPacket(conn2, 256*1024)
+		pkt2, _, err := readPacketV5(conn2, 256*1024)
 		require.NoError(t, err)
 		connack2, ok := pkt2.(*ConnackPacket)
 		require.True(t, ok)
@@ -5596,12 +5596,8 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 	})
 
 	t.Run("empty client ID with CleanStart false", func(t *testing.T) {
-		// Note: The code path in server.go for empty ClientID with CleanStart=false
-		// cannot be reached because ReadPacket validates the packet first (codec.go:89).
-		// The library's ReadPacket calls Validate() after decoding, which rejects
-		// empty ClientID with CleanStart=false before the server logic can handle it.
-		// The server just sees a failed ReadPacket and closes the connection.
-
+		// A CONNECT with empty ClientID and CleanStart=false must be answered
+		// with a CONNACK carrying ReasonClientIDNotValid, per MQTT 5 spec.
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
 		defer listener.Close()
@@ -5629,11 +5625,12 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 		_, err = conn.Write(rawConnect)
 		require.NoError(t, err)
 
-		// Server closes connection because ReadPacket validation fails
-		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		buf := make([]byte, 1)
-		_, err = conn.Read(buf)
-		assert.Error(t, err) // EOF or connection closed
+		conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		pkt, _, err := readPacketV5(conn, 256*1024)
+		require.NoError(t, err)
+		connack, ok := pkt.(*ConnackPacket)
+		require.True(t, ok, "expected CONNACK, got %T", pkt)
+		assert.Equal(t, ReasonClientIDNotValid, connack.ReasonCode)
 	})
 
 	t.Run("empty client ID with CleanStart true gets assigned ID", func(t *testing.T) {
@@ -5656,9 +5653,9 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 			ClientID:   "",
 			CleanStart: true,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		connack, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -5723,9 +5720,9 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 
 			connect := &ConnectPacket{ClientID: "test-client"}
 			tc.setupConnect(connect)
-			WritePacket(conn, connect, 256*1024)
+			writePacketRaw(conn, connect, 256*1024)
 
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			require.NoError(t, err)
 			connack, ok := pkt.(*ConnackPacket)
 			require.True(t, ok)
@@ -5771,9 +5768,9 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 		defer conn.Close()
 
 		connect := &ConnectPacket{ClientID: "test-client"}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		connack, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -5797,9 +5794,9 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 		defer conn1.Close()
 
 		connect1 := &ConnectPacket{ClientID: "same-client-id"}
-		WritePacket(conn1, connect1, 256*1024)
+		writePacketRaw(conn1, connect1, 256*1024)
 
-		pkt1, _, err := ReadPacket(conn1, 256*1024)
+		pkt1, _, err := readPacketV5(conn1, 256*1024)
 		require.NoError(t, err)
 		connack1, ok := pkt1.(*ConnackPacket)
 		require.True(t, ok)
@@ -5811,9 +5808,9 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 		defer conn2.Close()
 
 		connect2 := &ConnectPacket{ClientID: "same-client-id"}
-		WritePacket(conn2, connect2, 256*1024)
+		writePacketRaw(conn2, connect2, 256*1024)
 
-		pkt2, _, err := ReadPacket(conn2, 256*1024)
+		pkt2, _, err := readPacketV5(conn2, 256*1024)
 		require.NoError(t, err)
 		connack2, ok := pkt2.(*ConnackPacket)
 		require.True(t, ok)
@@ -5821,7 +5818,7 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 
 		// First connection should receive DISCONNECT with SessionTakenOver
 		conn1.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-		pkt3, _, err := ReadPacket(conn1, 256*1024)
+		pkt3, _, err := readPacketV5(conn1, 256*1024)
 		if err == nil {
 			disconnect, ok := pkt3.(*DisconnectPacket)
 			if ok {
@@ -5858,9 +5855,9 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 		defer conn.Close()
 
 		connect := &ConnectPacket{ClientID: "callback-test-client"}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		connack, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -5904,9 +5901,9 @@ func TestServerHandleConnectionEdgeCases(t *testing.T) {
 		defer conn.Close()
 
 		connect := &ConnectPacket{ClientID: "original-id"}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		connack, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -5941,20 +5938,20 @@ func TestServerPingreqHandling(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
 
 		// Send PINGREQ
 		pingreq := &PingreqPacket{}
-		WritePacket(conn, pingreq, 256*1024)
+		writePacketRaw(conn, pingreq, 256*1024)
 
 		// Should receive PINGRESP
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		pingresp, ok := pkt.(*PingrespPacket)
@@ -5987,9 +5984,9 @@ func TestServerDisconnectSessionExpiryUpdate(t *testing.T) {
 			KeepAlive:  60,
 		}
 		connect.Props.Set(PropSessionExpiryInterval, uint32(100))
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -5999,7 +5996,7 @@ func TestServerDisconnectSessionExpiryUpdate(t *testing.T) {
 		// Send DISCONNECT with updated session expiry
 		disconnect := &DisconnectPacket{ReasonCode: ReasonSuccess}
 		disconnect.Props.Set(PropSessionExpiryInterval, uint32(200))
-		WritePacket(conn, disconnect, 256*1024)
+		writePacketRaw(conn, disconnect, 256*1024)
 
 		// Connection should close cleanly
 		conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
@@ -6029,9 +6026,9 @@ func TestServerDisconnectSessionExpiryUpdate(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -6041,7 +6038,7 @@ func TestServerDisconnectSessionExpiryUpdate(t *testing.T) {
 		// Try to set session expiry on DISCONNECT (should be ignored per spec)
 		disconnect := &DisconnectPacket{ReasonCode: ReasonSuccess}
 		disconnect.Props.Set(PropSessionExpiryInterval, uint32(100))
-		WritePacket(conn, disconnect, 256*1024)
+		writePacketRaw(conn, disconnect, 256*1024)
 
 		// Connection should close cleanly (no protocol error)
 		conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
@@ -6075,9 +6072,9 @@ func TestServerAuthPacketWithoutEnhancedAuth(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -6085,11 +6082,11 @@ func TestServerAuthPacketWithoutEnhancedAuth(t *testing.T) {
 		// Send AUTH packet (re-authentication attempt)
 		authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
 		authPkt.Props.Set(PropAuthenticationMethod, "PLAIN")
-		WritePacket(conn, authPkt, 256*1024)
+		writePacketRaw(conn, authPkt, 256*1024)
 
 		// Server should send DISCONNECT with protocol error
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		disconnect, ok := pkt.(*DisconnectPacket)
@@ -6165,9 +6162,9 @@ func TestServerProtocolErrorDisconnect(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -6180,7 +6177,7 @@ func TestServerProtocolErrorDisconnect(t *testing.T) {
 
 		// Server should send DISCONNECT with protocol error or malformed packet
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		if err == nil {
 			disconnect, ok := pkt.(*DisconnectPacket)
 			if ok {
@@ -6219,9 +6216,9 @@ func TestServerPublishValidationFailureDisconnect(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -6233,11 +6230,11 @@ func TestServerPublishValidationFailureDisconnect(t *testing.T) {
 			QoS:      QoS2,
 			PacketID: 1,
 		}
-		WritePacket(conn, pub, 256*1024)
+		writePacketRaw(conn, pub, 256*1024)
 
 		// Server should send DISCONNECT with QoS not supported
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		disconnect, ok := pkt.(*DisconnectPacket)
@@ -6270,9 +6267,9 @@ func TestServerPublishValidationFailureDisconnect(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -6284,11 +6281,11 @@ func TestServerPublishValidationFailureDisconnect(t *testing.T) {
 			QoS:     QoS0,
 			Retain:  true,
 		}
-		WritePacket(conn, pub, 256*1024)
+		writePacketRaw(conn, pub, 256*1024)
 
 		// Server should send DISCONNECT with retain not supported
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		disconnect, ok := pkt.(*DisconnectPacket)
@@ -6324,9 +6321,9 @@ func TestServerInboundFlowControlExceeded(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		connack, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -6339,7 +6336,7 @@ func TestServerInboundFlowControlExceeded(t *testing.T) {
 			QoS:      QoS1,
 			PacketID: 1,
 		}
-		WritePacket(conn, pub1, 256*1024)
+		writePacketRaw(conn, pub1, 256*1024)
 
 		// Immediately send second QoS 1 PUBLISH without waiting for PUBACK
 		// This exceeds the receive maximum
@@ -6349,13 +6346,13 @@ func TestServerInboundFlowControlExceeded(t *testing.T) {
 			QoS:      QoS1,
 			PacketID: 2,
 		}
-		WritePacket(conn, pub2, 256*1024)
+		writePacketRaw(conn, pub2, 256*1024)
 
 		// Server should eventually send DISCONNECT with receive max exceeded
 		// (may receive PUBACK for first message first)
 		conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 		for {
-			pkt, _, err = ReadPacket(conn, 256*1024)
+			pkt, _, err = readPacketV5(conn, 256*1024)
 			if err != nil {
 				break // Connection closed
 			}
@@ -6401,9 +6398,9 @@ func TestServerQoS2AuthorizationFailurePubrec(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -6415,11 +6412,11 @@ func TestServerQoS2AuthorizationFailurePubrec(t *testing.T) {
 			QoS:      QoS2,
 			PacketID: 1,
 		}
-		WritePacket(conn, pub, 256*1024)
+		writePacketRaw(conn, pub, 256*1024)
 
 		// Server should send PUBREC with error reason code
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		pubrec, ok := pkt.(*PubrecPacket)
@@ -6459,9 +6456,9 @@ func TestServerQoS2AuthorizationFailurePubrec(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -6473,11 +6470,11 @@ func TestServerQoS2AuthorizationFailurePubrec(t *testing.T) {
 			QoS:      QoS2,
 			PacketID: 1,
 		}
-		WritePacket(conn, pub, 256*1024)
+		writePacketRaw(conn, pub, 256*1024)
 
 		// Server should send PUBREC with error reason code
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		pubrec, ok := pkt.(*PubrecPacket)
@@ -6510,9 +6507,9 @@ func TestServerQoS2PublishHandling(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -6524,11 +6521,11 @@ func TestServerQoS2PublishHandling(t *testing.T) {
 			QoS:      QoS2,
 			PacketID: 1,
 		}
-		WritePacket(conn, pub, 256*1024)
+		writePacketRaw(conn, pub, 256*1024)
 
 		// Should receive PUBREC with success
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		pubrec, ok := pkt.(*PubrecPacket)
@@ -6599,9 +6596,9 @@ func TestServerQoS2PublishHandling(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -6614,11 +6611,11 @@ func TestServerQoS2PublishHandling(t *testing.T) {
 			PacketID: 1,
 			DUP:      false,
 		}
-		WritePacket(conn, pub, 256*1024)
+		writePacketRaw(conn, pub, 256*1024)
 
 		// Receive first PUBREC
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		pubrec1, ok := pkt.(*PubrecPacket)
 		require.True(t, ok)
@@ -6633,11 +6630,11 @@ func TestServerQoS2PublishHandling(t *testing.T) {
 			PacketID: 1,
 			DUP:      true,
 		}
-		WritePacket(conn, pubDup, 256*1024)
+		writePacketRaw(conn, pubDup, 256*1024)
 
 		// Should still receive PUBREC for the DUP
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		pubrec2, ok := pkt.(*PubrecPacket)
 		require.True(t, ok, "expected PUBREC for DUP retransmit")
@@ -6719,9 +6716,9 @@ func TestServerQoS2PublishHandling(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -6733,11 +6730,11 @@ func TestServerQoS2PublishHandling(t *testing.T) {
 			QoS:      QoS2,
 			PacketID: 1,
 		}
-		WritePacket(conn, pub, 256*1024)
+		writePacketRaw(conn, pub, 256*1024)
 
 		// Receive PUBREC
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		pubrec, ok := pkt.(*PubrecPacket)
 		require.True(t, ok)
@@ -6753,11 +6750,11 @@ func TestServerQoS2PublishHandling(t *testing.T) {
 			PacketID:   1,
 			ReasonCode: ReasonSuccess,
 		}
-		WritePacket(conn, pubrel, 256*1024)
+		writePacketRaw(conn, pubrel, 256*1024)
 
 		// Receive PUBCOMP
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		pubcomp, ok := pkt.(*PubcompPacket)
 		require.True(t, ok, "expected PUBCOMP packet")
@@ -6877,9 +6874,9 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -6893,7 +6890,7 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 		}
 		pub.Props.Set(PropContentType, "text/plain")
 		pub.Props.Set(PropResponseTopic, "client/response")
-		WritePacket(conn, pub, 256*1024)
+		writePacketRaw(conn, pub, 256*1024)
 
 		// Wait for message to be processed
 		time.Sleep(10 * time.Millisecond)
@@ -6934,9 +6931,9 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connect, 256*1024)
+		writePacketRaw(conn, connect, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -6948,7 +6945,7 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 			QoS:     QoS0,
 			Retain:  true,
 		}
-		WritePacket(conn, pub, 256*1024)
+		writePacketRaw(conn, pub, 256*1024)
 
 		// Wait for message to be processed
 		time.Sleep(10 * time.Millisecond)
@@ -6994,9 +6991,9 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 			KeepAlive:  60,
 			Username:   "a",
 		}
-		WritePacket(connA, connectA, 256*1024)
+		writePacketRaw(connA, connectA, 256*1024)
 
-		pkt, _, err := ReadPacket(connA, 256*1024)
+		pkt, _, err := readPacketV5(connA, 256*1024)
 		require.NoError(t, err)
 		_, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -7008,7 +7005,7 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 			QoS:     QoS0,
 			Retain:  true,
 		}
-		WritePacket(connA, pubA, 256*1024)
+		writePacketRaw(connA, pubA, 256*1024)
 
 		time.Sleep(5 * time.Millisecond)
 
@@ -7023,9 +7020,9 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 			KeepAlive:  60,
 			Username:   "b",
 		}
-		WritePacket(connB, connectB, 256*1024)
+		writePacketRaw(connB, connectB, 256*1024)
 
-		pkt, _, err = ReadPacket(connB, 256*1024)
+		pkt, _, err = readPacketV5(connB, 256*1024)
 		require.NoError(t, err)
 		_, ok = pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -7037,7 +7034,7 @@ func TestServerRetainedMessageHandling(t *testing.T) {
 			QoS:     QoS0,
 			Retain:  true,
 		}
-		WritePacket(connB, pubB, 256*1024)
+		writePacketRaw(connB, pubB, 256*1024)
 
 		time.Sleep(5 * time.Millisecond)
 
@@ -7075,9 +7072,9 @@ func TestServerPublishToSubscribersSubscriptionIdentifiers(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(pubConn, pubConnect, 256*1024)
+		writePacketRaw(pubConn, pubConnect, 256*1024)
 
-		pkt, _, err := ReadPacket(pubConn, 256*1024)
+		pkt, _, err := readPacketV5(pubConn, 256*1024)
 		require.NoError(t, err)
 		require.IsType(t, &ConnackPacket{}, pkt)
 
@@ -7091,9 +7088,9 @@ func TestServerPublishToSubscribersSubscriptionIdentifiers(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(subConn, subConnect, 256*1024)
+		writePacketRaw(subConn, subConnect, 256*1024)
 
-		pkt, _, err = ReadPacket(subConn, 256*1024)
+		pkt, _, err = readPacketV5(subConn, 256*1024)
 		require.NoError(t, err)
 		require.IsType(t, &ConnackPacket{}, pkt)
 
@@ -7105,9 +7102,9 @@ func TestServerPublishToSubscribersSubscriptionIdentifiers(t *testing.T) {
 			},
 		}
 		subPkt.Props.Set(PropSubscriptionIdentifier, uint32(99))
-		WritePacket(subConn, subPkt, 256*1024)
+		writePacketRaw(subConn, subPkt, 256*1024)
 
-		pkt, _, err = ReadPacket(subConn, 256*1024)
+		pkt, _, err = readPacketV5(subConn, 256*1024)
 		require.NoError(t, err)
 		require.IsType(t, &SubackPacket{}, pkt)
 
@@ -7119,11 +7116,11 @@ func TestServerPublishToSubscribersSubscriptionIdentifiers(t *testing.T) {
 			Payload: []byte("client published"),
 			QoS:     QoS0,
 		}
-		WritePacket(pubConn, pubPkt, 256*1024)
+		writePacketRaw(pubConn, pubPkt, 256*1024)
 
 		// Read the PUBLISH from subscriber connection
 		subConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(subConn, 256*1024)
+		pkt, _, err = readPacketV5(subConn, 256*1024)
 		require.NoError(t, err)
 
 		receivedPub, ok := pkt.(*PublishPacket)
@@ -7262,9 +7259,9 @@ func TestServerHandleSubscribeSubIDNotSupported(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connectPkt, 256*1024)
+		writePacketRaw(conn, connectPkt, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		connack, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -7282,11 +7279,11 @@ func TestServerHandleSubscribeSubIDNotSupported(t *testing.T) {
 			},
 		}
 		subPkt.Props.Set(PropSubscriptionIdentifier, uint32(123))
-		WritePacket(conn, subPkt, 256*1024)
+		writePacketRaw(conn, subPkt, 256*1024)
 
 		// Should receive DISCONNECT with SubIDsNotSupported
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		disconnectPkt, ok := pkt.(*DisconnectPacket)
@@ -7321,9 +7318,9 @@ func TestServerHandleSubscribeWildcardNotSupported(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connectPkt, 256*1024)
+		writePacketRaw(conn, connectPkt, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		connack, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -7336,10 +7333,10 @@ func TestServerHandleSubscribeWildcardNotSupported(t *testing.T) {
 				{TopicFilter: "test/+/data", QoS: QoS0},
 			},
 		}
-		WritePacket(conn, subPkt, 256*1024)
+		writePacketRaw(conn, subPkt, 256*1024)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		subackPkt, ok := pkt.(*SubackPacket)
@@ -7371,9 +7368,9 @@ func TestServerHandleSubscribeWildcardNotSupported(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connectPkt, 256*1024)
+		writePacketRaw(conn, connectPkt, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		require.IsType(t, &ConnackPacket{}, pkt)
 
@@ -7384,10 +7381,10 @@ func TestServerHandleSubscribeWildcardNotSupported(t *testing.T) {
 				{TopicFilter: "test/#", QoS: QoS1},
 			},
 		}
-		WritePacket(conn, subPkt, 256*1024)
+		writePacketRaw(conn, subPkt, 256*1024)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		subackPkt, ok := pkt.(*SubackPacket)
@@ -7422,9 +7419,9 @@ func TestServerHandleSubscribeSharedNotSupported(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connectPkt, 256*1024)
+		writePacketRaw(conn, connectPkt, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		connack, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -7437,10 +7434,10 @@ func TestServerHandleSubscribeSharedNotSupported(t *testing.T) {
 				{TopicFilter: "$share/group/test/topic", QoS: QoS0},
 			},
 		}
-		WritePacket(conn, subPkt, 256*1024)
+		writePacketRaw(conn, subPkt, 256*1024)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		subackPkt, ok := pkt.(*SubackPacket)
@@ -7475,9 +7472,9 @@ func TestServerHandleSubscribeMaxQoSEnforcement(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connectPkt, 256*1024)
+		writePacketRaw(conn, connectPkt, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		connack, ok := pkt.(*ConnackPacket)
 		require.True(t, ok)
@@ -7490,10 +7487,10 @@ func TestServerHandleSubscribeMaxQoSEnforcement(t *testing.T) {
 				{TopicFilter: "test/maxqos", QoS: QoS2},
 			},
 		}
-		WritePacket(conn, subPkt, 256*1024)
+		writePacketRaw(conn, subPkt, 256*1024)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 
 		subackPkt, ok := pkt.(*SubackPacket)
@@ -7534,9 +7531,9 @@ func TestServerHandleSubscribeRetainedMessageDelivery(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connectPkt, 256*1024)
+		writePacketRaw(conn, connectPkt, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		require.IsType(t, &ConnackPacket{}, pkt)
 
@@ -7547,13 +7544,13 @@ func TestServerHandleSubscribeRetainedMessageDelivery(t *testing.T) {
 				{TopicFilter: "test/retained/qos", QoS: QoS1, RetainAsPublish: true},
 			},
 		}
-		WritePacket(conn, subPkt, 256*1024)
+		writePacketRaw(conn, subPkt, 256*1024)
 
 		// Read packets - SUBACK and PUBLISH may arrive in any order
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		var pubPkt *PublishPacket
 		for i := 0; i < 2; i++ {
-			pkt, _, err = ReadPacket(conn, 256*1024)
+			pkt, _, err = readPacketV5(conn, 256*1024)
 			require.NoError(t, err)
 			if p, ok := pkt.(*PublishPacket); ok {
 				pubPkt = p
@@ -7594,9 +7591,9 @@ func TestServerHandleSubscribeRetainedMessageDelivery(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connectPkt, 256*1024)
+		writePacketRaw(conn, connectPkt, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		require.IsType(t, &ConnackPacket{}, pkt)
 
@@ -7607,13 +7604,13 @@ func TestServerHandleSubscribeRetainedMessageDelivery(t *testing.T) {
 				{TopicFilter: "test/retained/rap", QoS: QoS0, RetainAsPublish: false},
 			},
 		}
-		WritePacket(conn, subPkt, 256*1024)
+		writePacketRaw(conn, subPkt, 256*1024)
 
 		// Read packets - SUBACK and PUBLISH may arrive in any order
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		var pubPkt *PublishPacket
 		for i := 0; i < 2; i++ {
-			pkt, _, err = ReadPacket(conn, 256*1024)
+			pkt, _, err = readPacketV5(conn, 256*1024)
 			require.NoError(t, err)
 			if p, ok := pkt.(*PublishPacket); ok {
 				pubPkt = p
@@ -7764,9 +7761,9 @@ func TestServerOnUnsubscribeCallback(t *testing.T) {
 			CleanStart: true,
 			KeepAlive:  60,
 		}
-		WritePacket(conn, connectPkt, 256*1024)
+		writePacketRaw(conn, connectPkt, 256*1024)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		require.IsType(t, &ConnackPacket{}, pkt)
 
@@ -7778,10 +7775,10 @@ func TestServerOnUnsubscribeCallback(t *testing.T) {
 				{TopicFilter: "test/topic2", QoS: QoS0},
 			},
 		}
-		WritePacket(conn, subPkt, 256*1024)
+		writePacketRaw(conn, subPkt, 256*1024)
 
 		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		require.IsType(t, &SubackPacket{}, pkt)
 
@@ -7790,9 +7787,9 @@ func TestServerOnUnsubscribeCallback(t *testing.T) {
 			PacketID:     2,
 			TopicFilters: []string{"test/topic1", "test/topic2"},
 		}
-		WritePacket(conn, unsubPkt, 256*1024)
+		writePacketRaw(conn, unsubPkt, 256*1024)
 
-		pkt, _, err = ReadPacket(conn, 256*1024)
+		pkt, _, err = readPacketV5(conn, 256*1024)
 		require.NoError(t, err)
 		require.IsType(t, &UnsubackPacket{}, pkt)
 
@@ -8095,11 +8092,11 @@ func TestServerPerformEnhancedAuthStartFails(t *testing.T) {
 	connect.Props.Set(PropAuthenticationMethod, "FAIL-CONNECT")
 	connect.Props.Set(PropAuthenticationData, []byte("test-data"))
 
-	_, err = WritePacket(conn, connect, 256*1024)
+	_, err = writePacketRaw(conn, connect, 256*1024)
 	require.NoError(t, err)
 
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err := ReadPacket(conn, 256*1024)
+	pkt, _, err := readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 
 	connack, ok := pkt.(*ConnackPacket)
@@ -8164,12 +8161,12 @@ func TestServerPerformEnhancedAuthContinueFails(t *testing.T) {
 	connect.Props.Set(PropAuthenticationMethod, "CONTINUE-AUTH")
 	connect.Props.Set(PropAuthenticationData, []byte("test-data"))
 
-	_, err = WritePacket(conn, connect, 256*1024)
+	_, err = writePacketRaw(conn, connect, 256*1024)
 	require.NoError(t, err)
 
 	// Read AUTH packet from server
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err := ReadPacket(conn, 256*1024)
+	pkt, _, err := readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 
 	authPkt, ok := pkt.(*AuthPacket)
@@ -8181,12 +8178,12 @@ func TestServerPerformEnhancedAuthContinueFails(t *testing.T) {
 	clientAuth.Props.Set(PropAuthenticationMethod, "CONTINUE-AUTH")
 	clientAuth.Props.Set(PropAuthenticationData, []byte("response"))
 
-	_, err = WritePacket(conn, clientAuth, 256*1024)
+	_, err = writePacketRaw(conn, clientAuth, 256*1024)
 	require.NoError(t, err)
 
 	// Read CONNACK - should be NotAuthorized due to AuthContinue failure
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err = ReadPacket(conn, 256*1024)
+	pkt, _, err = readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 
 	connack, ok := pkt.(*ConnackPacket)
@@ -8221,12 +8218,12 @@ func TestServerPerformEnhancedAuthReadFails(t *testing.T) {
 	connect.Props.Set(PropAuthenticationMethod, "CONTINUE-AUTH")
 	connect.Props.Set(PropAuthenticationData, []byte("test-data"))
 
-	_, err = WritePacket(conn, connect, 256*1024)
+	_, err = writePacketRaw(conn, connect, 256*1024)
 	require.NoError(t, err)
 
 	// Read AUTH packet from server
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err := ReadPacket(conn, 256*1024)
+	pkt, _, err := readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 
 	_, ok := pkt.(*AuthPacket)
@@ -8267,12 +8264,12 @@ func TestServerPerformEnhancedAuthWrongPacketType(t *testing.T) {
 	connect.Props.Set(PropAuthenticationMethod, "CONTINUE-AUTH")
 	connect.Props.Set(PropAuthenticationData, []byte("test-data"))
 
-	_, err = WritePacket(conn, connect, 256*1024)
+	_, err = writePacketRaw(conn, connect, 256*1024)
 	require.NoError(t, err)
 
 	// Read AUTH packet from server
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err := ReadPacket(conn, 256*1024)
+	pkt, _, err := readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 
 	_, ok := pkt.(*AuthPacket)
@@ -8280,12 +8277,12 @@ func TestServerPerformEnhancedAuthWrongPacketType(t *testing.T) {
 
 	// Send DISCONNECT instead of AUTH - wrong packet type
 	disconnect := &DisconnectPacket{ReasonCode: ReasonSuccess}
-	_, err = WritePacket(conn, disconnect, 256*1024)
+	_, err = writePacketRaw(conn, disconnect, 256*1024)
 	require.NoError(t, err)
 
 	// Read CONNACK - should be ProtocolError due to wrong packet type
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err = ReadPacket(conn, 256*1024)
+	pkt, _, err = readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 
 	connack, ok := pkt.(*ConnackPacket)
@@ -8359,11 +8356,11 @@ func TestServerHandleReauthMultiStepContinueFails(t *testing.T) {
 
 	// First establish a connection
 	connect := &ConnectPacket{ClientID: "reauth-continue-fail"}
-	_, err = WritePacket(conn, connect, 256*1024)
+	_, err = writePacketRaw(conn, connect, 256*1024)
 	require.NoError(t, err)
 
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err := ReadPacket(conn, 256*1024)
+	pkt, _, err := readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	_, ok := pkt.(*ConnackPacket)
 	require.True(t, ok)
@@ -8371,12 +8368,12 @@ func TestServerHandleReauthMultiStepContinueFails(t *testing.T) {
 	// Send re-auth request
 	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
 	authPkt.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
-	_, err = WritePacket(conn, authPkt, 256*1024)
+	_, err = writePacketRaw(conn, authPkt, 256*1024)
 	require.NoError(t, err)
 
 	// Read AUTH challenge from server
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err = ReadPacket(conn, 256*1024)
+	pkt, _, err = readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	serverAuth, ok := pkt.(*AuthPacket)
 	require.True(t, ok)
@@ -8386,7 +8383,7 @@ func TestServerHandleReauthMultiStepContinueFails(t *testing.T) {
 	clientAuth := &AuthPacket{ReasonCode: ReasonContinueAuth}
 	clientAuth.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
 	clientAuth.Props.Set(PropAuthenticationData, []byte("response"))
-	_, err = WritePacket(conn, clientAuth, 256*1024)
+	_, err = writePacketRaw(conn, clientAuth, 256*1024)
 	require.NoError(t, err)
 
 	// Wait for server to process and disconnect
@@ -8418,11 +8415,11 @@ func TestServerHandleReauthMultiStepReadFails(t *testing.T) {
 
 	// First establish a connection
 	connect := &ConnectPacket{ClientID: "reauth-read-fail"}
-	_, err = WritePacket(conn, connect, 256*1024)
+	_, err = writePacketRaw(conn, connect, 256*1024)
 	require.NoError(t, err)
 
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err := ReadPacket(conn, 256*1024)
+	pkt, _, err := readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	_, ok := pkt.(*ConnackPacket)
 	require.True(t, ok)
@@ -8430,12 +8427,12 @@ func TestServerHandleReauthMultiStepReadFails(t *testing.T) {
 	// Send re-auth request
 	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
 	authPkt.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
-	_, err = WritePacket(conn, authPkt, 256*1024)
+	_, err = writePacketRaw(conn, authPkt, 256*1024)
 	require.NoError(t, err)
 
 	// Read AUTH challenge from server
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err = ReadPacket(conn, 256*1024)
+	pkt, _, err = readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	_, ok = pkt.(*AuthPacket)
 	require.True(t, ok)
@@ -8472,11 +8469,11 @@ func TestServerHandleReauthMultiStepWrongPacketType(t *testing.T) {
 
 	// First establish a connection
 	connect := &ConnectPacket{ClientID: "reauth-wrong-pkt"}
-	_, err = WritePacket(conn, connect, 256*1024)
+	_, err = writePacketRaw(conn, connect, 256*1024)
 	require.NoError(t, err)
 
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err := ReadPacket(conn, 256*1024)
+	pkt, _, err := readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	_, ok := pkt.(*ConnackPacket)
 	require.True(t, ok)
@@ -8484,19 +8481,19 @@ func TestServerHandleReauthMultiStepWrongPacketType(t *testing.T) {
 	// Send re-auth request
 	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
 	authPkt.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
-	_, err = WritePacket(conn, authPkt, 256*1024)
+	_, err = writePacketRaw(conn, authPkt, 256*1024)
 	require.NoError(t, err)
 
 	// Read AUTH challenge from server
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err = ReadPacket(conn, 256*1024)
+	pkt, _, err = readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	_, ok = pkt.(*AuthPacket)
 	require.True(t, ok)
 
 	// Send PUBLISH instead of AUTH - wrong packet type
 	pub := &PublishPacket{Topic: "test/topic", Payload: []byte("data")}
-	_, err = WritePacket(conn, pub, 256*1024)
+	_, err = writePacketRaw(conn, pub, 256*1024)
 	require.NoError(t, err)
 
 	// Wait for server to process and disconnect
@@ -8532,11 +8529,11 @@ func TestServerHandleReauthMultiStepFinalResultFails(t *testing.T) {
 
 	// First establish a connection
 	connect := &ConnectPacket{ClientID: "reauth-final-fail"}
-	_, err = WritePacket(conn, connect, 256*1024)
+	_, err = writePacketRaw(conn, connect, 256*1024)
 	require.NoError(t, err)
 
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err := ReadPacket(conn, 256*1024)
+	pkt, _, err := readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	_, ok := pkt.(*ConnackPacket)
 	require.True(t, ok)
@@ -8544,12 +8541,12 @@ func TestServerHandleReauthMultiStepFinalResultFails(t *testing.T) {
 	// Send re-auth request
 	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
 	authPkt.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
-	_, err = WritePacket(conn, authPkt, 256*1024)
+	_, err = writePacketRaw(conn, authPkt, 256*1024)
 	require.NoError(t, err)
 
 	// Read AUTH challenge from server
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err = ReadPacket(conn, 256*1024)
+	pkt, _, err = readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	_, ok = pkt.(*AuthPacket)
 	require.True(t, ok)
@@ -8558,7 +8555,7 @@ func TestServerHandleReauthMultiStepFinalResultFails(t *testing.T) {
 	clientAuth := &AuthPacket{ReasonCode: ReasonContinueAuth}
 	clientAuth.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
 	clientAuth.Props.Set(PropAuthenticationData, []byte("response"))
-	_, err = WritePacket(conn, clientAuth, 256*1024)
+	_, err = writePacketRaw(conn, clientAuth, 256*1024)
 	require.NoError(t, err)
 
 	// Wait for server to process (client should be disconnected due to auth failure)
@@ -8595,11 +8592,11 @@ func TestServerHandleReauthMultiStepFinalResultCustomReasonCode(t *testing.T) {
 
 	// First establish a connection
 	connect := &ConnectPacket{ClientID: "reauth-custom-reason"}
-	_, err = WritePacket(conn, connect, 256*1024)
+	_, err = writePacketRaw(conn, connect, 256*1024)
 	require.NoError(t, err)
 
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err := ReadPacket(conn, 256*1024)
+	pkt, _, err := readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	_, ok := pkt.(*ConnackPacket)
 	require.True(t, ok)
@@ -8607,12 +8604,12 @@ func TestServerHandleReauthMultiStepFinalResultCustomReasonCode(t *testing.T) {
 	// Send re-auth request
 	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
 	authPkt.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
-	_, err = WritePacket(conn, authPkt, 256*1024)
+	_, err = writePacketRaw(conn, authPkt, 256*1024)
 	require.NoError(t, err)
 
 	// Read AUTH challenge from server
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err = ReadPacket(conn, 256*1024)
+	pkt, _, err = readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	_, ok = pkt.(*AuthPacket)
 	require.True(t, ok)
@@ -8621,7 +8618,7 @@ func TestServerHandleReauthMultiStepFinalResultCustomReasonCode(t *testing.T) {
 	clientAuth := &AuthPacket{ReasonCode: ReasonContinueAuth}
 	clientAuth.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
 	clientAuth.Props.Set(PropAuthenticationData, []byte("response"))
-	_, err = WritePacket(conn, clientAuth, 256*1024)
+	_, err = writePacketRaw(conn, clientAuth, 256*1024)
 	require.NoError(t, err)
 
 	// Wait for server to process
@@ -8654,11 +8651,11 @@ func TestServerHandleReauthMultiStepSuccess(t *testing.T) {
 
 	// First establish a connection
 	connect := &ConnectPacket{ClientID: "reauth-success"}
-	_, err = WritePacket(conn, connect, 256*1024)
+	_, err = writePacketRaw(conn, connect, 256*1024)
 	require.NoError(t, err)
 
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err := ReadPacket(conn, 256*1024)
+	pkt, _, err := readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	_, ok := pkt.(*ConnackPacket)
 	require.True(t, ok)
@@ -8666,12 +8663,12 @@ func TestServerHandleReauthMultiStepSuccess(t *testing.T) {
 	// Send re-auth request
 	authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
 	authPkt.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
-	_, err = WritePacket(conn, authPkt, 256*1024)
+	_, err = writePacketRaw(conn, authPkt, 256*1024)
 	require.NoError(t, err)
 
 	// Read AUTH challenge from server
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err = ReadPacket(conn, 256*1024)
+	pkt, _, err = readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	serverAuth, ok := pkt.(*AuthPacket)
 	require.True(t, ok)
@@ -8681,12 +8678,12 @@ func TestServerHandleReauthMultiStepSuccess(t *testing.T) {
 	clientAuth := &AuthPacket{ReasonCode: ReasonContinueAuth}
 	clientAuth.Props.Set(PropAuthenticationMethod, "REAUTH-MULTI")
 	clientAuth.Props.Set(PropAuthenticationData, []byte("response"))
-	_, err = WritePacket(conn, clientAuth, 256*1024)
+	_, err = writePacketRaw(conn, clientAuth, 256*1024)
 	require.NoError(t, err)
 
 	// Read success AUTH from server
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err = ReadPacket(conn, 256*1024)
+	pkt, _, err = readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 	successAuth, ok := pkt.(*AuthPacket)
 	require.True(t, ok)
@@ -8718,13 +8715,13 @@ func newTestClient(addr, clientID string) (*testClient, error) {
 		CleanStart: true,
 		KeepAlive:  60,
 	}
-	if _, err := WritePacket(conn, connect, 0); err != nil {
+	if _, err := writePacketRaw(conn, connect, 0); err != nil {
 		conn.Close()
 		return nil, err
 	}
 
 	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err := ReadPacket(conn, 0)
+	pkt, _, err := readPacketV5(conn, 0)
 	conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		conn.Close()
@@ -8751,12 +8748,12 @@ func (tc *testClient) subscribe(topic string, qos byte) error {
 			{TopicFilter: topic, QoS: qos},
 		},
 	}
-	if _, err := WritePacket(tc.conn, sub, 0); err != nil {
+	if _, err := writePacketRaw(tc.conn, sub, 0); err != nil {
 		return err
 	}
 
 	tc.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	pkt, _, err := ReadPacket(tc.conn, 0)
+	pkt, _, err := readPacketV5(tc.conn, 0)
 	tc.conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		return err
@@ -8777,20 +8774,20 @@ func (tc *testClient) publish(topic string, payload []byte, qos byte) error {
 	if qos > 0 {
 		pub.PacketID = 1
 	}
-	_, err := WritePacket(tc.conn, pub, 0)
+	_, err := writePacketRaw(tc.conn, pub, 0)
 	return err
 }
 
 func (tc *testClient) readPacket(timeout time.Duration) (Packet, error) {
 	tc.conn.SetReadDeadline(time.Now().Add(timeout))
-	pkt, _, err := ReadPacket(tc.conn, 0)
+	pkt, _, err := readPacketV5(tc.conn, 0)
 	tc.conn.SetReadDeadline(time.Time{})
 	return pkt, err
 }
 
 func (tc *testClient) close() {
 	disconnect := &DisconnectPacket{ReasonCode: ReasonSuccess}
-	WritePacket(tc.conn, disconnect, 0)
+	writePacketRaw(tc.conn, disconnect, 0)
 	tc.conn.Close()
 }
 
@@ -9569,12 +9566,12 @@ func BenchmarkSubscribeUnsubscribe(b *testing.B) {
 				{TopicFilter: "test/bench/+", QoS: 0},
 			},
 		}
-		if _, err := WritePacket(client.conn, sub, 0); err != nil {
+		if _, err := writePacketRaw(client.conn, sub, 0); err != nil {
 			b.Fatal(err)
 		}
 
 		client.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		_, _, err := ReadPacket(client.conn, 0)
+		_, _, err := readPacketV5(client.conn, 0)
 		client.conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			b.Fatal(err)
@@ -9584,12 +9581,12 @@ func BenchmarkSubscribeUnsubscribe(b *testing.B) {
 			PacketID:     packetID,
 			TopicFilters: []string{"test/bench/+"},
 		}
-		if _, err := WritePacket(client.conn, unsub, 0); err != nil {
+		if _, err := writePacketRaw(client.conn, unsub, 0); err != nil {
 			b.Fatal(err)
 		}
 
 		client.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		_, _, err = ReadPacket(client.conn, 0)
+		_, _, err = readPacketV5(client.conn, 0)
 		client.conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			b.Fatal(err)
@@ -9626,12 +9623,12 @@ func BenchmarkPingPong(b *testing.B) {
 
 	for range b.N {
 		ping := &PingreqPacket{}
-		if _, err := WritePacket(client.conn, ping, 0); err != nil {
+		if _, err := writePacketRaw(client.conn, ping, 0); err != nil {
 			b.Fatal(err)
 		}
 
 		client.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		pkt, _, err := ReadPacket(client.conn, 0)
+		pkt, _, err := readPacketV5(client.conn, 0)
 		client.conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			b.Fatal(err)

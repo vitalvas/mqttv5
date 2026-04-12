@@ -27,6 +27,7 @@ subscriptions at runtime.
 | `ClientID` | `string` | Client identifier |
 | `Username` | `string` | Username from CONNECT |
 | `Namespace` | `string` | Multi-tenancy namespace |
+| `ProtocolVersion` | `ProtocolVersion` | MQTT protocol version (4=v3.1.1, 5=v5.0) |
 | `RemoteAddr` | `string` | Remote network address |
 | `LocalAddr` | `string` | Local network address |
 | `ConnectedAt` | `time.Time` | Connection time |

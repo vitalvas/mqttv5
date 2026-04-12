@@ -643,11 +643,11 @@ func TestPacketEncodingRoundTrip(t *testing.T) {
 	for _, pkt := range packets {
 		t.Run(pkt.Type().String(), func(t *testing.T) {
 			buf := &bytes.Buffer{}
-			n, err := WritePacket(buf, pkt, maxSize)
+			n, err := writePacketRaw(buf, pkt, maxSize)
 			require.NoError(t, err)
 			assert.Greater(t, n, 0)
 
-			decoded, m, err := ReadPacket(bytes.NewReader(buf.Bytes()), maxSize)
+			decoded, m, err := readPacketV5(bytes.NewReader(buf.Bytes()), maxSize)
 			require.NoError(t, err)
 			assert.Equal(t, n, m)
 			assert.Equal(t, pkt.Type(), decoded.Type())

@@ -78,6 +78,9 @@ type serverConfig struct {
 	subIDAvailable     bool // Whether subscription identifiers are supported
 	sharedSubAvailable bool // Whether shared subscriptions are supported
 
+	// Protocol version control
+	allowedVersions map[ProtocolVersion]bool
+
 	// Rate limiting
 	connRateLimiter ConnectionRateLimiter
 	msgRateLimiter  MessageRateLimiter
@@ -99,6 +102,7 @@ func defaultServerConfig() *serverConfig {
 		maxPacketSize:      MaxPacketSizeDefault,
 		maxConnections:     0, // unlimited
 		receiveMaximum:     65535,
+		allowedVersions:    map[ProtocolVersion]bool{ProtocolV5: true}, // v5 only by default
 		// Default capabilities (all features enabled)
 		maxQoS:             QoS2, // QoS 0, 1, 2 all supported
 		retainAvailable:    true, // Retained messages supported
@@ -379,5 +383,19 @@ func WithConnectionRateLimiter(limiter ConnectionRateLimiter) ServerOption {
 func WithMessageRateLimiter(limiter MessageRateLimiter) ServerOption {
 	return func(c *serverConfig) {
 		c.msgRateLimiter = limiter
+	}
+}
+
+// WithAcceptProtocolVersions sets the protocol versions the server will accept.
+// By default, only MQTT v5 (ProtocolV5) is accepted.
+// To accept MQTT 3.1.1 clients, include ProtocolV311:
+//
+//	WithAcceptProtocolVersions(ProtocolV5, ProtocolV311)
+func WithAcceptProtocolVersions(versions ...ProtocolVersion) ServerOption {
+	return func(c *serverConfig) {
+		c.allowedVersions = make(map[ProtocolVersion]bool, len(versions))
+		for _, v := range versions {
+			c.allowedVersions[v] = true
+		}
 	}
 }

@@ -97,7 +97,7 @@ func sendConnack(conn net.Conn, sessionPresent bool, reasonCode ReasonCode) erro
 		SessionPresent: sessionPresent,
 		ReasonCode:     reasonCode,
 	}
-	_, err := WritePacket(conn, pkt, 256*1024)
+	_, err := writePacketRaw(conn, pkt, 256*1024)
 	return err
 }
 
@@ -105,7 +105,7 @@ func sendConnack(conn net.Conn, sessionPresent bool, reasonCode ReasonCode) erro
 func readConnect(t *testing.T, conn net.Conn) *ConnectPacket {
 	t.Helper()
 
-	pkt, _, err := ReadPacket(conn, 256*1024)
+	pkt, _, err := readPacketV5(conn, 256*1024)
 	require.NoError(t, err)
 
 	connectPkt, ok := pkt.(*ConnectPacket)
@@ -216,7 +216,7 @@ func TestClose(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Wait for DISCONNECT
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		if err == nil {
 			_, disconnectReceived = pkt.(*DisconnectPacket)
 		}
@@ -267,7 +267,7 @@ func TestPublish(t *testing.T) {
 			err := sendConnack(conn, false, ReasonSuccess)
 			assert.NoError(t, err)
 
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			if err == nil {
 				receivedPublish, _ = pkt.(*PublishPacket)
 			}
@@ -299,7 +299,7 @@ func TestPublish(t *testing.T) {
 			err := sendConnack(conn, false, ReasonSuccess)
 			assert.NoError(t, err)
 
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			if err == nil {
 				receivedPublish, _ = pkt.(*PublishPacket)
 				if receivedPublish != nil {
@@ -308,7 +308,7 @@ func TestPublish(t *testing.T) {
 						PacketID:   receivedPublish.PacketID,
 						ReasonCode: ReasonSuccess,
 					}
-					_, _ = WritePacket(conn, puback, 256*1024)
+					_, _ = writePacketRaw(conn, puback, 256*1024)
 				}
 			}
 			time.Sleep(5 * time.Millisecond)
@@ -374,7 +374,7 @@ func TestPublish(t *testing.T) {
 			err := sendConnack(conn, false, ReasonSuccess)
 			assert.NoError(t, err)
 
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			if err == nil {
 				receivedPublish, _ = pkt.(*PublishPacket)
 				if receivedPublish != nil && receivedPublish.QoS == QoS2 {
@@ -383,17 +383,17 @@ func TestPublish(t *testing.T) {
 						PacketID:   receivedPublish.PacketID,
 						ReasonCode: ReasonSuccess,
 					}
-					_, _ = WritePacket(conn, pubrec, 256*1024)
+					_, _ = writePacketRaw(conn, pubrec, 256*1024)
 
 					// Read PUBREL
-					pkt, _, _ = ReadPacket(conn, 256*1024)
+					pkt, _, _ = readPacketV5(conn, 256*1024)
 					if pubrel, ok := pkt.(*PubrelPacket); ok {
 						// Send PUBCOMP
 						pubcomp := &PubcompPacket{
 							PacketID:   pubrel.PacketID,
 							ReasonCode: ReasonSuccess,
 						}
-						_, _ = WritePacket(conn, pubcomp, 256*1024)
+						_, _ = writePacketRaw(conn, pubcomp, 256*1024)
 					}
 				}
 			}
@@ -491,7 +491,7 @@ func TestSubscribe(t *testing.T) {
 		err := sendConnack(conn, false, ReasonSuccess)
 		assert.NoError(t, err)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		if err == nil {
 			receivedSubscribe, _ = pkt.(*SubscribePacket)
 			if receivedSubscribe != nil {
@@ -500,7 +500,7 @@ func TestSubscribe(t *testing.T) {
 					PacketID:    receivedSubscribe.PacketID,
 					ReasonCodes: []ReasonCode{ReasonSuccess},
 				}
-				_, _ = WritePacket(conn, suback, 256*1024)
+				_, _ = writePacketRaw(conn, suback, 256*1024)
 			}
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -534,7 +534,7 @@ func TestUnsubscribe(t *testing.T) {
 		err := sendConnack(conn, false, ReasonSuccess)
 		assert.NoError(t, err)
 
-		pkt, _, err := ReadPacket(conn, 256*1024)
+		pkt, _, err := readPacketV5(conn, 256*1024)
 		if err == nil {
 			receivedUnsubscribe, _ = pkt.(*UnsubscribePacket)
 			if receivedUnsubscribe != nil {
@@ -543,7 +543,7 @@ func TestUnsubscribe(t *testing.T) {
 					PacketID:    receivedUnsubscribe.PacketID,
 					ReasonCodes: []ReasonCode{ReasonSuccess},
 				}
-				_, _ = WritePacket(conn, unsuback, 256*1024)
+				_, _ = writePacketRaw(conn, unsuback, 256*1024)
 			}
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -638,7 +638,7 @@ func TestMaxSubscriptions(t *testing.T) {
 
 			// Handle subscribe packets
 			for {
-				pkt, _, err := ReadPacket(conn, 256*1024)
+				pkt, _, err := readPacketV5(conn, 256*1024)
 				if err != nil {
 					return
 				}
@@ -650,7 +650,7 @@ func TestMaxSubscriptions(t *testing.T) {
 					for i := range sub.Subscriptions {
 						suback.ReasonCodes[i] = ReasonSuccess
 					}
-					_, _ = WritePacket(conn, suback, 256*1024)
+					_, _ = writePacketRaw(conn, suback, 256*1024)
 				}
 			}
 		})
@@ -685,7 +685,7 @@ func TestMaxSubscriptions(t *testing.T) {
 			assert.NoError(t, err)
 
 			for {
-				pkt, _, err := ReadPacket(conn, 256*1024)
+				pkt, _, err := readPacketV5(conn, 256*1024)
 				if err != nil {
 					return
 				}
@@ -697,7 +697,7 @@ func TestMaxSubscriptions(t *testing.T) {
 					for i := range sub.Subscriptions {
 						suback.ReasonCodes[i] = ReasonSuccess
 					}
-					_, _ = WritePacket(conn, suback, 256*1024)
+					_, _ = writePacketRaw(conn, suback, 256*1024)
 				}
 			}
 		})
@@ -728,7 +728,7 @@ func TestMaxSubscriptions(t *testing.T) {
 			assert.NoError(t, err)
 
 			for {
-				pkt, _, err := ReadPacket(conn, 256*1024)
+				pkt, _, err := readPacketV5(conn, 256*1024)
 				if err != nil {
 					return
 				}
@@ -740,7 +740,7 @@ func TestMaxSubscriptions(t *testing.T) {
 					for i := range sub.Subscriptions {
 						suback.ReasonCodes[i] = ReasonSuccess
 					}
-					_, _ = WritePacket(conn, suback, 256*1024)
+					_, _ = writePacketRaw(conn, suback, 256*1024)
 				}
 			}
 		})
@@ -986,7 +986,7 @@ func TestDeliverMessageNoDeadlock(t *testing.T) {
 
 			// Handle subscribe packets
 			for {
-				pkt, _, err := ReadPacket(conn, 256*1024)
+				pkt, _, err := readPacketV5(conn, 256*1024)
 				if err != nil {
 					return
 				}
@@ -999,10 +999,10 @@ func TestDeliverMessageNoDeadlock(t *testing.T) {
 					for i := range p.Subscriptions {
 						suback.ReasonCodes[i] = ReasonSuccess
 					}
-					_, _ = WritePacket(conn, suback, 256*1024)
+					_, _ = writePacketRaw(conn, suback, 256*1024)
 				case *PublishPacket:
 					// Send the message back to client to trigger handler
-					_, _ = WritePacket(conn, p, 256*1024)
+					_, _ = writePacketRaw(conn, p, 256*1024)
 				}
 			}
 		})
@@ -1058,7 +1058,7 @@ func TestDeliverMessageNoDeadlock(t *testing.T) {
 			assert.NoError(t, err)
 
 			for {
-				pkt, _, err := ReadPacket(conn, 256*1024)
+				pkt, _, err := readPacketV5(conn, 256*1024)
 				if err != nil {
 					return
 				}
@@ -1071,7 +1071,7 @@ func TestDeliverMessageNoDeadlock(t *testing.T) {
 					for i := range p.Subscriptions {
 						suback.ReasonCodes[i] = ReasonSuccess
 					}
-					_, _ = WritePacket(conn, suback, 256*1024)
+					_, _ = writePacketRaw(conn, suback, 256*1024)
 				case *UnsubscribePacket:
 					unsuback := &UnsubackPacket{
 						PacketID:    p.PacketID,
@@ -1080,9 +1080,9 @@ func TestDeliverMessageNoDeadlock(t *testing.T) {
 					for i := range p.TopicFilters {
 						unsuback.ReasonCodes[i] = ReasonSuccess
 					}
-					_, _ = WritePacket(conn, unsuback, 256*1024)
+					_, _ = writePacketRaw(conn, unsuback, 256*1024)
 				case *PublishPacket:
-					_, _ = WritePacket(conn, p, 256*1024)
+					_, _ = writePacketRaw(conn, p, 256*1024)
 				}
 			}
 		})
@@ -1139,7 +1139,7 @@ func TestSubscriptionHandlerTiming(t *testing.T) {
 			_ = sendConnack(conn, false, ReasonSuccess)
 
 			for {
-				pkt, _, err := ReadPacket(conn, 256*1024)
+				pkt, _, err := readPacketV5(conn, 256*1024)
 				if err != nil {
 					return
 				}
@@ -1152,7 +1152,7 @@ func TestSubscriptionHandlerTiming(t *testing.T) {
 						PacketID:    sub.PacketID,
 						ReasonCodes: []ReasonCode{ReasonSuccess},
 					}
-					_, _ = WritePacket(conn, suback, 256*1024)
+					_, _ = writePacketRaw(conn, suback, 256*1024)
 
 					// Send a message immediately after SUBACK
 					pub := &PublishPacket{
@@ -1160,7 +1160,7 @@ func TestSubscriptionHandlerTiming(t *testing.T) {
 						Payload: []byte("immediate message"),
 						QoS:     0,
 					}
-					_, _ = WritePacket(conn, pub, 256*1024)
+					_, _ = writePacketRaw(conn, pub, 256*1024)
 				}
 			}
 		})
@@ -1456,7 +1456,7 @@ func TestClientQoS2PubrecErrorHandling(t *testing.T) {
 
 		addr, cleanup := mockServer(t, func(conn net.Conn) {
 			// Read CONNECT
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			require.NoError(t, err)
 			_, ok := pkt.(*ConnectPacket)
 			require.True(t, ok)
@@ -1465,7 +1465,7 @@ func TestClientQoS2PubrecErrorHandling(t *testing.T) {
 			require.NoError(t, sendConnack(conn, false, ReasonSuccess))
 
 			// Read PUBLISH (QoS 2)
-			pkt, _, err = ReadPacket(conn, 256*1024)
+			pkt, _, err = readPacketV5(conn, 256*1024)
 			if err != nil {
 				return
 			}
@@ -1478,10 +1478,10 @@ func TestClientQoS2PubrecErrorHandling(t *testing.T) {
 				PacketID:   pub.PacketID,
 				ReasonCode: ReasonNoMatchingSubscribers,
 			}
-			WritePacket(conn, pubrec, 256*1024)
+			writePacketRaw(conn, pubrec, 256*1024)
 
 			// Wait for PUBREL (client should send it even on error)
-			pkt, _, err = ReadPacket(conn, 256*1024)
+			pkt, _, err = readPacketV5(conn, 256*1024)
 			if err != nil {
 				return
 			}
@@ -1521,7 +1521,7 @@ func TestClientEnhancedAuthentication(t *testing.T) {
 
 		addr, cleanup := mockServer(t, func(conn net.Conn) {
 			// Read CONNECT
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			if err != nil {
 				return
 			}
@@ -1565,7 +1565,7 @@ func TestClientEnhancedAuthentication(t *testing.T) {
 
 		addr, cleanup := mockServer(t, func(conn net.Conn) {
 			// Read CONNECT
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			if err != nil {
 				return
 			}
@@ -1578,10 +1578,10 @@ func TestClientEnhancedAuthentication(t *testing.T) {
 			}
 			authPkt.Props.Set(PropAuthenticationMethod, "MOCK-AUTH")
 			authPkt.Props.Set(PropAuthenticationData, []byte("server-challenge"))
-			WritePacket(conn, authPkt, 256*1024)
+			writePacketRaw(conn, authPkt, 256*1024)
 
 			// Read client AUTH response
-			pkt, _, err = ReadPacket(conn, 256*1024)
+			pkt, _, err = readPacketV5(conn, 256*1024)
 			if err != nil {
 				return
 			}
@@ -2132,7 +2132,7 @@ func TestSendDisconnect(t *testing.T) {
 		assert.Greater(t, buf.Len(), 0)
 
 		// Parse the packet and verify it's a DISCONNECT
-		pkt, _, err := ReadPacket(&buf, MaxPacketSizeDefault)
+		pkt, _, err := readPacketV5(&buf, MaxPacketSizeDefault)
 		require.NoError(t, err)
 
 		disconnect, ok := pkt.(*DisconnectPacket)
@@ -2218,7 +2218,7 @@ func TestHandlePubrel(t *testing.T) {
 			client.handlePubrel(pkt)
 
 			// Read and verify PUBCOMP response
-			respPkt, _, err := ReadPacket(&buf, MaxPacketSizeDefault)
+			respPkt, _, err := readPacketV5(&buf, MaxPacketSizeDefault)
 			require.NoError(t, err)
 
 			pubcomp, ok := respPkt.(*PubcompPacket)
@@ -2828,7 +2828,7 @@ func TestHandlePubrec(t *testing.T) {
 			// Check if PUBREL was sent
 			if tt.expectPubrel {
 				assert.Greater(t, buf.Len(), 0, "expected PUBREL to be sent")
-				respPkt, _, err := ReadPacket(&buf, MaxPacketSizeDefault)
+				respPkt, _, err := readPacketV5(&buf, MaxPacketSizeDefault)
 				require.NoError(t, err)
 				pubrel, ok := respPkt.(*PubrelPacket)
 				require.True(t, ok, "expected PUBREL packet")
@@ -2926,7 +2926,7 @@ func TestHandlePublish(t *testing.T) {
 			// Check for expected ack
 			if tt.expectAck && tt.qos == 1 {
 				assert.Greater(t, buf.Len(), 0, "expected PUBACK")
-				respPkt, _, err := ReadPacket(&buf, MaxPacketSizeDefault)
+				respPkt, _, err := readPacketV5(&buf, MaxPacketSizeDefault)
 				require.NoError(t, err)
 				puback, ok := respPkt.(*PubackPacket)
 				require.True(t, ok, "expected PUBACK packet")
@@ -3082,7 +3082,7 @@ func TestClientReconnectLoop(t *testing.T) {
 		addr, cleanup := mockServer(t, func(conn net.Conn) {
 			reconnectAttempts++
 			// Read CONNECT
-			ReadPacket(conn, 256*1024)
+			readPacketV5(conn, 256*1024)
 			// Send CONNACK
 			sendConnack(conn, false, ReasonSuccess)
 			time.Sleep(20 * time.Millisecond)
@@ -3114,7 +3114,7 @@ func TestClientReconnectLoop(t *testing.T) {
 		errCh := make(chan error, 1)
 
 		readConnectPacket := func(conn net.Conn) (*ConnectPacket, error) {
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			if err != nil {
 				return nil, err
 			}
@@ -3145,7 +3145,7 @@ func TestClientReconnectLoop(t *testing.T) {
 				return
 			}
 
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			if err != nil {
 				errCh <- err
 				conn.Close()
@@ -3177,7 +3177,7 @@ func TestClientReconnectLoop(t *testing.T) {
 				return
 			}
 
-			pkt, _, err = ReadPacket(conn, 256*1024)
+			pkt, _, err = readPacketV5(conn, 256*1024)
 			if err != nil {
 				errCh <- err
 				conn.Close()
@@ -4267,7 +4267,7 @@ func TestClientQoSRetryLoopContextCancel(t *testing.T) {
 func TestClientHandlePacketUnknown(t *testing.T) {
 	t.Parallel()
 	addr, cleanup := mockServer(t, func(conn net.Conn) {
-		ReadPacket(conn, 256*1024)
+		readPacketV5(conn, 256*1024)
 		sendConnack(conn, false, ReasonSuccess)
 		time.Sleep(20 * time.Millisecond)
 	})
@@ -4403,17 +4403,17 @@ func TestClientDialDefaultPorts(t *testing.T) {
 func TestClientHandlePingresp(t *testing.T) {
 	t.Parallel()
 	addr, cleanup := mockServer(t, func(conn net.Conn) {
-		_, _, _ = ReadPacket(conn, 256*1024)
+		_, _, _ = readPacketV5(conn, 256*1024)
 		sendConnack(conn, false, ReasonSuccess)
 
 		// Wait for PINGREQ and respond with PINGRESP
 		for {
-			pkt, _, err := ReadPacket(conn, 256*1024)
+			pkt, _, err := readPacketV5(conn, 256*1024)
 			if err != nil {
 				return
 			}
 			if _, ok := pkt.(*PingreqPacket); ok {
-				WritePacket(conn, &PingrespPacket{}, 256*1024)
+				writePacketRaw(conn, &PingrespPacket{}, 256*1024)
 			}
 		}
 	})
@@ -4455,7 +4455,7 @@ func TestReadConnackWithAuthEdgeCases(t *testing.T) {
 		authBuf := &bytes.Buffer{}
 		authPkt := &AuthPacket{ReasonCode: ReasonContinueAuth}
 		authPkt.Props.Set(PropAuthenticationMethod, "SCRAM-SHA-256")
-		WritePacket(authBuf, authPkt, 256*1024)
+		writePacketRaw(authBuf, authPkt, 256*1024)
 
 		conn := &bufMockConn{reader: authBuf}
 		c := &Client{
@@ -4478,9 +4478,9 @@ func TestReadConnackWithAuthEdgeCases(t *testing.T) {
 		// Create buffer with AUTH (Success) followed by CONNACK
 		buf := &bytes.Buffer{}
 		authPkt := &AuthPacket{ReasonCode: ReasonSuccess}
-		WritePacket(buf, authPkt, 256*1024)
+		writePacketRaw(buf, authPkt, 256*1024)
 		connackPkt := &ConnackPacket{ReasonCode: ReasonSuccess, SessionPresent: false}
-		WritePacket(buf, connackPkt, 256*1024)
+		writePacketRaw(buf, connackPkt, 256*1024)
 
 		conn := &bufMockConn{reader: buf}
 		c := &Client{
@@ -4505,7 +4505,7 @@ func TestReadConnackWithAuthEdgeCases(t *testing.T) {
 		// This tests line 184-186: reason codes other than Success or ContinueAuth
 		buf := &bytes.Buffer{}
 		authPkt := &AuthPacket{ReasonCode: ReasonReAuth}
-		WritePacket(buf, authPkt, 256*1024)
+		writePacketRaw(buf, authPkt, 256*1024)
 
 		conn := &bufMockConn{reader: buf}
 		c := &Client{
@@ -4528,7 +4528,7 @@ func TestReadConnackWithAuthEdgeCases(t *testing.T) {
 		// Create buffer with AUTH (Success) but no CONNACK
 		buf := &bytes.Buffer{}
 		authPkt := &AuthPacket{ReasonCode: ReasonSuccess}
-		WritePacket(buf, authPkt, 256*1024)
+		writePacketRaw(buf, authPkt, 256*1024)
 
 		conn := &bufMockConn{reader: buf}
 		c := &Client{
@@ -4780,10 +4780,10 @@ func TestClientDialWithProxy(t *testing.T) {
 			}
 			defer conn.Close()
 
-			pkt, _, _ := ReadPacket(conn, 256*1024)
+			pkt, _, _ := readPacketV5(conn, 256*1024)
 			if _, ok := pkt.(*ConnectPacket); ok {
 				connack := &ConnackPacket{ReasonCode: ReasonSuccess}
-				WritePacket(conn, connack, 256*1024)
+				writePacketRaw(conn, connack, 256*1024)
 			}
 			time.Sleep(10 * time.Millisecond)
 		}()
@@ -4860,10 +4860,10 @@ func TestClientDialWithProxy(t *testing.T) {
 			}
 			defer tlsConn.Close()
 
-			pkt, _, _ := ReadPacket(tlsConn, 256*1024)
+			pkt, _, _ := readPacketV5(tlsConn, 256*1024)
 			if _, ok := pkt.(*ConnectPacket); ok {
 				connack := &ConnackPacket{ReasonCode: ReasonSuccess}
-				WritePacket(tlsConn, connack, 256*1024)
+				writePacketRaw(tlsConn, connack, 256*1024)
 			}
 			time.Sleep(10 * time.Millisecond)
 		}()
@@ -4967,10 +4967,10 @@ func TestClientDialUnixSocket(t *testing.T) {
 			}
 			defer conn.Close()
 
-			pkt, _, _ := ReadPacket(conn, 256*1024)
+			pkt, _, _ := readPacketV5(conn, 256*1024)
 			if _, ok := pkt.(*ConnectPacket); ok {
 				connack := &ConnackPacket{ReasonCode: ReasonSuccess}
-				WritePacket(conn, connack, 256*1024)
+				writePacketRaw(conn, connack, 256*1024)
 			}
 			time.Sleep(10 * time.Millisecond)
 		}()

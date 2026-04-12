@@ -64,6 +64,9 @@ type Client struct {
 	reconnecting atomic.Bool
 	closed       atomic.Bool
 
+	// Version-aware codec (set during connect, nil defaults to v5)
+	codec *codec
+
 	// Lifecycle control
 	parentCtx     context.Context // User's context for lifecycle management
 	ctx           context.Context
@@ -135,6 +138,14 @@ func DialContext(ctx context.Context, opts ...Option) (*Client, error) {
 	return c, nil
 }
 
+// getCodec returns the client's codec, defaulting to v5 if not set.
+func (c *Client) getCodec() *codec {
+	if c.codec != nil {
+		return c.codec
+	}
+	return newCodec(ProtocolV5)
+}
+
 // watchParentContext monitors the parent context and closes the client when canceled.
 // This ensures that canceling the context passed to DialContext properly shuts down
 // the client and stops any reconnection attempts.
@@ -156,7 +167,7 @@ func (c *Client) watchParentContext() {
 // authentication exchange. Returns the CONNACK packet on success.
 func (c *Client) readConnackWithAuth(ctx context.Context) (*ConnackPacket, error) {
 	c.conn.SetReadDeadline(time.Now().Add(c.options.connectTimeout))
-	pkt, _, err := ReadPacket(c.conn, c.options.maxPacketSize)
+	pkt, _, err := c.getCodec().readPacket(c.conn, c.options.maxPacketSize)
 	c.conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
@@ -176,7 +187,7 @@ func (c *Client) readConnackWithAuth(ctx context.Context) (*ConnackPacket, error
 		// Check if authentication succeeded
 		if authPkt.ReasonCode == ReasonSuccess {
 			c.conn.SetReadDeadline(time.Now().Add(c.options.connectTimeout))
-			pkt, _, err = ReadPacket(c.conn, c.options.maxPacketSize)
+			pkt, _, err = readPacketV5(c.conn, c.options.maxPacketSize)
 			c.conn.SetReadDeadline(time.Time{})
 			if err != nil {
 				return nil, fmt.Errorf("failed to read CONNACK after AUTH success: %w", err)
@@ -212,7 +223,7 @@ func (c *Client) readConnackWithAuth(ctx context.Context) (*ConnackPacket, error
 		}
 
 		c.conn.SetReadDeadline(time.Now().Add(c.options.connectTimeout))
-		pkt, _, err = ReadPacket(c.conn, c.options.maxPacketSize)
+		pkt, _, err = readPacketV5(c.conn, c.options.maxPacketSize)
 		c.conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			return nil, fmt.Errorf("failed to read response: %w", err)
@@ -233,7 +244,8 @@ func (c *Client) readConnackWithAuth(ctx context.Context) (*ConnackPacket, error
 
 // connect establishes the TCP/TLS connection and performs MQTT handshake.
 // Returns (sessionPresent, error) where sessionPresent indicates if the server
-// resumed an existing session.
+// resumed an existing session. Tries each configured protocol version in order,
+// falling back to the next on ReasonUnsupportedProtocolVersion.
 func (c *Client) connect(ctx context.Context) (bool, error) {
 	// Cancel any existing goroutines from previous connection
 	if c.cancel != nil {
@@ -263,25 +275,74 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 	// previous connection causing spurious ReasonReceiveMaxExceeded errors.
 	c.inboundFlowControl.Reset()
 
-	// Get server address for this connection attempt
-	serverAddr, err := c.nextServer(ctx)
-	if err != nil {
-		c.cancel()
-		return false, fmt.Errorf("failed to get server: %w", err)
+	// Close any existing connection so tryConnectVersion dials fresh
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
 	}
 
-	conn, err := c.dial(ctx, serverAddr)
-	if err != nil {
+	// Try each protocol version in order
+	versions := c.options.protocolVersions
+	if len(versions) == 0 {
+		versions = []ProtocolVersion{ProtocolV5}
+	}
+
+	var lastErr error
+	for i, version := range versions {
+		sessionPresent, err := c.tryConnectVersion(ctx, version)
+		if err == nil {
+			return sessionPresent, nil
+		}
+
+		// Only retry with next version on "unsupported protocol version"
+		var connectErr *ConnectError
+		if errors.As(err, &connectErr) && connectErr.ReasonCode == ReasonUnsupportedProtocolVersion {
+			lastErr = err
+			// Close connection before trying next version
+			if c.conn != nil {
+				c.conn.Close()
+				c.conn = nil
+			}
+			// Don't retry if this was the last version
+			if i < len(c.options.protocolVersions)-1 {
+				continue
+			}
+		}
+
+		// Any other error — fail immediately
 		c.cancel()
 		return false, err
 	}
-	c.conn = conn
+
+	c.cancel()
+	return false, lastErr
+}
+
+// tryConnectVersion attempts to connect with a specific protocol version.
+func (c *Client) tryConnectVersion(ctx context.Context, version ProtocolVersion) (bool, error) {
+	// Only dial if we don't already have a connection (first attempt or after close)
+	if c.conn == nil {
+		serverAddr, err := c.nextServer(ctx)
+		if err != nil {
+			return false, fmt.Errorf("failed to get server: %w", err)
+		}
+
+		conn, err := c.dial(ctx, serverAddr)
+		if err != nil {
+			return false, err
+		}
+		c.conn = conn
+	}
+
+	// Set codec for this version
+	c.codec = newCodec(version)
 
 	// Build CONNECT packet
 	connectPkt := &ConnectPacket{
-		ClientID:   c.options.clientID,
-		CleanStart: c.options.cleanStart,
-		KeepAlive:  c.options.keepAlive,
+		ProtocolVersion: version,
+		ClientID:        c.options.clientID,
+		CleanStart:      c.options.cleanStart,
+		KeepAlive:       c.options.keepAlive,
 	}
 
 	// Set credentials if provided
@@ -295,77 +356,87 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 		connectPkt.WillPayload = c.options.willPayload
 		connectPkt.WillRetain = c.options.willRetain
 		connectPkt.WillQoS = c.options.willQoS
-		if c.options.willProps != nil {
+		if version == ProtocolV5 && c.options.willProps != nil {
 			connectPkt.WillProps = *c.options.willProps
 		}
 	}
 
-	// Set CONNECT properties
-	if c.options.sessionExpiryInterval > 0 {
-		connectPkt.Props.Set(PropSessionExpiryInterval, c.options.sessionExpiryInterval)
-	}
-	if c.options.receiveMaximum > 0 && c.options.receiveMaximum < 65535 {
-		connectPkt.Props.Set(PropReceiveMaximum, c.options.receiveMaximum)
-	}
-	if c.options.maxPacketSize > 0 {
-		connectPkt.Props.Set(PropMaximumPacketSize, c.options.maxPacketSize)
-	}
-	if c.options.topicAliasMaximum > 0 {
-		connectPkt.Props.Set(PropTopicAliasMaximum, c.options.topicAliasMaximum)
-	}
-	// Add user properties
-	for key, value := range c.options.userProperties {
-		connectPkt.Props.Add(PropUserProperty, StringPair{Key: key, Value: value})
-	}
+	// Set CONNECT properties (v5 only)
+	if version == ProtocolV5 {
+		if c.options.sessionExpiryInterval > 0 {
+			connectPkt.Props.Set(PropSessionExpiryInterval, c.options.sessionExpiryInterval)
+		}
+		if c.options.receiveMaximum > 0 && c.options.receiveMaximum < 65535 {
+			connectPkt.Props.Set(PropReceiveMaximum, c.options.receiveMaximum)
+		}
+		if c.options.maxPacketSize > 0 {
+			connectPkt.Props.Set(PropMaximumPacketSize, c.options.maxPacketSize)
+		}
+		if c.options.topicAliasMaximum > 0 {
+			connectPkt.Props.Set(PropTopicAliasMaximum, c.options.topicAliasMaximum)
+		}
+		for key, value := range c.options.userProperties {
+			connectPkt.Props.Add(PropUserProperty, StringPair{Key: key, Value: value})
+		}
 
-	// Add enhanced authentication if configured
-	if c.options.enhancedAuth != nil {
-		authResult, err := c.options.enhancedAuth.AuthStart(ctx)
-		if err != nil {
-			c.cancel()
-			c.conn.Close()
-			return false, fmt.Errorf("enhanced auth start failed: %w", err)
+		// Add enhanced authentication if configured (v5 only)
+		if c.options.enhancedAuth != nil {
+			authResult, err := c.options.enhancedAuth.AuthStart(ctx)
+			if err != nil {
+				c.conn.Close()
+				c.conn = nil
+				return false, fmt.Errorf("enhanced auth start failed: %w", err)
+			}
+			connectPkt.Props.Set(PropAuthenticationMethod, c.options.enhancedAuth.AuthMethod())
+			if len(authResult.AuthData) > 0 {
+				connectPkt.Props.Set(PropAuthenticationData, authResult.AuthData)
+			}
+			c.enhancedAuthState = authResult.State
 		}
-		connectPkt.Props.Set(PropAuthenticationMethod, c.options.enhancedAuth.AuthMethod())
-		if len(authResult.AuthData) > 0 {
-			connectPkt.Props.Set(PropAuthenticationData, authResult.AuthData)
-		}
-		c.enhancedAuthState = authResult.State
 	}
 
 	// Send CONNECT
 	if err := c.writePacket(connectPkt); err != nil {
-		c.cancel()
 		c.conn.Close()
+		c.conn = nil
 		return false, fmt.Errorf("failed to send CONNECT: %w", err)
 	}
 
 	// Read response and handle any enhanced authentication exchange
 	connack, err := c.readConnackWithAuth(ctx)
 	if err != nil {
-		c.cancel()
 		c.conn.Close()
+		c.conn = nil
+		// A v3.1.1 broker rejecting a v5 CONNECT replies with a v3.1.1 CONNACK
+		// (e.g. return code 0x01 = unacceptable protocol version). The v5 codec
+		// fails to validate the reason code byte, so translate that into an
+		// "unsupported protocol version" ConnectError to enable fallback.
+		if version == ProtocolV5 && errors.Is(err, ErrInvalidReasonCode) {
+			return false, NewConnectError(ReasonUnsupportedProtocolVersion, nil)
+		}
 		return false, err
 	}
 
 	// Initialize outbound packet size limit to our configured max
 	c.outboundMaxPacketSize = c.options.maxPacketSize
 
-	// Apply CONNACK properties
-	if err := c.applyConnackProperties(connack); err != nil {
-		c.cancel()
-		c.conn.Close()
-		return false, err
+	// Apply CONNACK properties (v5 only — v3.1.1 CONNACK has no properties)
+	if version == ProtocolV5 {
+		if err := c.applyConnackProperties(connack); err != nil {
+			c.conn.Close()
+			c.conn = nil
+			return false, err
+		}
 	}
 
 	c.connected.Store(true)
 	c.lastPacket.Store(time.Now().UnixNano())
 
 	// Start background goroutines with this connection's context
-	ctx = c.ctx
-	go c.readLoop(ctx)
-	go c.keepAliveLoop(ctx)
-	go c.qosRetryLoop(ctx)
+	connCtx := c.ctx
+	go c.readLoop(connCtx)
+	go c.keepAliveLoop(connCtx)
+	go c.qosRetryLoop(connCtx)
 
 	// Emit connected event
 	c.emit(NewConnectedEvent(connack.SessionPresent, connack.Properties()))
@@ -938,7 +1009,7 @@ func (c *Client) writePacket(pkt Packet) error {
 		maxSize = c.options.maxPacketSize
 	}
 
-	_, err := WritePacket(c.conn, pkt, maxSize)
+	_, err := c.getCodec().writePacket(c.conn, pkt, maxSize)
 	if err != nil {
 		return err
 	}
@@ -969,7 +1040,7 @@ func (c *Client) readLoop(ctx context.Context) {
 			c.conn.SetReadDeadline(time.Now().Add(c.options.readTimeout + time.Duration(c.options.keepAlive)*time.Second))
 		}
 
-		pkt, _, err := ReadPacket(c.conn, c.options.maxPacketSize)
+		pkt, _, err := c.getCodec().readPacket(c.conn, c.options.maxPacketSize)
 		if err != nil {
 			if c.closed.Load() {
 				return
@@ -1312,6 +1383,19 @@ func (c *Client) handleUnsuback(pkt *UnsubackPacket) {
 
 	// Release packet ID
 	_ = c.packetIDMgr.Release(pkt.PacketID)
+
+	// v3.1.1 UNSUBACK has no per-topic reason codes — treat all as success
+	if len(pkt.ReasonCodes) == 0 {
+		c.subscriptionsMu.Lock()
+		for _, filter := range filters {
+			delete(c.subscriptions, filter)
+			if c.session != nil {
+				c.session.RemoveSubscription(filter)
+			}
+		}
+		c.subscriptionsMu.Unlock()
+		return
+	}
 
 	// Per MQTT v5 spec section 3.11.3, reason code count must match topic filter count
 	if len(pkt.ReasonCodes) != len(filters) {
@@ -1753,7 +1837,7 @@ func (c *Client) sendDisconnect(reason ReasonCode) {
 	}
 	pkt := &DisconnectPacket{ReasonCode: reason}
 	c.writeMu.Lock()
-	WritePacket(c.conn, pkt, c.outboundMaxPacketSize)
+	writePacketRaw(c.conn, pkt, c.outboundMaxPacketSize)
 	c.writeMu.Unlock()
 }
 

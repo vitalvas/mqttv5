@@ -1,12 +1,13 @@
 # mqttv5
 
-A complete MQTT v5.0 implementation in Go for building clients and brokers.
+A complete MQTT implementation in Go for building clients and brokers.
 
-Implements the [MQTT Version 5.0 OASIS Standard](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html).
+Implements the [MQTT Version 5.0](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html) and [MQTT Version 3.1.1](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/mqtt-v3.1.1.html) OASIS Standards.
 
 ## Features
 
 - All 15 MQTT v5.0 control packet types
+- MQTT 3.1.1 backward compatibility (server opt-in, client version fallback)
 - Complete properties system (42 property identifiers)
 - QoS 0, 1, 2 message flows with state machines
 - Topic matching with wildcard support (`+`, `#`)
@@ -98,6 +99,45 @@ func main() {
     srv.ListenAndServe()
 }
 ```
+
+## Protocol Version
+
+### Server
+
+By default, the server only accepts MQTT v5 connections. To also accept MQTT 3.1.1 clients (ESP32, ESP8266, legacy services):
+
+```go
+srv := mqttv5.NewServer(
+    mqttv5.WithListener(listener),
+    mqttv5.WithAcceptProtocolVersions(mqttv5.ProtocolV5, mqttv5.ProtocolV311),
+)
+```
+
+MQTT 3.1.1 and v5 clients share the same topic namespace and can exchange messages. v5-only features (properties, enhanced auth, topic aliases) are automatically stripped when delivering to v3.1.1 clients.
+
+For v3.1.1 clients, session lifetime follows the `CleanSession` flag: `CleanSession=false` keeps the session (subscriptions and queued QoS messages) indefinitely until the client reconnects with `CleanSession=true`. MQTT 3.1.1 has no server-to-client DISCONNECT packet, so the server closes v3.1.1 connections without sending one.
+
+### Client
+
+By default, the client connects using MQTT v5. To support servers that only speak v3.1.1, configure version fallback:
+
+```go
+// Try v5 first, fall back to v3.1.1 if server rejects
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("tcp://localhost:1883"),
+    mqttv5.WithProtocolVersions(mqttv5.ProtocolV5, mqttv5.ProtocolV311),
+)
+
+// Strict v3.1.1 only
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("tcp://localhost:1883"),
+    mqttv5.WithProtocolVersions(mqttv5.ProtocolV311),
+)
+```
+
+The client retries with the next version only when the server indicates "Unsupported Protocol Version". This covers both a valid v5 CONNACK reason code `0x84` and the v3.1.1 CONNACK return code `0x01` that real v3.1.1 brokers send in response to a v5 CONNECT. Other errors (bad credentials, server busy) fail immediately.
+
+See [MQTT 5.0 vs 3.1.1 feature matrix](docs/v5_vs_v311.md) for a full list of which features are available in each protocol version.
 
 ## Transport Options
 
@@ -426,8 +466,9 @@ Connect two MQTT brokers and forward messages between them with topic remapping 
 
 ```go
 bridge, _ := mqttv5.NewBridge(localServer, mqttv5.BridgeConfig{
-    RemoteAddr: "tcp://remote-broker:1883",
-    ClientID:   "bridge-1",
+    RemoteAddr:       "tcp://remote-broker:1883",
+    ClientID:         "bridge-1",
+    ProtocolVersions: []mqttv5.ProtocolVersion{mqttv5.ProtocolV5, mqttv5.ProtocolV311},
     Topics: []mqttv5.BridgeTopic{
         {
             LocalPrefix:  "local/sensors",

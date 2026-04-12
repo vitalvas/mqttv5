@@ -3,6 +3,7 @@ package mqttv5
 import (
 	"bytes"
 	"math/rand/v2"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -242,12 +243,15 @@ func TestConnectPacketValidation(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name: "empty client ID without clean start",
+			// Structural validation allows this; the server handshake enforces
+			// the "empty ClientID with CleanStart=false" policy so it can reply
+			// with an appropriate CONNACK reason code.
+			name: "empty client ID without clean start is accepted by Validate",
 			packet: ConnectPacket{
 				ClientID:   "",
 				CleanStart: false,
 			},
-			wantErr: ErrClientIDRequired,
+			wantErr: nil,
 		},
 		{
 			name: "will QoS without will flag",
@@ -317,7 +321,7 @@ func TestConnectPacketDecodeErrors(t *testing.T) {
 	t.Run("invalid protocol version", func(t *testing.T) {
 		var buf bytes.Buffer
 		_, _ = encodeString(&buf, "MQTT")
-		buf.WriteByte(4) // Wrong version
+		buf.WriteByte(6) // Unsupported version
 		buf.WriteByte(0x02)
 		buf.Write([]byte{0x00, 0x3C})
 		buf.WriteByte(0x00)
@@ -370,11 +374,14 @@ func TestConnectPacketDecodeErrors(t *testing.T) {
 }
 
 func TestConnectPacketEncodeErrors(t *testing.T) {
-	t.Run("encode with client ID required error", func(t *testing.T) {
-		invalid := ConnectPacket{ClientID: "", CleanStart: false}
+	t.Run("encode with oversized client ID", func(t *testing.T) {
+		invalid := ConnectPacket{
+			ClientID:   strings.Repeat("a", 65536),
+			CleanStart: true,
+		}
 		var buf bytes.Buffer
 		_, err := invalid.Encode(&buf)
-		assert.ErrorIs(t, err, ErrClientIDRequired)
+		assert.ErrorIs(t, err, ErrClientIDTooLong)
 	})
 
 	t.Run("encode with invalid will QoS", func(t *testing.T) {
@@ -959,13 +966,15 @@ func FuzzConnectPacketDecode(f *testing.F) {
 }
 
 func TestConnectPacketEdgeCases(t *testing.T) {
-	t.Run("empty client ID requires clean start", func(t *testing.T) {
+	t.Run("empty client ID with CleanStart false passes structural validation", func(t *testing.T) {
+		// Structural Validate accepts this; the broker handshake is responsible
+		// for rejecting empty ClientID + CleanStart=false with CONNACK.
 		pkt := &ConnectPacket{
 			ClientID:   "",
 			CleanStart: false,
 		}
 		err := pkt.Validate()
-		assert.Error(t, err, "Empty client ID without clean start should be invalid")
+		assert.NoError(t, err)
 	})
 
 	t.Run("empty client ID with clean start is valid", func(t *testing.T) {

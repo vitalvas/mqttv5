@@ -66,6 +66,10 @@ type BridgeConfig struct {
 	// If provided, it is called before the default prefix-based remapping.
 	// Return empty string to fall back to default remapping.
 	TopicRemapper TopicRemapFunc
+	// ProtocolVersions sets the protocol versions to try when connecting to the
+	// remote broker. If empty, defaults to [ProtocolV5].
+	// Use [ProtocolV5, ProtocolV311] for auto-fallback to v3.1.1.
+	ProtocolVersions []ProtocolVersion
 	// Credentials for remote broker authentication.
 	Username string
 	Password string
@@ -182,6 +186,10 @@ func (b *Bridge) Start() error {
 
 	if b.config.Username != "" {
 		opts = append(opts, WithCredentials(b.config.Username, b.config.Password))
+	}
+
+	if len(b.config.ProtocolVersions) > 0 {
+		opts = append(opts, WithProtocolVersions(b.config.ProtocolVersions...))
 	}
 
 	// Add remote server address

@@ -12,6 +12,8 @@ type ServerClient struct {
 	mu                    sync.RWMutex
 	writeMu               sync.Mutex // protects concurrent writes to conn
 	conn                  Conn
+	codec                 *codec
+	protocolVersion       ProtocolVersion
 	clientID              string
 	username              string
 	namespace             string
@@ -43,9 +45,16 @@ type ServerClient struct {
 
 // NewServerClient creates a new server client.
 func NewServerClient(conn Conn, connect *ConnectPacket, maxPacketSize uint32, namespace string) *ServerClient {
+	version := connect.ProtocolVersion
+	if version == 0 {
+		version = ProtocolV5
+	}
+
 	now := time.Now()
 	client := &ServerClient{
 		conn:               conn,
+		codec:              newCodec(version),
+		protocolVersion:    version,
 		clientID:           connect.ClientID,
 		username:           connect.Username,
 		namespace:          namespace,
@@ -83,6 +92,33 @@ func (c *ServerClient) Username() string {
 // Namespace returns the namespace for multi-tenancy isolation.
 func (c *ServerClient) Namespace() string {
 	return c.namespace
+}
+
+// ProtocolVersion returns the MQTT protocol version of this client.
+func (c *ServerClient) ProtocolVersion() ProtocolVersion {
+	return c.protocolVersion
+}
+
+// getCodec returns the client's codec, defaulting to v5 if not set.
+func (c *ServerClient) getCodec() *codec {
+	if c.codec != nil {
+		return c.codec
+	}
+	return newCodec(ProtocolV5)
+}
+
+// ReadPacket reads a packet from the client using the version-aware codec.
+func (c *ServerClient) ReadPacket(maxPacketSize uint32) (Packet, int, error) {
+	return c.getCodec().readPacket(c.conn, maxPacketSize)
+}
+
+// writePacketWithMetrics sends a packet using the version-aware codec and returns
+// the number of bytes written. Used internally by the server for metrics tracking.
+func (c *ServerClient) writePacketWithMetrics(packet Packet) (int, error) {
+	c.writeMu.Lock()
+	n, err := c.getCodec().writePacket(c.conn, packet, c.maxPacketSize)
+	c.writeMu.Unlock()
+	return n, err
 }
 
 // Session returns the client's session.
@@ -348,7 +384,7 @@ func (c *ServerClient) Send(msg *Message) error {
 	}
 
 	c.writeMu.Lock()
-	n, err := WritePacket(c.conn, pub, c.maxPacketSize)
+	n, err := c.getCodec().writePacket(c.conn, pub, c.maxPacketSize)
 	c.writeMu.Unlock()
 
 	if err == nil {
@@ -382,7 +418,7 @@ func (c *ServerClient) SendPacket(packet Packet) error {
 	}
 
 	c.writeMu.Lock()
-	_, err := WritePacket(c.conn, packet, c.maxPacketSize)
+	_, err := c.getCodec().writePacket(c.conn, packet, c.maxPacketSize)
 	c.writeMu.Unlock()
 
 	return err
@@ -400,6 +436,9 @@ func (c *ServerClient) Close() error {
 // When the server sends a DISCONNECT packet (for any reason), the Will message
 // is NOT published because it's a controlled termination. The client is being
 // properly notified, so Will (meant for unexpected disconnections) doesn't apply.
+//
+// MQTT 3.1.1 does not define a server-to-client DISCONNECT packet, so for
+// v3.1.1 clients the connection is closed without writing a packet.
 func (c *ServerClient) Disconnect(reason ReasonCode) error {
 	if !c.connected.Load() {
 		return ErrNotConnected
@@ -410,13 +449,15 @@ func (c *ServerClient) Disconnect(reason ReasonCode) error {
 	// disconnections where the client can't notify others.
 	c.cleanDisconnect.Store(true)
 
-	disconnect := &DisconnectPacket{
-		ReasonCode: reason,
-	}
+	if c.protocolVersion != ProtocolV311 {
+		disconnect := &DisconnectPacket{
+			ReasonCode: reason,
+		}
 
-	c.writeMu.Lock()
-	WritePacket(c.conn, disconnect, c.maxPacketSize)
-	c.writeMu.Unlock()
+		c.writeMu.Lock()
+		c.getCodec().writePacket(c.conn, disconnect, c.maxPacketSize)
+		c.writeMu.Unlock()
+	}
 
 	return c.Close()
 }

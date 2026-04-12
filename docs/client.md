@@ -1,6 +1,6 @@
 # Client Options
 
-All options for configuring an MQTT v5.0 client.
+All options for configuring an MQTT client.
 
 ## Connection
 
@@ -13,6 +13,7 @@ All options for configuring an MQTT v5.0 client.
 | `WithKeepAlive(seconds)` | 60 | Keep-alive interval |
 | `WithCleanStart(bool)` | true | Start with clean session |
 | `WithTLS(config)` | nil | TLS configuration |
+| `WithProtocolVersions(v...)` | `[ProtocolV5]` | Protocol versions to try in order |
 
 ## Timeouts
 

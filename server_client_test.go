@@ -492,6 +492,45 @@ func TestServerClientDisconnectWillHandling(t *testing.T) {
 	})
 }
 
+func TestServerClientDisconnectV311(t *testing.T) {
+	t.Run("v3.1.1 client disconnect closes without writing DISCONNECT", func(t *testing.T) {
+		conn := &mockConn{}
+		client := &ServerClient{
+			conn:            conn,
+			codec:           newCodec(ProtocolV311),
+			protocolVersion: ProtocolV311,
+			maxPacketSize:   MaxPacketSizeDefault,
+		}
+		client.connected.Store(true)
+
+		err := client.Disconnect(ReasonServerShuttingDown)
+		require.NoError(t, err)
+
+		// MQTT 3.1.1 has no server-to-client DISCONNECT, so nothing must be written.
+		assert.Empty(t, conn.Written(), "no DISCONNECT bytes should be sent to a v3.1.1 client")
+		assert.True(t, conn.IsClosed(), "connection must still be closed")
+		assert.True(t, client.IsCleanDisconnect(), "Will must still be suppressed")
+	})
+
+	t.Run("v5 client disconnect writes DISCONNECT packet", func(t *testing.T) {
+		conn := &mockConn{}
+		client := &ServerClient{
+			conn:            conn,
+			codec:           newCodec(ProtocolV5),
+			protocolVersion: ProtocolV5,
+			maxPacketSize:   MaxPacketSizeDefault,
+		}
+		client.connected.Store(true)
+
+		err := client.Disconnect(ReasonServerShuttingDown)
+		require.NoError(t, err)
+
+		written := conn.Written()
+		require.NotEmpty(t, written, "v5 client should receive DISCONNECT packet")
+		assert.Equal(t, byte(PacketDISCONNECT)<<4, written[0], "first byte should be DISCONNECT type")
+	})
+}
+
 func TestServerClientStats(t *testing.T) {
 	t.Run("connected at and uptime", func(t *testing.T) {
 		conn := &mockConn{}

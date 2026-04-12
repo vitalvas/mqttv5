@@ -114,11 +114,11 @@ func TestReadWritePacketRoundTrip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			n, err := WritePacket(&buf, tt.packet, 0)
+			n, err := writePacketRaw(&buf, tt.packet, 0)
 			require.NoError(t, err)
 			assert.Greater(t, n, 0)
 
-			decoded, rn, err := ReadPacket(&buf, 0)
+			decoded, rn, err := readPacketV5(&buf, 0)
 			require.NoError(t, err)
 			assert.Equal(t, n, rn)
 			assert.Equal(t, tt.packet.Type(), decoded.Type())
@@ -135,10 +135,10 @@ func TestReadPacketMaxSize(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		_, err := WritePacket(&buf, packet, 0)
+		_, err := writePacketRaw(&buf, packet, 0)
 		require.NoError(t, err)
 
-		_, _, err = ReadPacket(bytes.NewReader(buf.Bytes()), 100)
+		_, _, err = readPacketV5(bytes.NewReader(buf.Bytes()), 100)
 		assert.ErrorIs(t, err, ErrPacketTooLarge)
 	})
 
@@ -150,11 +150,11 @@ func TestReadPacketMaxSize(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		n, err := WritePacket(&buf, packet, 0)
+		n, err := writePacketRaw(&buf, packet, 0)
 		require.NoError(t, err)
 
 		// Read with exact size limit (remaining length, not total)
-		decoded, _, err := ReadPacket(bytes.NewReader(buf.Bytes()), uint32(n))
+		decoded, _, err := readPacketV5(bytes.NewReader(buf.Bytes()), uint32(n))
 		require.NoError(t, err)
 		assert.Equal(t, PacketPUBLISH, decoded.Type())
 	})
@@ -167,10 +167,10 @@ func TestReadPacketMaxSize(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		_, err := WritePacket(&buf, packet, 0)
+		_, err := writePacketRaw(&buf, packet, 0)
 		require.NoError(t, err)
 
-		decoded, _, err := ReadPacket(bytes.NewReader(buf.Bytes()), 0)
+		decoded, _, err := readPacketV5(bytes.NewReader(buf.Bytes()), 0)
 		require.NoError(t, err)
 		assert.Equal(t, PacketPUBLISH, decoded.Type())
 	})
@@ -185,11 +185,11 @@ func TestReadPacketMaxSize(t *testing.T) {
 			}
 
 			var buf bytes.Buffer
-			n, err := WritePacket(&buf, packet, 0)
+			n, err := writePacketRaw(&buf, packet, 0)
 			require.NoError(t, err, "size=%d", size)
 
 			// Should succeed with sufficient max size
-			decoded, rn, err := ReadPacket(bytes.NewReader(buf.Bytes()), uint32(n+100))
+			decoded, rn, err := readPacketV5(bytes.NewReader(buf.Bytes()), uint32(n+100))
 			require.NoError(t, err, "size=%d", size)
 			assert.Equal(t, n, rn, "size=%d", size)
 			assert.Equal(t, PacketPUBLISH, decoded.Type(), "size=%d", size)
@@ -206,7 +206,7 @@ func TestWritePacketMaxSize(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		_, err := WritePacket(&buf, packet, 100)
+		_, err := writePacketRaw(&buf, packet, 100)
 		assert.ErrorIs(t, err, ErrPacketTooLarge)
 	})
 
@@ -219,12 +219,12 @@ func TestWritePacketMaxSize(t *testing.T) {
 
 		// First encode to find exact size
 		var sizeBuf bytes.Buffer
-		n, err := WritePacket(&sizeBuf, packet, 0)
+		n, err := writePacketRaw(&sizeBuf, packet, 0)
 		require.NoError(t, err)
 
 		// Now write with exact max size
 		var buf bytes.Buffer
-		written, err := WritePacket(&buf, packet, uint32(n))
+		written, err := writePacketRaw(&buf, packet, uint32(n))
 		require.NoError(t, err)
 		assert.Equal(t, n, written)
 	})
@@ -237,11 +237,11 @@ func TestWritePacketMaxSize(t *testing.T) {
 		}
 
 		var sizeBuf bytes.Buffer
-		n, err := WritePacket(&sizeBuf, packet, 0)
+		n, err := writePacketRaw(&sizeBuf, packet, 0)
 		require.NoError(t, err)
 
 		var buf bytes.Buffer
-		_, err = WritePacket(&buf, packet, uint32(n-1))
+		_, err = writePacketRaw(&buf, packet, uint32(n-1))
 		assert.ErrorIs(t, err, ErrPacketTooLarge)
 	})
 
@@ -253,7 +253,7 @@ func TestWritePacketMaxSize(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		n, err := WritePacket(&buf, packet, 0)
+		n, err := writePacketRaw(&buf, packet, 0)
 		require.NoError(t, err)
 		assert.Greater(t, n, 10000)
 	})
@@ -272,17 +272,17 @@ func TestWritePacketMaxSize(t *testing.T) {
 		for _, pkt := range packets {
 			// Get actual size
 			var sizeBuf bytes.Buffer
-			n, err := WritePacket(&sizeBuf, pkt, 0)
+			n, err := writePacketRaw(&sizeBuf, pkt, 0)
 			require.NoError(t, err, "packet=%s", pkt.Type())
 
 			// Should fail with smaller max
 			var buf bytes.Buffer
-			_, err = WritePacket(&buf, pkt, uint32(n-1))
+			_, err = writePacketRaw(&buf, pkt, uint32(n-1))
 			assert.ErrorIs(t, err, ErrPacketTooLarge, "packet=%s", pkt.Type())
 
 			// Should succeed with exact max
 			buf.Reset()
-			_, err = WritePacket(&buf, pkt, uint32(n))
+			_, err = writePacketRaw(&buf, pkt, uint32(n))
 			require.NoError(t, err, "packet=%s", pkt.Type())
 		}
 	})
@@ -298,10 +298,10 @@ func TestMaxPacketSizeBoundaries(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		n, err := WritePacket(&buf, packet, 0)
+		n, err := writePacketRaw(&buf, packet, 0)
 		require.NoError(t, err)
 
-		decoded, rn, err := ReadPacket(bytes.NewReader(buf.Bytes()), uint32(n))
+		decoded, rn, err := readPacketV5(bytes.NewReader(buf.Bytes()), uint32(n))
 		require.NoError(t, err)
 		assert.Equal(t, n, rn)
 		pub := decoded.(*PublishPacket)
@@ -317,10 +317,10 @@ func TestMaxPacketSizeBoundaries(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		n, err := WritePacket(&buf, packet, 0)
+		n, err := writePacketRaw(&buf, packet, 0)
 		require.NoError(t, err)
 
-		decoded, rn, err := ReadPacket(bytes.NewReader(buf.Bytes()), uint32(n))
+		decoded, rn, err := readPacketV5(bytes.NewReader(buf.Bytes()), uint32(n))
 		require.NoError(t, err)
 		assert.Equal(t, n, rn)
 		pub := decoded.(*PublishPacket)
@@ -336,15 +336,15 @@ func TestMaxPacketSizeBoundaries(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		n, err := WritePacket(&buf, packet, 0)
+		n, err := writePacketRaw(&buf, packet, 0)
 		require.NoError(t, err)
 
 		// Should fail with 512KB limit
-		_, _, err = ReadPacket(bytes.NewReader(buf.Bytes()), 512*1024)
+		_, _, err = readPacketV5(bytes.NewReader(buf.Bytes()), 512*1024)
 		assert.ErrorIs(t, err, ErrPacketTooLarge)
 
 		// Should succeed with 2MB limit
-		decoded, rn, err := ReadPacket(bytes.NewReader(buf.Bytes()), 2*1024*1024)
+		decoded, rn, err := readPacketV5(bytes.NewReader(buf.Bytes()), 2*1024*1024)
 		require.NoError(t, err)
 		assert.Equal(t, n, rn)
 		pub := decoded.(*PublishPacket)
@@ -362,7 +362,7 @@ func TestMaxPacketSizeBoundaries(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		totalSize, err := WritePacket(&buf, packet, 0)
+		totalSize, err := writePacketRaw(&buf, packet, 0)
 		require.NoError(t, err)
 
 		// Total size should fail when limit equals remaining length (excludes header)
@@ -370,11 +370,11 @@ func TestMaxPacketSizeBoundaries(t *testing.T) {
 		remainingLength := totalSize - 2
 
 		// Should fail when maxSize = remainingLength (total > maxSize)
-		_, _, err = ReadPacket(bytes.NewReader(buf.Bytes()), uint32(remainingLength))
+		_, _, err = readPacketV5(bytes.NewReader(buf.Bytes()), uint32(remainingLength))
 		assert.ErrorIs(t, err, ErrPacketTooLarge, "should fail when max size excludes fixed header bytes")
 
 		// Should succeed when maxSize = totalSize
-		decoded, rn, err := ReadPacket(bytes.NewReader(buf.Bytes()), uint32(totalSize))
+		decoded, rn, err := readPacketV5(bytes.NewReader(buf.Bytes()), uint32(totalSize))
 		require.NoError(t, err)
 		assert.Equal(t, totalSize, rn)
 		pub := decoded.(*PublishPacket)
@@ -385,14 +385,14 @@ func TestMaxPacketSizeBoundaries(t *testing.T) {
 func TestReadPacketUnknownType(t *testing.T) {
 	// Packet type 0 is reserved/invalid - fixed header decoder catches this
 	data := []byte{0x00, 0x00}
-	_, _, err := ReadPacket(bytes.NewReader(data), 0)
+	_, _, err := readPacketV5(bytes.NewReader(data), 0)
 	assert.ErrorIs(t, err, ErrInvalidPacketType)
 }
 
 func TestReadPacketIncomplete(t *testing.T) {
 	// Valid header but incomplete payload
 	data := []byte{0x30, 0x10} // PUBLISH with 16 bytes remaining, but no payload
-	_, _, err := ReadPacket(bytes.NewReader(data), 0)
+	_, _, err := readPacketV5(bytes.NewReader(data), 0)
 	assert.Error(t, err)
 }
 
@@ -404,7 +404,7 @@ func TestWritePacketValidationError(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	_, err := WritePacket(&buf, packet, 0)
+	_, err := writePacketRaw(&buf, packet, 0)
 	assert.ErrorIs(t, err, ErrProtocolViolation)
 }
 
@@ -434,17 +434,17 @@ func TestReadPacketAllTypes(t *testing.T) {
 	for _, tt := range packetTypes {
 		t.Run(tt.packetType.String(), func(t *testing.T) {
 			var buf bytes.Buffer
-			_, err := WritePacket(&buf, tt.packet, 0)
+			_, err := writePacketRaw(&buf, tt.packet, 0)
 			require.NoError(t, err)
 
-			decoded, _, err := ReadPacket(&buf, 0)
+			decoded, _, err := readPacketV5(&buf, 0)
 			require.NoError(t, err)
 			assert.Equal(t, tt.packetType, decoded.Type())
 		})
 	}
 }
 
-func BenchmarkReadPacket(b *testing.B) {
+func BenchmarreadPacket(b *testing.B) {
 	packet := &PublishPacket{
 		Topic:    "test/topic",
 		Payload:  []byte("hello world"),
@@ -452,14 +452,14 @@ func BenchmarkReadPacket(b *testing.B) {
 		PacketID: 1,
 	}
 	var buf bytes.Buffer
-	_, _ = WritePacket(&buf, packet, 0)
+	_, _ = writePacketRaw(&buf, packet, 0)
 	data := buf.Bytes()
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for b.Loop() {
-		_, _, _ = ReadPacket(bytes.NewReader(data), 0)
+		_, _, _ = readPacketV5(bytes.NewReader(data), 0)
 	}
 }
 
@@ -478,7 +478,7 @@ func BenchmarkWritePacket(b *testing.B) {
 
 	for b.Loop() {
 		buf.Reset()
-		_, _ = WritePacket(&buf, packet, 0)
+		_, _ = writePacketRaw(&buf, packet, 0)
 	}
 }
 
@@ -495,8 +495,8 @@ func BenchmarkReadWriteRoundTrip(b *testing.B) {
 
 	for b.Loop() {
 		var buf bytes.Buffer
-		_, _ = WritePacket(&buf, packet, 0)
-		_, _, _ = ReadPacket(&buf, 0)
+		_, _ = writePacketRaw(&buf, packet, 0)
+		_, _, _ = readPacketV5(&buf, 0)
 	}
 }
 
@@ -515,7 +515,7 @@ func BenchmarkWritePacketWithMaxSize(b *testing.B) {
 
 	for b.Loop() {
 		buf.Reset()
-		_, _ = WritePacket(&buf, packet, 1024)
+		_, _ = writePacketRaw(&buf, packet, 1024)
 	}
 }
 
@@ -527,14 +527,14 @@ func BenchmarkReadPacketWithMaxSize(b *testing.B) {
 		PacketID: 1,
 	}
 	var buf bytes.Buffer
-	_, _ = WritePacket(&buf, packet, 0)
+	_, _ = writePacketRaw(&buf, packet, 0)
 	data := buf.Bytes()
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for b.Loop() {
-		_, _, _ = ReadPacket(bytes.NewReader(data), 1024)
+		_, _, _ = readPacketV5(bytes.NewReader(data), 1024)
 	}
 }
 
@@ -557,7 +557,7 @@ func BenchmarkLargePacketEncode(b *testing.B) {
 
 			for b.Loop() {
 				buf.Reset()
-				_, _ = WritePacket(&buf, packet, 0)
+				_, _ = writePacketRaw(&buf, packet, 0)
 			}
 		})
 	}
@@ -575,14 +575,14 @@ func BenchmarkLargePacketDecode(b *testing.B) {
 				PacketID: 1,
 			}
 			var buf bytes.Buffer
-			_, _ = WritePacket(&buf, packet, 0)
+			_, _ = writePacketRaw(&buf, packet, 0)
 			data := buf.Bytes()
 
 			b.ResetTimer()
 			b.ReportAllocs()
 
 			for b.Loop() {
-				_, _, _ = ReadPacket(bytes.NewReader(data), 0)
+				_, _, _ = readPacketV5(bytes.NewReader(data), 0)
 			}
 		})
 	}
@@ -599,7 +599,7 @@ func formatSize(size int) string {
 	}
 }
 
-func FuzzReadPacket(f *testing.F) {
+func FuzreadPacket(f *testing.F) {
 	// Add valid packet seeds
 	packets := []Packet{
 		&ConnectPacket{ClientID: "test", CleanStart: true},
@@ -621,7 +621,7 @@ func FuzzReadPacket(f *testing.F) {
 
 	for _, p := range packets {
 		var buf bytes.Buffer
-		_, _ = WritePacket(&buf, p, 0)
+		_, _ = writePacketRaw(&buf, p, 0)
 		f.Add(buf.Bytes())
 	}
 
@@ -636,6 +636,6 @@ func FuzzReadPacket(f *testing.F) {
 	}
 
 	f.Fuzz(func(_ *testing.T, data []byte) {
-		_, _, _ = ReadPacket(bytes.NewReader(data), 0)
+		_, _, _ = readPacketV5(bytes.NewReader(data), 0)
 	})
 }

@@ -1,15 +1,18 @@
-// Package mqttv5 provides an SDK for implementing MQTT v5.0 clients and brokers.
+// Package mqttv5 provides an SDK for implementing MQTT clients and brokers.
 //
-// This package implements the MQTT Version 5.0 OASIS Standard:
-// https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html
+// This package implements the MQTT Version 5.0 OASIS Standard with
+// backward compatibility for MQTT 3.1.1:
+//   - https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html
+//   - https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/mqtt-v3.1.1.html
 //
 // # Features
 //
 //   - All 15 MQTT v5.0 control packet types
+//   - MQTT 3.1.1 backward compatibility (server opt-in, client version fallback)
 //   - Complete properties system (42 property identifiers)
 //   - QoS 0, 1, 2 message flows with state machines
 //   - Topic matching with wildcard support (+, #)
-//   - Transport: TCP, TLS, WebSocket, WSS
+//   - Transport: TCP, TLS, WebSocket, WSS, Unix Socket, QUIC
 //   - Pluggable interfaces for session, authentication, and clustering
 //
 // # Packet Types
@@ -24,13 +27,9 @@
 //   - DisconnectPacket: Connection termination
 //   - AuthPacket: Enhanced authentication
 //
-// Use ReadPacket and WritePacket to read/write packets from/to connections:
-//
-//	// Read a packet
-//	pkt, n, err := mqttv5.ReadPacket(conn, maxPacketSize)
-//
-//	// Write a packet
-//	n, err := mqttv5.WritePacket(conn, packet, maxPacketSize)
+// Low-level packet I/O is internal to the package. The high-level Client
+// and Server APIs handle protocol version detection and dispatch
+// automatically.
 //
 // # Client
 //

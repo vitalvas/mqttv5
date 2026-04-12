@@ -66,7 +66,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	// Read CONNECT packet with timeout (matching TCP behavior)
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 
-	pkt, n, err := ReadPacket(conn, s.config.maxPacketSize)
+	pkt, n, err := readPacketV5(conn, s.config.maxPacketSize)
 	if err != nil {
 		logger.Debug("failed to read CONNECT", LogFields{LogFieldError: err.Error()})
 		return
@@ -84,12 +84,23 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		return
 	}
 
-	// Determine max packet size for outbound messages early (minimum of server and client limits)
-	// Per MQTT 5.0 spec, server must not send packets larger than client's advertised limit
-	// Computed before any CONNACK responses so all error paths respect client's valid limit
-	clientMaxPacketSize := s.config.maxPacketSize
-	if clientLimit := connect.Props.GetUint32(PropMaximumPacketSize); clientLimit > 0 && clientLimit <= MaxPacketSizeProtocol && clientLimit < clientMaxPacketSize {
-		clientMaxPacketSize = clientLimit
+	// Validate protocol version and CONNECT properties
+	wsConnCodec := connectCodec(connect)
+	clientMaxPacketSize, reason, ok := s.validateConnectVersion(connect)
+	if !ok {
+		logger.Warn("connect validation failed", LogFields{
+			LogFieldReasonCode: reason.String(),
+		})
+		wsConnCodec.writePacket(conn, &ConnackPacket{ReasonCode: reason}, s.config.maxPacketSize)
+		s.fireConnectFailed(&ConnectFailedContext{
+			ClientID:           connect.ClientID,
+			Username:           connect.Username,
+			RemoteAddr:         conn.RemoteAddr(),
+			LocalAddr:          conn.LocalAddr(),
+			TLSConnectionState: getTLSConnectionState(conn),
+			ReasonCode:         reason,
+		})
+		return
 	}
 
 	// Check max connections after reading CONNECT (per MQTT spec, CONNACK must follow CONNECT)
@@ -103,7 +114,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 			connack := &ConnackPacket{
 				ReasonCode: ReasonServerBusy,
 			}
-			WritePacket(conn, connack, clientMaxPacketSize)
+			wsConnCodec.writePacket(conn, connack, clientMaxPacketSize)
 			s.fireConnectFailed(&ConnectFailedContext{
 				ClientID:           connect.ClientID,
 				Username:           connect.Username,
@@ -116,47 +127,6 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		}
 	}
 
-	// Validate CONNECT properties per MQTT v5 spec
-	// Maximum Packet Size MUST be > 0 and <= 268435455 (Section 3.1.2.11.4)
-	// Validate first so we can use valid client limit for subsequent error responses
-	if connect.Props.Has(PropMaximumPacketSize) {
-		clientMaxPS := connect.Props.GetUint32(PropMaximumPacketSize)
-		if clientMaxPS == 0 || clientMaxPS > MaxPacketSizeProtocol {
-			logger.Warn("maximum packet size invalid (protocol error)", nil)
-			connack := &ConnackPacket{
-				ReasonCode: ReasonProtocolError,
-			}
-			WritePacket(conn, connack, clientMaxPacketSize)
-			s.fireConnectFailed(&ConnectFailedContext{
-				ClientID:           connect.ClientID,
-				Username:           connect.Username,
-				RemoteAddr:         conn.RemoteAddr(),
-				LocalAddr:          conn.LocalAddr(),
-				TLSConnectionState: getTLSConnectionState(conn),
-				ReasonCode:         ReasonProtocolError,
-			})
-			return
-		}
-	}
-
-	// Receive Maximum MUST be > 0 (Section 3.1.2.11.3)
-	if connect.Props.Has(PropReceiveMaximum) && connect.Props.GetUint16(PropReceiveMaximum) == 0 {
-		logger.Warn("receive maximum is zero (protocol error)", nil)
-		connack := &ConnackPacket{
-			ReasonCode: ReasonProtocolError,
-		}
-		WritePacket(conn, connack, clientMaxPacketSize)
-		s.fireConnectFailed(&ConnectFailedContext{
-			ClientID:           connect.ClientID,
-			Username:           connect.Username,
-			RemoteAddr:         conn.RemoteAddr(),
-			LocalAddr:          conn.LocalAddr(),
-			TLSConnectionState: getTLSConnectionState(conn),
-			ReasonCode:         ReasonProtocolError,
-		})
-		return
-	}
-
 	// Validate and handle client ID (matching TCP behavior)
 	clientID := connect.ClientID
 	var assignedClientID string
@@ -167,7 +137,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 			connack := &ConnackPacket{
 				ReasonCode: ReasonClientIDNotValid,
 			}
-			WritePacket(conn, connack, clientMaxPacketSize)
+			wsConnCodec.writePacket(conn, connack, clientMaxPacketSize)
 			s.fireConnectFailed(&ConnectFailedContext{
 				Username:           connect.Username,
 				RemoteAddr:         conn.RemoteAddr(),
@@ -216,7 +186,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 		connack := &ConnackPacket{
 			ReasonCode: ReasonNotAuthorized,
 		}
-		WritePacket(conn, connack, clientMaxPacketSize)
+		wsConnCodec.writePacket(conn, connack, clientMaxPacketSize)
 		s.fireConnectFailed(&ConnectFailedContext{
 			ClientID:           clientID,
 			Username:           connect.Username,
@@ -288,7 +258,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 	client.SetTopicAliasMax(s.config.topicAliasMax, clientTopicAliasMax)
 
 	// Use clientMaxPacketSize for CONNACK to respect client's advertised limit
-	if _, err := WritePacket(conn, connack, clientMaxPacketSize); err != nil {
+	if _, err := wsConnCodec.writePacket(conn, connack, clientMaxPacketSize); err != nil {
 		s.removeClient(clientKey, client)
 		return
 	}

@@ -178,14 +178,14 @@ func TestWSHandlerMQTTPackets(t *testing.T) {
 		defer conn.Close()
 
 		// Read CONNECT
-		packet, _, err := ReadPacket(conn, 0)
+		packet, _, err := readPacketV5(conn, 0)
 		if err != nil {
 			return
 		}
 
 		if packet.Type() == PacketCONNECT {
 			// Send CONNACK
-			_, _ = WritePacket(conn, &ConnackPacket{ReasonCode: ReasonSuccess}, 0)
+			_, _ = writePacketRaw(conn, &ConnackPacket{ReasonCode: ReasonSuccess}, 0)
 		}
 	})
 
@@ -204,11 +204,11 @@ func TestWSHandlerMQTTPackets(t *testing.T) {
 		CleanStart: true,
 		KeepAlive:  60,
 	}
-	_, err = WritePacket(conn, connectPacket, 0)
+	_, err = writePacketRaw(conn, connectPacket, 0)
 	require.NoError(t, err)
 
 	// Read CONNACK
-	packet, _, err := ReadPacket(conn, 0)
+	packet, _, err := readPacketV5(conn, 0)
 	require.NoError(t, err)
 	assert.Equal(t, PacketCONNACK, packet.Type())
 
@@ -369,12 +369,12 @@ func BenchmarkWSRoundTrip(b *testing.B) {
 	handler := NewWSHandler(func(conn Conn) {
 		defer conn.Close()
 		for {
-			packet, _, err := ReadPacket(conn, 0)
+			packet, _, err := readPacketV5(conn, 0)
 			if err != nil {
 				return
 			}
 			if packet.Type() == PacketPINGREQ {
-				_, _ = WritePacket(conn, &PingrespPacket{}, 0)
+				_, _ = writePacketRaw(conn, &PingrespPacket{}, 0)
 			}
 		}
 	})
@@ -392,7 +392,7 @@ func BenchmarkWSRoundTrip(b *testing.B) {
 	b.ReportAllocs()
 
 	for b.Loop() {
-		_, _ = WritePacket(conn, &PingreqPacket{}, 0)
-		_, _, _ = ReadPacket(conn, 0)
+		_, _ = writePacketRaw(conn, &PingreqPacket{}, 0)
+		_, _, _ = readPacketV5(conn, 0)
 	}
 }

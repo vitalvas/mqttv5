@@ -42,6 +42,9 @@ type AuthResult struct {
 
 // AuthContext contains information about the authentication request.
 type AuthContext struct {
+	// ProtocolVersion is the MQTT protocol version used by the client.
+	ProtocolVersion ProtocolVersion
+
 	// ClientID is the client identifier from the CONNECT packet.
 	ClientID string
 

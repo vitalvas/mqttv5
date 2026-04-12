@@ -135,7 +135,7 @@ func TestQUICRoundTrip(t *testing.T) {
 			return
 		}
 
-		packet, _, readErr := ReadPacket(conn, 0)
+		packet, _, readErr := readPacketV5(conn, 0)
 		if readErr != nil {
 			conn.Close()
 			serverDone <- readErr
@@ -144,7 +144,7 @@ func TestQUICRoundTrip(t *testing.T) {
 
 		if packet.Type() == PacketCONNECT {
 			response := &ConnackPacket{ReasonCode: ReasonSuccess}
-			_, _ = WritePacket(conn, response, 0)
+			_, _ = writePacketRaw(conn, response, 0)
 		}
 
 		// Wait for client to finish before closing
@@ -180,11 +180,11 @@ func TestQUICRoundTrip(t *testing.T) {
 		CleanStart: true,
 		KeepAlive:  60,
 	}
-	_, err = WritePacket(conn, connectPacket, 0)
+	_, err = writePacketRaw(conn, connectPacket, 0)
 	require.NoError(t, err)
 
 	// Read CONNACK
-	packet, _, err := ReadPacket(conn, 0)
+	packet, _, err := readPacketV5(conn, 0)
 	require.NoError(t, err)
 	assert.Equal(t, PacketCONNACK, packet.Type())
 
@@ -228,7 +228,7 @@ func TestQUICNetListenerAdapter(t *testing.T) {
 			return
 		}
 
-		packet, _, readErr := ReadPacket(conn, 0)
+		packet, _, readErr := readPacketV5(conn, 0)
 		if readErr != nil {
 			conn.Close()
 			serverDone <- readErr
@@ -237,7 +237,7 @@ func TestQUICNetListenerAdapter(t *testing.T) {
 
 		if packet.Type() == PacketCONNECT {
 			response := &ConnackPacket{ReasonCode: ReasonSuccess}
-			_, _ = WritePacket(conn, response, 0)
+			_, _ = writePacketRaw(conn, response, 0)
 		}
 
 		// Wait for client to finish before closing
@@ -264,11 +264,11 @@ func TestQUICNetListenerAdapter(t *testing.T) {
 		CleanStart: true,
 		KeepAlive:  60,
 	}
-	_, err = WritePacket(conn, connectPacket, 0)
+	_, err = writePacketRaw(conn, connectPacket, 0)
 	require.NoError(t, err)
 
 	// Read CONNACK
-	packet, _, err := ReadPacket(conn, 0)
+	packet, _, err := readPacketV5(conn, 0)
 	require.NoError(t, err)
 	assert.Equal(t, PacketCONNACK, packet.Type())
 

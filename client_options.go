@@ -76,6 +76,9 @@ type clientOptions struct {
 	servers        []string       // Static server list
 	serverResolver ServerResolver // Dynamic server discovery
 
+	// Protocol version negotiation
+	protocolVersions []ProtocolVersion // Ordered list of versions to try (default: [ProtocolV5])
+
 	// Proxy configuration
 	proxyConfig  *ProxyConfig // Explicit proxy configuration
 	proxyFromEnv bool         // Use HTTP_PROXY/HTTPS_PROXY/NO_PROXY environment variables
@@ -95,6 +98,7 @@ func defaultOptions() *clientOptions {
 		maxBackoff:       60 * time.Second,
 		maxPacketSize:    MaxPacketSizeDefault,
 		receiveMaximum:   65535,
+		protocolVersions: []ProtocolVersion{ProtocolV5},
 		sessionFactory:   DefaultSessionFactory(),
 	}
 }
@@ -359,6 +363,23 @@ func WithProxyAuth(proxyURL, username, password string) Option {
 func WithProxyFromEnvironment(enabled bool) Option {
 	return func(o *clientOptions) {
 		o.proxyFromEnv = enabled
+	}
+}
+
+// WithProtocolVersions sets the MQTT protocol versions to try in order.
+// The client attempts each version sequentially; if the server rejects with
+// ReasonUnsupportedProtocolVersion, the next version is tried.
+//
+// Examples:
+//
+//	WithProtocolVersions(ProtocolV5)               // strict v5 only (default)
+//	WithProtocolVersions(ProtocolV5, ProtocolV311)  // try v5, fallback to v3.1.1
+//	WithProtocolVersions(ProtocolV311)              // strict v3.1.1 only
+func WithProtocolVersions(versions ...ProtocolVersion) Option {
+	return func(o *clientOptions) {
+		if len(versions) > 0 {
+			o.protocolVersions = versions
+		}
 	}
 }
 

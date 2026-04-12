@@ -10,7 +10,7 @@ This document compares the mqttv5 library with other popular open-source MQTT br
 | License | MIT | EPL/EDL | Apache 2.0 | Apache 2.0 | MIT | Apache 2.0 | MPL 2.0 | Apache 2.0 |
 | Type | Library | Broker | Broker | Broker | Broker | Broker | Broker | Broker |
 | Primary Protocol | MQTT | MQTT | MQTT | MQTT | MQTT | MQTT | AMQP | NATS |
-| MQTT 3.1.1 | No | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| MQTT 3.1.1 | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | MQTT 5.0 | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Partial |
 
 ## Protocol Support
@@ -165,7 +165,6 @@ This section highlights MQTT-related features available in other brokers that ar
 
 | Feature | Available In | Description |
 |---------|--------------|-------------|
-| MQTT 3.1.1 | All others | Legacy protocol version for older clients |
 | Native Clustering | EMQX, VerneMQ, HiveMQ (Enterprise) | Built-in distributed broker clustering |
 | Session Replication | EMQX, VerneMQ, HiveMQ (Enterprise) | Replicate client sessions across nodes |
 | Delayed Messages | EMQX, HiveMQ (Enterprise) | Schedule MQTT message delivery for future time |
@@ -184,7 +183,6 @@ This section highlights MQTT-related features available in other brokers that ar
 
 **Intentionally out of scope:**
 
-- MQTT 3.1.1 (library focuses on MQTT 5.0 only)
 - Native clustering (use external orchestration like Kubernetes)
 - Web dashboard (use external monitoring tools)
 
@@ -194,6 +192,7 @@ This section highlights MQTT-related features available in other brokers that ar
 
 - **Pure Go implementation** - no CGO dependencies, easy cross-compilation
 - **Library-first design** - build custom brokers or embed in applications
+- **MQTT 5.0 and 3.1.1 interop** - clients on either protocol share the same topic space
 - **Native namespace isolation** - built-in multi-tenancy support
 - **mTLS identity mapping** - pluggable certificate-to-identity mapping with session expiry
 - **SCRAM authentication** - includes SCRAM-SHA-512 (unique among compared brokers)

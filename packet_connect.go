@@ -33,16 +33,22 @@ var (
 // ConnectPacket represents an MQTT CONNECT packet.
 // MQTT v5.0 spec: Section 3.1
 type ConnectPacket struct {
+	// ProtocolVersion is the protocol version detected during decode
+	// or set by the caller for encode (ProtocolV311 or ProtocolV5).
+	// Zero defaults to ProtocolV5.
+	ProtocolVersion ProtocolVersion
+
 	// ClientID is the client identifier.
 	ClientID string
 
 	// CleanStart indicates whether the session should start clean.
+	// In MQTT 3.1.1 this corresponds to the CleanSession flag.
 	CleanStart bool
 
 	// KeepAlive is the keep alive interval in seconds.
 	KeepAlive uint16
 
-	// Properties contains the CONNECT properties.
+	// Properties contains the CONNECT properties (MQTT v5 only).
 	Props Properties
 
 	// Username for authentication.
@@ -129,6 +135,16 @@ func (p *ConnectPacket) setConnectFlags(flags byte) error {
 
 // Encode writes the packet to the writer.
 func (p *ConnectPacket) Encode(w io.Writer) (int, error) {
+	version := p.ProtocolVersion
+	if version == 0 {
+		version = ProtocolV5
+	}
+
+	// v3.1.1 encoding is handled separately
+	if version == ProtocolV311 {
+		return encodeConnectV311(w, p, 0)
+	}
+
 	if err := p.Validate(); err != nil {
 		return 0, err
 	}
@@ -242,6 +258,7 @@ func (p *ConnectPacket) Encode(w io.Writer) (int, error) {
 }
 
 // Decode reads the packet from the reader.
+// Accepts both MQTT v3.1.1 (version 4) and MQTT v5 (version 5).
 func (p *ConnectPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 	if header.PacketType != PacketCONNECT {
 		return 0, ErrInvalidPacketType
@@ -259,16 +276,18 @@ func (p *ConnectPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 		return totalRead, ErrInvalidProtocolName
 	}
 
-	// Protocol Version
+	// Protocol Version — accept both v3.1.1 (4) and v5 (5)
 	var versionBuf [1]byte
 	n, err = io.ReadFull(r, versionBuf[:])
 	totalRead += n
 	if err != nil {
 		return totalRead, err
 	}
-	if versionBuf[0] != protocolVersion {
+	version := ProtocolVersion(versionBuf[0])
+	if version != ProtocolV5 && version != ProtocolV311 {
 		return totalRead, ErrInvalidProtocolVersion
 	}
+	p.ProtocolVersion = version
 
 	// Connect Flags
 	var flagsBuf [1]byte
@@ -293,14 +312,16 @@ func (p *ConnectPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 	}
 	p.KeepAlive = uint16(keepAliveBuf[0])<<8 | uint16(keepAliveBuf[1])
 
-	// Properties
-	n, err = p.Props.Decode(r)
-	totalRead += n
-	if err != nil {
-		return totalRead, err
-	}
-	if err := p.Props.ValidateFor(PropCtxCONNECT); err != nil {
-		return totalRead, err
+	// Properties (MQTT v5 only)
+	if version == ProtocolV5 {
+		n, err = p.Props.Decode(r)
+		totalRead += n
+		if err != nil {
+			return totalRead, err
+		}
+		if err := p.Props.ValidateFor(PropCtxCONNECT); err != nil {
+			return totalRead, err
+		}
 	}
 
 	// Payload
@@ -314,13 +335,16 @@ func (p *ConnectPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 
 	// Will Properties, Topic, Payload
 	if p.WillFlag {
-		n, err = p.WillProps.Decode(r)
-		totalRead += n
-		if err != nil {
-			return totalRead, err
-		}
-		if err := p.WillProps.ValidateFor(PropCtxWILL); err != nil {
-			return totalRead, err
+		// Will Properties (MQTT v5 only)
+		if version == ProtocolV5 {
+			n, err = p.WillProps.Decode(r)
+			totalRead += n
+			if err != nil {
+				return totalRead, err
+			}
+			if err := p.WillProps.ValidateFor(PropCtxWILL); err != nil {
+				return totalRead, err
+			}
 		}
 
 		p.WillTopic, n, err = decodeString(r)
@@ -358,15 +382,15 @@ func (p *ConnectPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 }
 
 // Validate validates the packet contents.
+//
+// This performs structural/wire-format checks only. Broker policy rules such as
+// "empty ClientID with CleanStart=false" are NOT enforced here so that the
+// server can decode the packet and answer with the appropriate CONNACK reason
+// code instead of dropping the connection.
 func (p *ConnectPacket) Validate() error {
 	// Client ID length check (max 23 characters recommended, but up to 65535 allowed)
 	if len(p.ClientID) > 65535 {
 		return ErrClientIDTooLong
-	}
-
-	// Client ID must be present if CleanStart is false
-	if !p.CleanStart && p.ClientID == "" {
-		return ErrClientIDRequired
 	}
 
 	// Will QoS must be valid
