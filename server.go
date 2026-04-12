@@ -452,14 +452,15 @@ func (s *Server) Close() error {
 		return nil
 	}
 
-	close(s.done)
-
-	// Close all listeners
+	// Close all listeners first to stop accepting new connections
 	for _, listener := range s.config.listeners {
 		listener.Close()
 	}
 
-	// Disconnect all clients - copy first to avoid holding lock during I/O
+	// Disconnect all clients before signaling done.
+	// This ensures the DISCONNECT packet is written and the connection is
+	// closed cleanly, so clientLoop exits via the ReadPacket error path
+	// (which handles cleanup) rather than the s.done select case.
 	s.mu.RLock()
 	clients := make([]*ServerClient, 0, len(s.clients))
 	for _, client := range s.clients {
@@ -470,6 +471,9 @@ func (s *Server) Close() error {
 	for _, client := range clients {
 		client.Disconnect(ReasonServerShuttingDown)
 	}
+
+	// Signal all goroutines to stop (accept loops, etc.)
+	close(s.done)
 
 	// Wait for all goroutines
 	s.wg.Wait()

@@ -682,9 +682,16 @@ func TestServerV311PersistentSession(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
+	disconnected := make(chan struct{}, 1)
 	srv := NewServer(
 		WithListener(listener),
 		WithAcceptProtocolVersions(ProtocolV5, ProtocolV311),
+		OnDisconnect(func(_ *ServerClient) {
+			select {
+			case disconnected <- struct{}{}:
+			default:
+			}
+		}),
 	)
 	go srv.ListenAndServe()
 	defer srv.Close()
@@ -738,8 +745,12 @@ func TestServerV311PersistentSession(t *testing.T) {
 	require.NoError(t, err)
 	conn1.Close()
 
-	// Allow server cleanup goroutine to run
-	time.Sleep(50 * time.Millisecond)
+	// Wait for server-side disconnect cleanup to complete
+	select {
+	case <-disconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for server disconnect callback")
+	}
 
 	// --- Second connection: same client ID with CleanSession=false ---
 	conn2, err := net.Dial("tcp", addr)
@@ -775,9 +786,16 @@ func TestServerV311CleanSessionDeletesSession(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
+	disconnected := make(chan struct{}, 1)
 	srv := NewServer(
 		WithListener(listener),
 		WithAcceptProtocolVersions(ProtocolV5, ProtocolV311),
+		OnDisconnect(func(_ *ServerClient) {
+			select {
+			case disconnected <- struct{}{}:
+			default:
+			}
+		}),
 	)
 	go srv.ListenAndServe()
 	defer srv.Close()
@@ -809,7 +827,11 @@ func TestServerV311CleanSessionDeletesSession(t *testing.T) {
 	require.NoError(t, err)
 	conn.Close()
 
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-disconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for server disconnect callback")
+	}
 
 	// Session should be gone
 	_, err = srv.config.sessionStore.Get(DefaultNamespace, clientID)
