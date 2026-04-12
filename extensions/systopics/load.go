@@ -43,9 +43,9 @@ func newLoadCalculator(interval time.Duration) *loadCalculator {
 	}
 }
 
-// Update records the current raw counter value for a named metric.
+// update records the current raw counter value for a named metric.
 // It computes the delta since last update and updates the EMA values.
-func (lc *loadCalculator) Update(name string, current int64) {
+func (lc *loadCalculator) update(name string, current int64) {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 
@@ -70,8 +70,8 @@ func (lc *loadCalculator) Update(name string, current int64) {
 	es.ema15 += lc.alpha15m * (rate - es.ema15)
 }
 
-// Rates returns the current EMA rates for a named metric.
-func (lc *loadCalculator) Rates(name string) LoadRates {
+// rates returns the current EMA rates for a named metric.
+func (lc *loadCalculator) rates(name string) LoadRates {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 

@@ -68,11 +68,11 @@ func (p *Publisher) publish() {
 	totalConns := p.broker.ConnectionsTotal()
 
 	// Always update load calculator to keep EMAs accurate.
-	p.load.Update(loadMessagesRecv, totalMsgRecv)
-	p.load.Update(loadMessagesSent, totalMsgSent)
-	p.load.Update(loadBytesRecv, totalBytesRecv)
-	p.load.Update(loadBytesSent, totalBytesSent)
-	p.load.Update(loadConnections, totalConns)
+	p.load.update(loadMessagesRecv, totalMsgRecv)
+	p.load.update(loadMessagesSent, totalMsgSent)
+	p.load.update(loadBytesRecv, totalBytesRecv)
+	p.load.update(loadBytesSent, totalBytesSent)
+	p.load.update(loadConnections, totalConns)
 
 	var topics []sysMessage
 
@@ -272,11 +272,11 @@ func (p *Publisher) totalMessagesSent() int64 {
 }
 
 func (p *Publisher) loadTopics() []sysMessage {
-	msgRecv := p.load.Rates(loadMessagesRecv)
-	msgSent := p.load.Rates(loadMessagesSent)
-	bytesRecv := p.load.Rates(loadBytesRecv)
-	bytesSent := p.load.Rates(loadBytesSent)
-	conns := p.load.Rates(loadConnections)
+	msgRecv := p.load.rates(loadMessagesRecv)
+	msgSent := p.load.rates(loadMessagesSent)
+	bytesRecv := p.load.rates(loadBytesRecv)
+	bytesSent := p.load.rates(loadBytesSent)
+	conns := p.load.rates(loadConnections)
 
 	return []sysMessage{
 		{topic: TopicLoadMessagesRecv1min, value: strconv.FormatFloat(msgRecv.Min1, 'f', 2, 64)},

@@ -193,22 +193,22 @@ func (l *QUICListener) Addr() net.Addr {
 // The adapter uses a background context for Accept calls.
 func (l *QUICListener) NetListener() net.Listener {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &quicNetListener{
+	return &QUICNetListener{
 		quicListener: l,
 		ctx:          ctx,
 		cancel:       cancel,
 	}
 }
 
-// quicNetListener adapts QUICListener to the net.Listener interface.
-type quicNetListener struct {
+// QUICNetListener adapts QUICListener to the net.Listener interface.
+type QUICNetListener struct {
 	quicListener *QUICListener
 	ctx          context.Context
 	cancel       context.CancelFunc
 }
 
 // Accept waits for and returns the next connection.
-func (l *quicNetListener) Accept() (net.Conn, error) {
+func (l *QUICNetListener) Accept() (net.Conn, error) {
 	conn, err := l.quicListener.Accept(l.ctx)
 	if err != nil {
 		return nil, err
@@ -217,12 +217,12 @@ func (l *quicNetListener) Accept() (net.Conn, error) {
 }
 
 // Close closes the listener.
-func (l *quicNetListener) Close() error {
+func (l *QUICNetListener) Close() error {
 	l.cancel()
 	return l.quicListener.Close()
 }
 
 // Addr returns the listener's network address.
-func (l *quicNetListener) Addr() net.Addr {
+func (l *QUICNetListener) Addr() net.Addr {
 	return l.quicListener.Addr()
 }

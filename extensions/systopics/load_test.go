@@ -11,8 +11,8 @@ func TestLoadCalculator(t *testing.T) {
 	t.Run("first update initializes without rates", func(t *testing.T) {
 		lc := newLoadCalculator(10 * time.Second)
 
-		lc.Update("test", 100)
-		rates := lc.Rates("test")
+		lc.update("test", 100)
+		rates := lc.rates("test")
 
 		assert.Equal(t, 0.0, rates.Min1)
 		assert.Equal(t, 0.0, rates.Min5)
@@ -22,7 +22,7 @@ func TestLoadCalculator(t *testing.T) {
 	t.Run("rates for unknown metric are zero", func(t *testing.T) {
 		lc := newLoadCalculator(10 * time.Second)
 
-		rates := lc.Rates("unknown")
+		rates := lc.rates("unknown")
 
 		assert.Equal(t, 0.0, rates.Min1)
 		assert.Equal(t, 0.0, rates.Min5)
@@ -35,10 +35,10 @@ func TestLoadCalculator(t *testing.T) {
 		// Simulate a constant rate of 10/sec for many ticks.
 		// 15min EMA needs ~3x window to converge, so 3000 ticks.
 		for i := range 3000 {
-			lc.Update("test", int64((i+1)*10))
+			lc.update("test", int64((i+1)*10))
 		}
 
-		rates := lc.Rates("test")
+		rates := lc.rates("test")
 
 		// All EMAs should converge near 10.
 		assert.InDelta(t, 10.0, rates.Min1, 0.01)
@@ -51,19 +51,19 @@ func TestLoadCalculator(t *testing.T) {
 
 		// Generate some activity.
 		for i := range 60 {
-			lc.Update("test", int64((i+1)*100))
+			lc.update("test", int64((i+1)*100))
 		}
 
-		ratesBefore := lc.Rates("test")
+		ratesBefore := lc.rates("test")
 		assert.Greater(t, ratesBefore.Min1, 0.0)
 
 		// Now stop activity.
 		lastVal := int64(61 * 100)
 		for range 120 {
-			lc.Update("test", lastVal)
+			lc.update("test", lastVal)
 		}
 
-		ratesAfter := lc.Rates("test")
+		ratesAfter := lc.rates("test")
 		assert.Less(t, ratesAfter.Min1, ratesBefore.Min1)
 	})
 
@@ -71,12 +71,12 @@ func TestLoadCalculator(t *testing.T) {
 		lc := newLoadCalculator(time.Second)
 
 		for i := range 60 {
-			lc.Update("fast", int64((i+1)*100))
-			lc.Update("slow", int64((i+1)*10))
+			lc.update("fast", int64((i+1)*100))
+			lc.update("slow", int64((i+1)*10))
 		}
 
-		fast := lc.Rates("fast")
-		slow := lc.Rates("slow")
+		fast := lc.rates("fast")
+		slow := lc.rates("slow")
 
 		assert.Greater(t, fast.Min1, slow.Min1)
 	})
@@ -86,16 +86,16 @@ func TestLoadCalculator(t *testing.T) {
 
 		// Build up some rate.
 		for i := range 60 {
-			lc.Update("test", int64((i+1)*100))
+			lc.update("test", int64((i+1)*100))
 		}
 
-		ratesBefore := lc.Rates("test")
+		ratesBefore := lc.rates("test")
 		assert.Greater(t, ratesBefore.Min1, 0.0)
 
 		// Simulate counter reset (value drops).
-		lc.Update("test", 0)
+		lc.update("test", 0)
 
-		ratesAfter := lc.Rates("test")
+		ratesAfter := lc.rates("test")
 
 		// Rates should decay toward zero, never go negative.
 		assert.GreaterOrEqual(t, ratesAfter.Min1, 0.0)
@@ -108,16 +108,16 @@ func TestLoadCalculator(t *testing.T) {
 
 		// Start with some baseline.
 		for i := range 60 {
-			lc.Update("test", int64((i+1)*10))
+			lc.update("test", int64((i+1)*10))
 		}
 
 		// Sudden spike.
 		base := int64(61 * 10)
 		for i := range 10 {
-			lc.Update("test", base+int64((i+1)*1000))
+			lc.update("test", base+int64((i+1)*1000))
 		}
 
-		rates := lc.Rates("test")
+		rates := lc.rates("test")
 
 		// 1min EMA should react faster than 5min, which reacts faster than 15min.
 		assert.Greater(t, rates.Min1, rates.Min5)
