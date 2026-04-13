@@ -664,6 +664,41 @@ func TestCodecV311WriteValidation(t *testing.T) {
 			},
 			wantErr: ErrProtocolViolation,
 		},
+		{
+			name:    "UNSUBACK with zero packet ID",
+			packet:  &UnsubackPacket{PacketID: 0},
+			wantErr: ErrInvalidPacketID,
+		},
+		{
+			name: "CONNECT with invalid will QoS",
+			packet: &ConnectPacket{
+				ProtocolVersion: ProtocolV311,
+				ClientID:        "test",
+				CleanStart:      true,
+				WillFlag:        true,
+				WillTopic:       "t",
+				WillQoS:         3,
+			},
+			wantErr: ErrInvalidConnectFlags,
+		},
+		{
+			name: "SUBSCRIBE with zero packet ID",
+			packet: &SubscribePacket{
+				PacketID: 0,
+				Subscriptions: []Subscription{
+					{TopicFilter: "a/b", QoS: QoS0},
+				},
+			},
+			wantErr: ErrInvalidPacketID,
+		},
+		{
+			name: "UNSUBSCRIBE with zero packet ID",
+			packet: &UnsubscribePacket{
+				PacketID:     0,
+				TopicFilters: []string{"a/b"},
+			},
+			wantErr: ErrInvalidPacketID,
+		},
 	}
 
 	for _, tt := range tests {
@@ -674,6 +709,75 @@ func TestCodecV311WriteValidation(t *testing.T) {
 			assert.Equal(t, 0, buf.Len(), "no bytes should be written on validation failure")
 		})
 	}
+}
+
+func TestCodecV311EncodeMaxSize(t *testing.T) {
+	codec := newCodec(ProtocolV311)
+
+	t.Run("CONNECT exceeds maxSize", func(t *testing.T) {
+		pkt := &ConnectPacket{
+			ProtocolVersion: ProtocolV311,
+			ClientID:        "test-client",
+			CleanStart:      true,
+			KeepAlive:       60,
+		}
+		var buf bytes.Buffer
+		_, err := codec.writePacket(&buf, pkt, 5) // too small
+		assert.ErrorIs(t, err, ErrPacketTooLarge)
+	})
+
+	t.Run("SUBSCRIBE exceeds maxSize", func(t *testing.T) {
+		pkt := &SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "a/very/long/topic/filter/that/exceeds/limit", QoS: QoS0},
+			},
+		}
+		var buf bytes.Buffer
+		_, err := codec.writePacket(&buf, pkt, 5) // too small
+		assert.ErrorIs(t, err, ErrPacketTooLarge)
+	})
+
+	t.Run("UNSUBSCRIBE exceeds maxSize", func(t *testing.T) {
+		pkt := &UnsubscribePacket{
+			PacketID:     1,
+			TopicFilters: []string{"a/very/long/topic/filter/that/exceeds/limit"},
+		}
+		var buf bytes.Buffer
+		_, err := codec.writePacket(&buf, pkt, 5) // too small
+		assert.ErrorIs(t, err, ErrPacketTooLarge)
+	})
+}
+
+func TestCodecV311DecodeConnackErrors(t *testing.T) {
+	codec := newCodec(ProtocolV311)
+
+	t.Run("reserved flags set", func(t *testing.T) {
+		// CONNACK with acknowledge flags byte having reserved bits set (bit 1)
+		raw := []byte{byte(PacketCONNACK) << 4, 0x02, 0x02, 0x00}
+		_, _, err := codec.readPacket(bytes.NewReader(raw), 0)
+		assert.ErrorIs(t, err, ErrInvalidConnackFlags)
+	})
+
+	t.Run("session present with non-success", func(t *testing.T) {
+		// CONNACK with session present=true and non-success return code
+		raw := []byte{byte(PacketCONNACK) << 4, 0x02, 0x01, 0x04}
+		_, _, err := codec.readPacket(bytes.NewReader(raw), 0)
+		assert.ErrorIs(t, err, ErrInvalidConnackFlags)
+	})
+}
+
+func TestCodecV311DecodeConnectError(t *testing.T) {
+	codec := newCodec(ProtocolV311)
+
+	// Truncated CONNECT: valid header but not enough remaining bytes to decode
+	raw := []byte{
+		byte(PacketCONNECT) << 4,
+		0x04,                 // remaining length = 4
+		0x00, 0x04, 'M', 'Q', // truncated: missing "TT" and rest of CONNECT
+	}
+	_, _, err := codec.readPacket(bytes.NewReader(raw), 0)
+	require.Error(t, err)
 }
 
 func TestServerV311PersistentSession(t *testing.T) {
