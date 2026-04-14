@@ -185,6 +185,34 @@ func TestMemoryRetainedStore(t *testing.T) {
 		assert.Equal(t, 0, store.Count(testNS))
 	})
 
+	t.Run("clear all namespaces with empty namespace", func(t *testing.T) {
+		store := NewMemoryRetainedStore()
+
+		store.Set("ns1", &RetainedMessage{Topic: "a", Payload: []byte("1")})
+		store.Set("ns2", &RetainedMessage{Topic: "b", Payload: []byte("2")})
+		store.Set(testNS, &RetainedMessage{Topic: "c", Payload: []byte("3")})
+
+		assert.Equal(t, 3, store.Count(""))
+
+		store.Clear("")
+
+		assert.Equal(t, 0, store.Count(""))
+		assert.Equal(t, 0, store.Count("ns1"))
+		assert.Equal(t, 0, store.Count("ns2"))
+		assert.Equal(t, 0, store.Count(testNS))
+	})
+
+	t.Run("count across all namespaces with empty namespace", func(t *testing.T) {
+		store := NewMemoryRetainedStore()
+
+		assert.Equal(t, 0, store.Count(""))
+
+		store.Set("ns1", &RetainedMessage{Topic: "a", Payload: []byte("1")})
+		store.Set("ns2", &RetainedMessage{Topic: "b", Payload: []byte("2")})
+
+		assert.Equal(t, 2, store.Count(""))
+	})
+
 	t.Run("count", func(t *testing.T) {
 		store := NewMemoryRetainedStore()
 

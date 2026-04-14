@@ -7,6 +7,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSubscriptionEntryMatchSubscriber(t *testing.T) {
+	entry := SubscriptionEntry{
+		ClientID:     "client1",
+		Namespace:    testNS,
+		Subscription: Subscription{TopicFilter: "a/b"},
+	}
+
+	t.Run("matches identical entry", func(t *testing.T) {
+		other := SubscriptionEntry{
+			ClientID:     "client1",
+			Namespace:    testNS,
+			Subscription: Subscription{TopicFilter: "a/b"},
+		}
+		assert.True(t, entry.MatchSubscriber(other))
+	})
+
+	t.Run("does not match different client", func(t *testing.T) {
+		other := SubscriptionEntry{
+			ClientID:     "client2",
+			Namespace:    testNS,
+			Subscription: Subscription{TopicFilter: "a/b"},
+		}
+		assert.False(t, entry.MatchSubscriber(other))
+	})
+
+	t.Run("does not match non-entry type", func(t *testing.T) {
+		assert.False(t, entry.MatchSubscriber("not-an-entry"))
+		assert.False(t, entry.MatchSubscriber(42))
+		assert.False(t, entry.MatchSubscriber(nil))
+	})
+}
+
 func TestSubscriptionManager(t *testing.T) {
 	t.Run("subscribe and match", func(t *testing.T) {
 		m := NewSubscriptionManager()

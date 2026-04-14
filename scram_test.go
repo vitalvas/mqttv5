@@ -94,6 +94,35 @@ func TestComputeSCRAMCredentials(t *testing.T) {
 	assert.Len(t, creds.StoredKey, 32)
 }
 
+func TestExtractScramBareMessage(t *testing.T) {
+	t.Run("with gs2 header", func(t *testing.T) {
+		got := extractScramBareMessage("n,,n=user,r=nonce")
+		assert.Equal(t, "n=user,r=nonce", got)
+	})
+
+	t.Run("without n= returns unchanged", func(t *testing.T) {
+		// Malformed messages without n= fall through and are returned as-is.
+		got := extractScramBareMessage("malformed-no-nequals")
+		assert.Equal(t, "malformed-no-nequals", got)
+	})
+}
+
+func TestParseScramClientFinal(t *testing.T) {
+	t.Run("complete message", func(t *testing.T) {
+		cb, nonce, proof := parseScramClientFinal("c=biws,r=nonce123,p=proofvalue")
+		assert.Equal(t, "biws", cb)
+		assert.Equal(t, "nonce123", nonce)
+		assert.Equal(t, "proofvalue", proof)
+	})
+
+	t.Run("short part is skipped", func(t *testing.T) {
+		cb, nonce, proof := parseScramClientFinal("c=biws,x,r=nonce,p=proof")
+		assert.Equal(t, "biws", cb)
+		assert.Equal(t, "nonce", nonce)
+		assert.Equal(t, "proof", proof)
+	})
+}
+
 func TestGenerateSalt(t *testing.T) {
 	salt1, err := GenerateSalt()
 	require.NoError(t, err)

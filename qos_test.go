@@ -279,6 +279,105 @@ func TestQoS2Tracker(t *testing.T) {
 		assert.True(t, tracker.Remove(1))
 		assert.False(t, tracker.Remove(1))
 	})
+
+	t.Run("handle pubrel wrong state", func(t *testing.T) {
+		// Sender-side state (AwaitingPubrec) must reject incoming PUBREL.
+		tracker := NewQoS2Tracker(time.Second, 3)
+		tracker.TrackSend(1, &Message{Topic: "t"})
+
+		_, ok := tracker.HandlePubrel(1)
+		assert.False(t, ok, "PUBREL should be rejected in sender state")
+	})
+
+	t.Run("send pubrec wrong state", func(t *testing.T) {
+		// Sender-side state (AwaitingPubrec) must reject SendPubrec transition.
+		tracker := NewQoS2Tracker(time.Second, 3)
+		tracker.TrackSend(1, &Message{Topic: "t"})
+
+		ok := tracker.SendPubrec(1)
+		assert.False(t, ok, "SendPubrec should fail on sender-side state")
+	})
+
+	t.Run("cleanup expired removes exhausted retries", func(t *testing.T) {
+		// Entries past maxRetries AND past retry timeout should be removed.
+		tracker := NewQoS2Tracker(5*time.Millisecond, 2)
+		tracker.TrackSend(1, &Message{Topic: "t"})
+
+		// Manually bump retry count to max
+		msg, ok := tracker.Get(1)
+		require.True(t, ok)
+		msg.RetryCount = 2 // == maxRetries
+
+		// Wait past retry timeout so ShouldRetry() returns true
+		time.Sleep(10 * time.Millisecond)
+
+		removed := tracker.CleanupExpired()
+		assert.Equal(t, 1, removed)
+		assert.Equal(t, 0, tracker.Count())
+	})
+}
+
+func TestQoS1MessageShouldRetry(t *testing.T) {
+	t.Run("wrong state returns false", func(t *testing.T) {
+		m := &QoS1Message{
+			State:        QoS1Complete, // not awaitingPuback
+			SentAt:       time.Now().Add(-time.Hour),
+			RetryTimeout: time.Second,
+		}
+		assert.False(t, m.ShouldRetry())
+	})
+
+	t.Run("within retry timeout returns false", func(t *testing.T) {
+		m := &QoS1Message{
+			State:        QoS1AwaitingPuback,
+			SentAt:       time.Now(),
+			RetryTimeout: time.Hour,
+		}
+		assert.False(t, m.ShouldRetry())
+	})
+
+	t.Run("past timeout in awaitingPuback returns true", func(t *testing.T) {
+		m := &QoS1Message{
+			State:        QoS1AwaitingPuback,
+			SentAt:       time.Now().Add(-time.Hour),
+			RetryTimeout: time.Second,
+		}
+		assert.True(t, m.ShouldRetry())
+	})
+}
+
+func TestPacketIDManagerFragmentedAllocation(t *testing.T) {
+	// Force the inner scan loop in Allocate() to exercise its fragmented-id
+	// fast-forward path (when m.next points at an already-used ID).
+	m := &PacketIDManager{
+		maxIDs: 65535,
+		next:   1,
+		used: map[uint16]struct{}{
+			1: {},
+			2: {},
+			3: {},
+		},
+	}
+
+	// Allocate must scan past 1, 2, 3 to find the free ID 4.
+	id, err := m.Allocate()
+	require.NoError(t, err)
+	assert.Equal(t, uint16(4), id)
+}
+
+func TestPacketIDManagerWrapAroundBoundary(t *testing.T) {
+	// Force the next++ -> 0 wrap branch when scanning across the wraparound.
+	m := &PacketIDManager{
+		maxIDs: 65535,
+		next:   65535,
+		used: map[uint16]struct{}{
+			65535: {}, // force scan increment
+		},
+	}
+
+	id, err := m.Allocate()
+	require.NoError(t, err)
+	assert.Equal(t, uint16(1), id, "next should wrap from 65535 -> 1")
 }
 
 func BenchmarkPacketIDManagerAllocate(b *testing.B) {
