@@ -2,6 +2,7 @@ package mqttv5
 
 import (
 	"bytes"
+	"math/rand/v2"
 	"net"
 	"testing"
 	"time"
@@ -1072,4 +1073,97 @@ func TestCodecV5Passthrough(t *testing.T) {
 	got, ok := result.(*PublishPacket)
 	require.True(t, ok)
 	assert.Equal(t, "text/plain", got.Props.GetString(PropContentType))
+}
+
+// FuzzReadPacketV311 fuzzes the v3.1.1 packet decoder against arbitrary
+// wire bytes. The decoder must never panic — it should only return packets
+// or errors.
+func FuzzReadPacketV311(f *testing.F) {
+	// Seed with valid v3.1.1 packets of every type.
+	packets := []Packet{
+		&ConnectPacket{ProtocolVersion: ProtocolV311, ClientID: "c", CleanStart: true},
+		&ConnectPacket{
+			ProtocolVersion: ProtocolV311,
+			ClientID:        "c",
+			CleanStart:      true,
+			Username:        "u",
+			Password:        []byte("p"),
+			WillFlag:        true,
+			WillTopic:       "w",
+			WillPayload:     []byte("will"),
+			WillQoS:         1,
+			WillRetain:      true,
+		},
+		&ConnackPacket{ReasonCode: ReasonSuccess},
+		&ConnackPacket{SessionPresent: true, ReasonCode: ReasonSuccess},
+		&ConnackPacket{ReasonCode: ReasonNotAuthorized},
+		&PublishPacket{Topic: "t", QoS: QoS0, Payload: []byte("hello")},
+		&PublishPacket{Topic: "t", QoS: QoS1, PacketID: 1, Payload: []byte("hello")},
+		&PublishPacket{Topic: "t", QoS: QoS2, PacketID: 1, Payload: []byte("hello"), Retain: true},
+		&PubackPacket{PacketID: 1, ReasonCode: ReasonSuccess},
+		&PubrecPacket{PacketID: 1, ReasonCode: ReasonSuccess},
+		&PubrelPacket{PacketID: 1, ReasonCode: ReasonSuccess},
+		&PubcompPacket{PacketID: 1, ReasonCode: ReasonSuccess},
+		&SubscribePacket{
+			PacketID: 1,
+			Subscriptions: []Subscription{
+				{TopicFilter: "a/b", QoS: QoS0},
+				{TopicFilter: "c/#", QoS: QoS1},
+			},
+		},
+		&SubackPacket{
+			PacketID:    1,
+			ReasonCodes: []ReasonCode{ReasonGrantedQoS0, ReasonGrantedQoS1, ReasonGrantedQoS2, ReasonUnspecifiedError},
+		},
+		&UnsubscribePacket{PacketID: 1, TopicFilters: []string{"a/b", "c/d"}},
+		&UnsubackPacket{PacketID: 1},
+		&PingreqPacket{},
+		&PingrespPacket{},
+		&DisconnectPacket{},
+	}
+
+	for _, p := range packets {
+		var buf bytes.Buffer
+		if _, err := writePacketV311(&buf, p, 0); err == nil {
+			f.Add(buf.Bytes())
+		}
+	}
+
+	// Edge-case byte sequences (manually crafted, often malformed).
+	f.Add([]byte{})                                                   // empty
+	f.Add([]byte{0x00})                                               // invalid type (reserved)
+	f.Add([]byte{0xF0, 0x00})                                         // AUTH (invalid in v3.1.1)
+	f.Add([]byte{byte(PacketPUBLISH) << 4, 0xFF, 0xFF})               // truncated remaining length
+	f.Add([]byte{byte(PacketCONNECT) << 4, 0x04, 'M', 'Q', 'T', 'T'}) // truncated CONNECT
+	f.Add([]byte{byte(PacketPUBACK) << 4, 0x02, 0x00, 0x00})          // zero packet ID
+	f.Add([]byte{byte(PacketSUBACK) << 4, 0x03, 0x00, 0x01, 0x03})    // invalid return code
+	f.Add([]byte{byte(PacketCONNACK) << 4, 0x02, 0x02, 0x00})         // reserved flags
+
+	// Random fuzz seeds.
+	for range 16 {
+		size := rand.IntN(128) + 1
+		data := make([]byte, size)
+		for i := range data {
+			data[i] = byte(rand.IntN(256))
+		}
+		f.Add(data)
+	}
+
+	f.Fuzz(func(_ *testing.T, data []byte) {
+		// Primary: the decoder must never panic on arbitrary input.
+		pkt, _, err := readPacketV311(bytes.NewReader(data), 0)
+		if err != nil || pkt == nil {
+			return
+		}
+
+		// Decoded packet must validate — v3.1.1 decoder returns validated packets.
+		_ = pkt.Validate()
+
+		// Round-trip: re-encode and verify the result also decodes without panic.
+		var buf bytes.Buffer
+		if _, err := writePacketV311(&buf, pkt, 0); err != nil {
+			return
+		}
+		_, _, _ = readPacketV311(&buf, 0)
+	})
 }

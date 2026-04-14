@@ -599,7 +599,7 @@ func formatSize(size int) string {
 	}
 }
 
-func FuzreadPacket(f *testing.F) {
+func FuzzReadPacket(f *testing.F) {
 	// Add valid packet seeds
 	packets := []Packet{
 		&ConnectPacket{ClientID: "test", CleanStart: true},
