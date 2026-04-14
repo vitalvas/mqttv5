@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0](https://github.com/vitalvas/mqttv5/compare/v0.5.1...v0.6.0) (2026-04-14)
+
+
+### Features
+
+* add MQTT 3.1.1 backward compatibility ([8bdc14c](https://github.com/vitalvas/mqttv5/commit/8bdc14cb136b0011f98cbc805a8b7e6bb827a0fd))
+
+
+### Bug Fixes
+
+* address production-readiness issues in server ([8682866](https://github.com/vitalvas/mqttv5/commit/868286686d93e9705cba24409851b232401160d0))
+* resolve exported methods on private structs policy violations ([9bc623a](https://github.com/vitalvas/mqttv5/commit/9bc623a8d64ea0f262b31ea291ce78cbfb20a9bb))
+* resolve Server.Close() race between done signal and client disconnect ([c326004](https://github.com/vitalvas/mqttv5/commit/c32600445c2700a8ec78649c29a92b1666564b4f))
+* restore session subscriptions before sending CONNACK ([d8ee915](https://github.com/vitalvas/mqttv5/commit/d8ee915d7fc704ce709f7646a1e21df8b2efffc5))
+
 ## [0.5.1](https://github.com/vitalvas/mqttv5/compare/v0.5.0...v0.5.1) (2026-04-08)
 
 
