@@ -37,7 +37,9 @@ type Session interface {
 	NextPacketID() uint16
 
 	// AddPendingMessage adds a message awaiting acknowledgment.
-	AddPendingMessage(packetID uint16, msg *Message)
+	// Returns false if the session's pending-message queue is full and the
+	// message was dropped; callers can use this signal to report the drop.
+	AddPendingMessage(packetID uint16, msg *Message) bool
 
 	// GetPendingMessage retrieves a pending message by packet ID.
 	GetPendingMessage(packetID uint16) (*Message, bool)
@@ -67,7 +69,9 @@ type Session interface {
 	UpdateLastActivity()
 
 	// AddInflightQoS1 adds a QoS 1 message awaiting PUBACK.
-	AddInflightQoS1(packetID uint16, msg *QoS1Message)
+	// Returns false if the session's QoS 1 inflight queue is full and the
+	// message was dropped.
+	AddInflightQoS1(packetID uint16, msg *QoS1Message) bool
 
 	// GetInflightQoS1 retrieves a QoS 1 inflight message.
 	GetInflightQoS1(packetID uint16) (*QoS1Message, bool)
@@ -79,7 +83,9 @@ type Session interface {
 	InflightQoS1() map[uint16]*QoS1Message
 
 	// AddInflightQoS2 adds a QoS 2 message in the publish flow.
-	AddInflightQoS2(packetID uint16, msg *QoS2Message)
+	// Returns false if the session's QoS 2 inflight queue is full and the
+	// message was dropped.
+	AddInflightQoS2(packetID uint16, msg *QoS2Message) bool
 
 	// GetInflightQoS2 retrieves a QoS 2 inflight message.
 	GetInflightQoS2(packetID uint16) (*QoS2Message, bool)

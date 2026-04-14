@@ -2,7 +2,9 @@ package mqttv5
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -12,7 +14,30 @@ import (
 	"time"
 )
 
-var authCtx = context.Background()
+// generateServerClientID returns an unguessable client ID for an anonymous
+// CONNECT (empty ClientID + CleanStart=true). Using time alone would let
+// an observer predict the next assigned ID and race the real client into
+// a session-takeover collision.
+func generateServerClientID() string {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		// Extremely unlikely; fall back to time-based ID rather than panic.
+		return fmt.Sprintf("auto-%d", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("auto-%s", hex.EncodeToString(buf[:]))
+}
+
+// authContext returns a per-request context for authentication and
+// authorization callbacks. When the server is configured with a non-zero
+// authTimeout, the context carries that deadline so a hung authenticator
+// cannot pile up goroutines indefinitely. The returned cancel function
+// MUST be called by the caller to release resources.
+func (s *Server) authContext() (context.Context, context.CancelFunc) {
+	if s.config.authTimeout > 0 {
+		return context.WithTimeout(context.Background(), s.config.authTimeout)
+	}
+	return context.WithCancel(context.Background())
+}
 
 // setupSession handles session creation/retrieval based on CleanStart flag.
 // Returns true if an existing session was found.
@@ -95,6 +120,9 @@ func (s *Server) validateConnectVersion(connect *ConnectPacket) (uint32, ReasonC
 
 // authenticateClient performs authentication (standard or enhanced).
 func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clientID string, maxPacketSize uint32, logger Logger) authClientResult {
+	ctx, cancel := s.authContext()
+	defer cancel()
+
 	codec := connectCodec(connect)
 	// Check for enhanced authentication (AuthMethod in CONNECT properties)
 	authMethod := connect.Props.GetString(PropAuthenticationMethod)
@@ -141,7 +169,7 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 			tlsState := getTLSConnectionState(conn)
 			var tlsIdentity *TLSIdentity
 			if s.config.tlsIdentityMapper != nil && tlsState != nil {
-				tlsIdentity, _ = s.config.tlsIdentityMapper.MapIdentity(authCtx, tlsState)
+				tlsIdentity, _ = s.config.tlsIdentityMapper.MapIdentity(ctx, tlsState)
 			}
 			return authClientResult{
 				authResult:         authResult,
@@ -161,7 +189,7 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 
 		// Apply TLS identity mapper if configured
 		if s.config.tlsIdentityMapper != nil && actx.TLSConnectionState != nil {
-			identity, err := s.config.tlsIdentityMapper.MapIdentity(authCtx, actx.TLSConnectionState)
+			identity, err := s.config.tlsIdentityMapper.MapIdentity(ctx, actx.TLSConnectionState)
 			if err != nil {
 				logger.Warn("TLS identity mapping failed", LogFields{LogFieldError: err.Error()})
 				// Continue - let authenticator decide how to handle
@@ -169,7 +197,7 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 			actx.TLSIdentity = identity
 		}
 
-		result, err := s.config.auth.Authenticate(authCtx, actx)
+		result, err := s.config.auth.Authenticate(ctx, actx)
 		if err != nil || result == nil || !result.Success {
 			reasonCode := ReasonNotAuthorized
 			if result != nil {
@@ -204,7 +232,7 @@ func (s *Server) authenticateClient(conn net.Conn, connect *ConnectPacket, clien
 	tlsState := getTLSConnectionState(conn)
 	var tlsIdentity *TLSIdentity
 	if s.config.tlsIdentityMapper != nil && tlsState != nil {
-		tlsIdentity, _ = s.config.tlsIdentityMapper.MapIdentity(authCtx, tlsState)
+		tlsIdentity, _ = s.config.tlsIdentityMapper.MapIdentity(ctx, tlsState)
 	}
 	return authClientResult{
 		namespace:          DefaultNamespace,
@@ -441,12 +469,28 @@ func (s *Server) acceptLoop(listener net.Listener) {
 			continue
 		}
 
+		// Apply a read deadline immediately, in the accept loop, rather than
+		// inside the handler goroutine. Under goroutine-scheduling pressure
+		// there is a window between Accept() returning and the handler's
+		// first SetReadDeadline; during that window a misbehaving peer can
+		// hold an open socket without any deadline. handleConnection will
+		// refresh the deadline to its own CONNECT-read value.
+		_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+
 		s.wg.Add(1)
 		go s.handleConnection(conn)
 	}
 }
 
 // Close stops the server.
+//
+// Shutdown sequence:
+//  1. Close all listeners so new connections are rejected immediately.
+//  2. Best-effort send DISCONNECT to each connected client in parallel
+//     with a bounded timeout, then force-close the connection. Running
+//     disconnects in parallel prevents one stuck peer from stalling the
+//     whole shutdown.
+//  3. Signal background goroutines via s.done and wait for them.
 func (s *Server) Close() error {
 	if !s.running.CompareAndSwap(true, false) {
 		return nil
@@ -457,10 +501,7 @@ func (s *Server) Close() error {
 		listener.Close()
 	}
 
-	// Disconnect all clients before signaling done.
-	// This ensures the DISCONNECT packet is written and the connection is
-	// closed cleanly, so clientLoop exits via the ReadPacket error path
-	// (which handles cleanup) rather than the s.done select case.
+	// Snapshot connected clients so we don't hold s.mu while disconnecting.
 	s.mu.RLock()
 	clients := make([]*ServerClient, 0, len(s.clients))
 	for _, client := range s.clients {
@@ -468,9 +509,19 @@ func (s *Server) Close() error {
 	}
 	s.mu.RUnlock()
 
+	// Disconnect all clients in parallel so a single stuck peer cannot
+	// block shutdown. Each Disconnect is bounded by the client's write
+	// timeout (see ServerClient.Disconnect) and ends with conn.Close(),
+	// so this returns promptly even if a peer is unresponsive.
+	var dwg sync.WaitGroup
 	for _, client := range clients {
-		client.Disconnect(ReasonServerShuttingDown)
+		dwg.Add(1)
+		go func(c *ServerClient) {
+			defer dwg.Done()
+			_ = c.Disconnect(ReasonServerShuttingDown)
+		}(client)
 	}
+	dwg.Wait()
 
 	// Signal all goroutines to stop (accept loops, etc.)
 	close(s.done)
@@ -1035,7 +1086,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 			return
 		}
 		// CleanStart=true with empty ClientID: assign one
-		clientID = fmt.Sprintf("auto-%d", time.Now().UnixNano())
+		clientID = generateServerClientID()
 		assignedClientID = clientID
 		connect.ClientID = clientID
 	}
@@ -1087,6 +1138,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	// Create client with the effective max packet size and namespace
 	client := NewServerClient(conn, connect, clientMaxPacketSize, namespace)
+	client.SetWriteTimeout(s.config.writeTimeout)
 
 	// Apply CONNECT properties from client (v5 only)
 	// Receive Maximum: how many QoS 1/2 messages server can send to this client concurrently
@@ -1203,11 +1255,6 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 		s.config.metrics.ConnectionClosed()
 		logger.Info("client disconnected", nil)
 
-		// Disconnect callbacks
-		for _, fn := range s.config.onDisconnect {
-			fn(client)
-		}
-
 		// Trigger will if not clean disconnect
 		// Clean disconnect is when DISCONNECT packet was received from client
 		if client.IsCleanDisconnect() {
@@ -1219,7 +1266,9 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 			logger.Debug("will message triggered", nil)
 		}
 
-		// Handle session expiry
+		// Handle session expiry BEFORE firing OnDisconnect callbacks so that
+		// observers inspecting the session store see the final state (e.g.,
+		// for CleanSession=true, the session is already gone).
 		if session := client.Session(); session != nil {
 			expiryInterval := client.SessionExpiryInterval()
 			switch {
@@ -1237,6 +1286,13 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 				// Delete session and subscriptions immediately per MQTT v5 spec
 				s.config.sessionStore.Delete(namespace, clientID)
 			}
+		}
+
+		// Disconnect callbacks — fired last so the client is fully torn down
+		// (removed from the server map AND its session has been reconciled)
+		// by the time observers see the signal.
+		for _, fn := range s.config.onDisconnect {
+			fn(client)
 		}
 	}()
 
@@ -1561,7 +1617,9 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 			TLSConnectionState: client.TLSConnectionState(),
 			TLSIdentity:        client.TLSIdentity(),
 		}
-		result, err := s.config.authz.Authorize(authCtx, azCtx)
+		azContext, cancel := s.authContext()
+		result, err := s.config.authz.Authorize(azContext, azCtx)
+		cancel()
 		if err != nil || result == nil || !result.Allowed {
 			reasonCode := ReasonNotAuthorized
 			if result != nil {
@@ -1637,9 +1695,11 @@ func (s *Server) handlePublish(client *ServerClient, pub *PublishPacket, logger 
 		if !isRetransmit {
 			client.QoS2Tracker().TrackReceive(pub.PacketID, msg)
 
-			// Persist receiver-side QoS 2 state for session resume
+			// Persist receiver-side QoS 2 state for session resume. Best
+			// effort: the in-memory tracker above owns the authoritative
+			// state for this connection.
 			if session := client.Session(); session != nil {
-				session.AddInflightQoS2(pub.PacketID, &QoS2Message{
+				_ = session.AddInflightQoS2(pub.PacketID, &QoS2Message{
 					PacketID:     pub.PacketID,
 					Message:      msg,
 					State:        QoS2ReceivedPublish,
@@ -1795,9 +1855,21 @@ func (s *Server) queueOfflineMessage(namespace, clientID string, msg *Message) {
 	if packetID == 0 {
 		// Packet ID exhaustion - all 65535 IDs are in use
 		// Drop the message as per MQTT v5 spec when resources are exhausted
+		s.config.logger.Warn("dropping offline message: packet ID space exhausted", LogFields{
+			LogFieldClientID:  clientID,
+			LogFieldNamespace: namespace,
+			LogFieldTopic:     msg.Topic,
+		})
 		return
 	}
-	session.AddPendingMessage(packetID, msg)
+	if !session.AddPendingMessage(packetID, msg) {
+		// Session's pending-message queue is full; drop the message.
+		s.config.logger.Warn("dropping offline message: session queue full", LogFields{
+			LogFieldClientID:  clientID,
+			LogFieldNamespace: namespace,
+			LogFieldTopic:     msg.Topic,
+		})
+	}
 }
 
 func (s *Server) handleSubscribe(client *ServerClient, sub *SubscribePacket, logger Logger) {
@@ -1938,7 +2010,9 @@ func (s *Server) authorizeSubscribe(client *ServerClient, subscription Subscript
 		TLSConnectionState: client.TLSConnectionState(),
 		TLSIdentity:        client.TLSIdentity(),
 	}
-	result, err := s.config.authz.Authorize(authCtx, azCtx)
+	azContext, cancel := s.authContext()
+	result, err := s.config.authz.Authorize(azContext, azCtx)
+	cancel()
 	if err != nil || result == nil || !result.Allowed {
 		reasonCode := ReasonNotAuthorized
 		if result != nil {
@@ -2430,6 +2504,9 @@ type enhancedAuthRequest struct {
 // performEnhancedAuth performs enhanced authentication with AUTH packet exchanges.
 // Returns the final EnhancedAuthResult and true if successful, or nil and false if failed.
 func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, req enhancedAuthRequest, logger Logger) (*EnhancedAuthResult, bool) {
+	ctx, cancel := s.authContext()
+	defer cancel()
+
 	clientID := req.clientID
 	authMethod := req.authMethod
 	maxPacketSize := req.maxPacketSize
@@ -2443,7 +2520,7 @@ func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, req 
 	}
 
 	// Start enhanced auth
-	result, err := s.config.enhancedAuth.AuthStart(authCtx, eaCtx)
+	result, err := s.config.enhancedAuth.AuthStart(ctx, eaCtx)
 	if err != nil || result == nil {
 		logger.Warn("enhanced auth start failed", LogFields{
 			"authMethod": authMethod,
@@ -2467,9 +2544,16 @@ func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, req 
 		}
 		authPkt.Props.Merge(&result.Properties)
 
-		if _, err := writePacketRaw(conn, authPkt, maxPacketSize); err != nil {
+		if s.config.writeTimeout > 0 {
+			_ = conn.SetWriteDeadline(time.Now().Add(s.config.writeTimeout))
+		}
+		_, wErr := writePacketRaw(conn, authPkt, maxPacketSize)
+		if s.config.writeTimeout > 0 {
+			_ = conn.SetWriteDeadline(time.Time{})
+		}
+		if wErr != nil {
 			logger.Warn("failed to send AUTH packet", LogFields{
-				LogFieldError: err.Error(),
+				LogFieldError: wErr.Error(),
 			})
 			return nil, false
 		}
@@ -2504,7 +2588,7 @@ func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, req 
 		eaCtx.State = result.State
 
 		// Continue authentication
-		result, err = s.config.enhancedAuth.AuthContinue(authCtx, eaCtx)
+		result, err = s.config.enhancedAuth.AuthContinue(ctx, eaCtx)
 		if err != nil || result == nil {
 			logger.Warn("enhanced auth continue failed", LogFields{
 				"authMethod": authMethod,
@@ -2544,6 +2628,9 @@ func (s *Server) performEnhancedAuth(conn net.Conn, connect *ConnectPacket, req 
 // handleReauth handles re-authentication via AUTH packet after CONNECT.
 // Per MQTT v5.0 spec section 4.12, clients may initiate re-authentication.
 func (s *Server) handleReauth(client *ServerClient, authPkt *AuthPacket, clientKey string, logger Logger) {
+	ctx, cancel := s.authContext()
+	defer cancel()
+
 	conn := client.Conn()
 	authMethod := authPkt.Props.GetString(PropAuthenticationMethod)
 
@@ -2569,7 +2656,7 @@ func (s *Server) handleReauth(client *ServerClient, authPkt *AuthPacket, clientK
 	}
 
 	// Start re-authentication
-	result, err := s.config.enhancedAuth.AuthStart(authCtx, eaCtx)
+	result, err := s.config.enhancedAuth.AuthStart(ctx, eaCtx)
 	if err != nil || result == nil {
 		logger.Warn("re-authentication start failed", LogFields{
 			"authMethod": authMethod,
@@ -2590,9 +2677,16 @@ func (s *Server) handleReauth(client *ServerClient, authPkt *AuthPacket, clientK
 		}
 		respPkt.Props.Merge(&result.Properties)
 
-		if _, err := writePacketRaw(conn, respPkt, client.MaxPacketSize()); err != nil {
+		if s.config.writeTimeout > 0 {
+			_ = conn.SetWriteDeadline(time.Now().Add(s.config.writeTimeout))
+		}
+		_, wErr := writePacketRaw(conn, respPkt, client.MaxPacketSize())
+		if s.config.writeTimeout > 0 {
+			_ = conn.SetWriteDeadline(time.Time{})
+		}
+		if wErr != nil {
 			logger.Warn("failed to send AUTH packet during re-auth", LogFields{
-				LogFieldError: err.Error(),
+				LogFieldError: wErr.Error(),
 			})
 			return
 		}
@@ -2627,7 +2721,7 @@ func (s *Server) handleReauth(client *ServerClient, authPkt *AuthPacket, clientK
 		eaCtx.State = result.State
 
 		// Continue authentication
-		result, err = s.config.enhancedAuth.AuthContinue(authCtx, eaCtx)
+		result, err = s.config.enhancedAuth.AuthContinue(ctx, eaCtx)
 		if err != nil || result == nil {
 			logger.Warn("re-authentication continue failed", LogFields{
 				"authMethod": authMethod,

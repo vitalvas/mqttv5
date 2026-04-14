@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// DefaultSessionMaxQueue is the default cap for per-session message queues
+// (pending, inflight QoS 1, inflight QoS 2). Zero means unlimited, but the
+// full MQTT packet-ID space (65535) already caps in-flight growth; this
+// cap protects memory when operators queue large payloads for offline
+// subscribers.
+const DefaultSessionMaxQueue = 65535
+
 // MemorySession is an in-memory implementation of Session.
 type MemorySession struct {
 	mu              sync.RWMutex
@@ -19,6 +26,9 @@ type MemorySession struct {
 	expiryTime      time.Time
 	createdAt       time.Time
 	lastActivity    time.Time
+	// maxQueue caps the number of entries in each per-session queue.
+	// Zero means unlimited.
+	maxQueue int
 }
 
 // NewMemorySession creates a new in-memory session.
@@ -33,7 +43,17 @@ func NewMemorySession(clientID, namespace string) *MemorySession {
 		inflightQoS2:    make(map[uint16]*QoS2Message),
 		createdAt:       now,
 		lastActivity:    now,
+		maxQueue:        DefaultSessionMaxQueue,
 	}
+}
+
+// SetMaxQueue sets the per-queue cap. Zero disables the cap. The cap is
+// enforced separately for pending messages, QoS 1 inflight, and QoS 2
+// inflight — each queue may hold up to the cap.
+func (s *MemorySession) SetMaxQueue(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.maxQueue = n
 }
 
 func (s *MemorySession) ClientID() string {
@@ -117,10 +137,18 @@ func (s *MemorySession) NextPacketID() uint16 {
 	return 0
 }
 
-func (s *MemorySession) AddPendingMessage(packetID uint16, msg *Message) {
+func (s *MemorySession) AddPendingMessage(packetID uint16, msg *Message) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Allow overwriting an existing entry for the same packet ID without
+	// tripping the cap.
+	if _, exists := s.pendingMessages[packetID]; !exists {
+		if s.maxQueue > 0 && len(s.pendingMessages) >= s.maxQueue {
+			return false
+		}
+	}
 	s.pendingMessages[packetID] = msg
+	return true
 }
 
 func (s *MemorySession) GetPendingMessage(packetID uint16) (*Message, bool) {
@@ -202,10 +230,16 @@ func (s *MemorySession) MatchSubscriptions(topic string) []Subscription {
 	return matched
 }
 
-func (s *MemorySession) AddInflightQoS1(packetID uint16, msg *QoS1Message) {
+func (s *MemorySession) AddInflightQoS1(packetID uint16, msg *QoS1Message) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, exists := s.inflightQoS1[packetID]; !exists {
+		if s.maxQueue > 0 && len(s.inflightQoS1) >= s.maxQueue {
+			return false
+		}
+	}
 	s.inflightQoS1[packetID] = msg
+	return true
 }
 
 func (s *MemorySession) GetInflightQoS1(packetID uint16) (*QoS1Message, bool) {
@@ -235,10 +269,16 @@ func (s *MemorySession) InflightQoS1() map[uint16]*QoS1Message {
 	return msgs
 }
 
-func (s *MemorySession) AddInflightQoS2(packetID uint16, msg *QoS2Message) {
+func (s *MemorySession) AddInflightQoS2(packetID uint16, msg *QoS2Message) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, exists := s.inflightQoS2[packetID]; !exists {
+		if s.maxQueue > 0 && len(s.inflightQoS2) >= s.maxQueue {
+			return false
+		}
+	}
 	s.inflightQoS2[packetID] = msg
+	return true
 }
 
 func (s *MemorySession) GetInflightQoS2(packetID uint16) (*QoS2Message, bool) {

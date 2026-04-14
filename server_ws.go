@@ -1,7 +1,6 @@
 package mqttv5
 
 import (
-	"fmt"
 	"net/http"
 	"time"
 )
@@ -148,7 +147,7 @@ func (s *WSServer) handleWSConn(conn Conn) {
 			return
 		}
 		// CleanStart=true with empty ClientID: assign one
-		clientID = fmt.Sprintf("auto-%d", time.Now().UnixNano())
+		clientID = generateServerClientID()
 		assignedClientID = clientID
 		connect.ClientID = clientID
 	}

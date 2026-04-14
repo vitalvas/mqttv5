@@ -3,6 +3,7 @@ package mqttv5
 import (
 	"crypto/tls"
 	"net"
+	"time"
 )
 
 // Maximum packet size constants for MQTT brokers.
@@ -61,6 +62,8 @@ type serverConfig struct {
 	metrics            MetricsCollector
 	maxPacketSize      uint32
 	maxConnections     int
+	writeTimeout       time.Duration
+	authTimeout        time.Duration
 	keepAliveOverride  uint16
 	topicAliasMax      uint16
 	receiveMaximum     uint16
@@ -100,7 +103,9 @@ func defaultServerConfig() *serverConfig {
 		logger:             NewNoOpLogger(),
 		metrics:            &NoOpMetrics{},
 		maxPacketSize:      MaxPacketSizeDefault,
-		maxConnections:     0, // unlimited
+		maxConnections:     DefaultMaxConnections,
+		writeTimeout:       DefaultWriteTimeout,
+		authTimeout:        DefaultAuthTimeout,
 		receiveMaximum:     65535,
 		allowedVersions:    map[ProtocolVersion]bool{ProtocolV5: true}, // v5 only by default
 		// Default capabilities (all features enabled)
@@ -206,11 +211,47 @@ func WithServerMaxPacketSize(size uint32) ServerOption {
 	}
 }
 
+// DefaultMaxConnections is the default ceiling on concurrent client
+// connections per server. Chosen to prevent accidental file-descriptor
+// exhaustion on a default configuration; raise it explicitly via
+// WithMaxConnections for large deployments.
+const DefaultMaxConnections = 10000
+
+// DefaultWriteTimeout is the default per-packet write deadline applied
+// on the server side. Protects against slow/stuck consumers that would
+// otherwise hold the per-client write mutex (and cascade into publish
+// and accept paths) indefinitely.
+const DefaultWriteTimeout = 30 * time.Second
+
 // WithMaxConnections sets the maximum number of concurrent connections.
-// 0 means unlimited.
+// Pass 0 to disable the limit (unlimited).
 func WithMaxConnections(n int) ServerOption {
 	return func(c *serverConfig) {
 		c.maxConnections = n
+	}
+}
+
+// WithServerWriteTimeout sets the per-packet write deadline applied when the
+// server sends a packet to a client. Zero disables the deadline.
+// The default is DefaultWriteTimeout.
+func WithServerWriteTimeout(d time.Duration) ServerOption {
+	return func(c *serverConfig) {
+		c.writeTimeout = d
+	}
+}
+
+// DefaultAuthTimeout bounds the time an Authenticator, EnhancedAuthenticator,
+// Authorizer, or TLSIdentityMapper callback may run before the server
+// gives up. Without this, a hung external auth system would let goroutines
+// accumulate unboundedly.
+const DefaultAuthTimeout = 15 * time.Second
+
+// WithAuthTimeout sets the deadline applied to auth and authorization
+// callbacks. Zero disables the deadline.
+// The default is DefaultAuthTimeout.
+func WithAuthTimeout(d time.Duration) ServerOption {
+	return func(c *serverConfig) {
+		c.authTimeout = d
 	}
 }
 

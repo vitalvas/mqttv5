@@ -34,6 +34,13 @@ type ServerClient struct {
 	tlsConnectionState    *tls.ConnectionState
 	tlsIdentity           *TLSIdentity
 
+	// writeTimeout bounds how long a single packet write may take. Zero
+	// disables the deadline (writes block until the kernel completes or
+	// the connection is closed). Non-zero values protect the server from
+	// slow or stuck consumers that would otherwise hold writeMu indefinitely
+	// and cascade into the publish/accept paths.
+	writeTimeout time.Duration
+
 	// Per-client stats
 	connectedAt  time.Time
 	messagesIn   atomic.Int64
@@ -112,13 +119,34 @@ func (c *ServerClient) ReadPacket(maxPacketSize uint32) (Packet, int, error) {
 	return c.getCodec().readPacket(c.conn, maxPacketSize)
 }
 
+// SetWriteTimeout configures the per-packet write deadline applied in
+// writePacketWithMetrics. Zero disables the deadline.
+func (c *ServerClient) SetWriteTimeout(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writeTimeout = d
+}
+
 // writePacketWithMetrics sends a packet using the version-aware codec and returns
 // the number of bytes written. Used internally by the server for metrics tracking.
+//
+// When a non-zero write timeout is configured, SetWriteDeadline is applied
+// before the write and cleared afterwards so that a stuck consumer cannot
+// hold writeMu indefinitely and cascade into the publish/accept paths.
 func (c *ServerClient) writePacketWithMetrics(packet Packet) (int, error) {
+	c.mu.RLock()
+	timeout := c.writeTimeout
+	c.mu.RUnlock()
+
 	c.writeMu.Lock()
-	n, err := c.getCodec().writePacket(c.conn, packet, c.maxPacketSize)
-	c.writeMu.Unlock()
-	return n, err
+	defer c.writeMu.Unlock()
+
+	if timeout > 0 {
+		_ = c.conn.SetWriteDeadline(time.Now().Add(timeout))
+		defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
+	}
+
+	return c.getCodec().writePacket(c.conn, packet, c.maxPacketSize)
 }
 
 // Session returns the client's session.
@@ -339,9 +367,12 @@ func (c *ServerClient) Send(msg *Message) error {
 				RetryTimeout: c.qos1Tracker.RetryTimeout(),
 			}
 			c.qos1Tracker.Track(pub.PacketID, msg)
-			// Persist to session for recovery on reconnect
+			// Persist to session for recovery on reconnect. If the session
+			// queue is full the in-memory tracker still holds the record,
+			// so online delivery keeps working; only resume-after-reconnect
+			// loses this message.
 			if c.session != nil {
-				c.session.AddInflightQoS1(pub.PacketID, qos1Msg)
+				_ = c.session.AddInflightQoS1(pub.PacketID, qos1Msg)
 			}
 		case QoS2:
 			qos2Msg := &QoS2Message{
@@ -353,9 +384,10 @@ func (c *ServerClient) Send(msg *Message) error {
 				IsSender:     true,
 			}
 			c.qos2Tracker.TrackSend(pub.PacketID, msg)
-			// Persist to session for recovery on reconnect
+			// Persist to session for recovery on reconnect. Same policy as
+			// QoS 1 above: online delivery is unaffected by a full queue.
 			if c.session != nil {
-				c.session.AddInflightQoS2(pub.PacketID, qos2Msg)
+				_ = c.session.AddInflightQoS2(pub.PacketID, qos2Msg)
 			}
 		}
 	}
@@ -454,8 +486,18 @@ func (c *ServerClient) Disconnect(reason ReasonCode) error {
 			ReasonCode: reason,
 		}
 
+		c.mu.RLock()
+		timeout := c.writeTimeout
+		c.mu.RUnlock()
+
 		c.writeMu.Lock()
-		c.getCodec().writePacket(c.conn, disconnect, c.maxPacketSize)
+		if timeout > 0 {
+			_ = c.conn.SetWriteDeadline(time.Now().Add(timeout))
+		}
+		_, _ = c.getCodec().writePacket(c.conn, disconnect, c.maxPacketSize)
+		if timeout > 0 {
+			_ = c.conn.SetWriteDeadline(time.Time{})
+		}
 		c.writeMu.Unlock()
 	}
 

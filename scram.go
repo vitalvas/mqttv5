@@ -208,7 +208,11 @@ func (a *SCRAMAuthenticator) AuthStart(ctx context.Context, authCtx *EnhancedAut
 	}
 
 	// Generate server nonce
-	serverNonce := fmt.Sprintf("%s%s", clientNonce, generateScramNonce())
+	noncePart, err := generateScramNonce()
+	if err != nil {
+		return nil, err
+	}
+	serverNonce := fmt.Sprintf("%s%s", clientNonce, noncePart)
 
 	// Build server-first-message
 	saltB64 := base64.StdEncoding.EncodeToString(creds.Salt)
@@ -419,11 +423,13 @@ func parseScramClientFinal(msg string) (channelBinding, nonce, proof string) {
 }
 
 // generateScramNonce creates a cryptographically secure random nonce.
-func generateScramNonce() string {
+// Returns an error when the system's CSPRNG fails; callers must abort
+// authentication rather than continue with a predictable nonce, since a
+// predictable nonce defeats SCRAM's replay protection.
+func generateScramNonce() (string, error) {
 	b := make([]byte, 18)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to less secure but functional nonce
-		return "fallback-nonce"
+		return "", fmt.Errorf("scram: generate nonce: %w", err)
 	}
-	return base64.StdEncoding.EncodeToString(b)
+	return base64.StdEncoding.EncodeToString(b), nil
 }

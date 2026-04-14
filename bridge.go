@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -77,6 +76,9 @@ type BridgeConfig struct {
 	CleanStart bool
 	// KeepAlive interval in seconds.
 	KeepAlive uint16
+	// Logger routes bridge events through the operator's log pipeline.
+	// When nil, the bridge falls back to the Server's configured Logger.
+	Logger Logger
 }
 
 // bridgeTopicCached holds pre-computed topic prefix data.
@@ -96,6 +98,7 @@ type Bridge struct {
 	namespace       string     // effective namespace for message isolation
 	bridgeProp      StringPair // cached bridge property for loop detection
 	cachedTopics    []bridgeTopicCached
+	logger          Logger
 	running         atomic.Bool
 	initialConnDone atomic.Bool // tracks if initial connection is complete
 	mu              sync.Mutex
@@ -131,6 +134,16 @@ func NewBridge(server *Server, config BridgeConfig) (*Bridge, error) {
 		}
 	}
 
+	// Pick the logger: explicit config wins, else the server's logger, else
+	// a no-op logger so log calls never panic.
+	logger := config.Logger
+	if logger == nil && server != nil && server.config != nil {
+		logger = server.config.logger
+	}
+	if logger == nil {
+		logger = NewNoOpLogger()
+	}
+
 	return &Bridge{
 		config:       config,
 		server:       server,
@@ -138,6 +151,7 @@ func NewBridge(server *Server, config BridgeConfig) (*Bridge, error) {
 		namespace:    namespace,
 		bridgeProp:   StringPair{Key: bridgePropertyKey, Value: id},
 		cachedTopics: cached,
+		logger:       logger,
 	}, nil
 }
 
@@ -228,16 +242,25 @@ func (b *Bridge) handleClientEvent(event error) {
 		// Only re-subscribe on reconnection, not initial connect
 		// (Start() already sets up subscriptions for the initial connection)
 		if b.initialConnDone.Load() {
-			log.Printf("bridge %s: reconnected to remote broker", b.id)
+			b.logger.Info("bridge reconnected to remote broker", LogFields{"bridge": b.id})
 			if err := b.setupSubscriptions(); err != nil {
-				log.Printf("bridge %s: failed to re-subscribe after reconnect: %v", b.id, err)
+				b.logger.Warn("bridge re-subscribe after reconnect failed", LogFields{
+					"bridge":      b.id,
+					LogFieldError: err.Error(),
+				})
 			}
 		}
 	case *ConnectionLostError:
-		log.Printf("bridge %s: connection lost: %v", b.id, e.Cause)
+		b.logger.Warn("bridge connection lost", LogFields{
+			"bridge":      b.id,
+			LogFieldError: e.Cause.Error(),
+		})
 		b.server.Metrics().BridgeError()
 	case *DisconnectError:
-		log.Printf("bridge %s: disconnected: %s", b.id, e.ReasonCode)
+		b.logger.Info("bridge disconnected", LogFields{
+			"bridge":           b.id,
+			LogFieldReasonCode: e.ReasonCode.String(),
+		})
 	}
 }
 
@@ -331,7 +354,11 @@ func (b *Bridge) forwardToLocal(msg *Message, remotePrefix, localPrefix string) 
 	// Publish to local server
 	if err := b.server.Publish(fwdMsg); err != nil {
 		b.server.Metrics().BridgeError()
-		log.Printf("bridge: failed to forward message to local: %v", err)
+		b.logger.Warn("bridge forward to local failed", LogFields{
+			"bridge":      b.id,
+			LogFieldTopic: newTopic,
+			LogFieldError: err.Error(),
+		})
 		return
 	}
 	b.server.Metrics().BridgeForwardedToLocal()
@@ -387,7 +414,11 @@ func (b *Bridge) ForwardToRemote(msg *Message) {
 
 			if err := b.client.Publish(fwdMsg); err != nil {
 				b.server.Metrics().BridgeError()
-				log.Printf("bridge: failed to forward message to remote: %v", err)
+				b.logger.Warn("bridge forward to remote failed", LogFields{
+					"bridge":      b.id,
+					LogFieldTopic: newTopic,
+					LogFieldError: err.Error(),
+				})
 				return
 			}
 			b.server.Metrics().BridgeForwardedToRemote()

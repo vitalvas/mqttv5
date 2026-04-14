@@ -94,6 +94,19 @@ func TestComputeSCRAMCredentials(t *testing.T) {
 	assert.Len(t, creds.StoredKey, 32)
 }
 
+func TestGenerateScramNonce(t *testing.T) {
+	n1, err := generateScramNonce()
+	require.NoError(t, err)
+	n2, err := generateScramNonce()
+	require.NoError(t, err)
+
+	// Base64 of 18 bytes = 24 chars.
+	assert.Len(t, n1, 24)
+	assert.Len(t, n2, 24)
+	// Nonces must differ — identical nonces would mean replay-protection failure.
+	assert.NotEqual(t, n1, n2)
+}
+
 func TestExtractScramBareMessage(t *testing.T) {
 	t.Run("with gs2 header", func(t *testing.T) {
 		got := extractScramBareMessage("n,,n=user,r=nonce")

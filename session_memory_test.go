@@ -272,6 +272,58 @@ func TestMemorySession(t *testing.T) {
 	})
 }
 
+func TestMemorySessionMaxQueue(t *testing.T) {
+	t.Run("pending messages capped", func(t *testing.T) {
+		session := NewMemorySession("c", testNS)
+		session.SetMaxQueue(3)
+
+		msg := &Message{Topic: "t"}
+		assert.True(t, session.AddPendingMessage(1, msg))
+		assert.True(t, session.AddPendingMessage(2, msg))
+		assert.True(t, session.AddPendingMessage(3, msg))
+
+		// Over cap: dropped.
+		assert.False(t, session.AddPendingMessage(4, msg))
+
+		// Overwriting an existing ID is allowed even at cap.
+		assert.True(t, session.AddPendingMessage(1, msg))
+
+		// After removing one, a new ID fits again.
+		session.RemovePendingMessage(2)
+		assert.True(t, session.AddPendingMessage(4, msg))
+	})
+
+	t.Run("qos1 inflight capped", func(t *testing.T) {
+		session := NewMemorySession("c", testNS)
+		session.SetMaxQueue(2)
+
+		qm := &QoS1Message{}
+		assert.True(t, session.AddInflightQoS1(1, qm))
+		assert.True(t, session.AddInflightQoS1(2, qm))
+		assert.False(t, session.AddInflightQoS1(3, qm))
+	})
+
+	t.Run("qos2 inflight capped", func(t *testing.T) {
+		session := NewMemorySession("c", testNS)
+		session.SetMaxQueue(2)
+
+		qm := &QoS2Message{}
+		assert.True(t, session.AddInflightQoS2(1, qm))
+		assert.True(t, session.AddInflightQoS2(2, qm))
+		assert.False(t, session.AddInflightQoS2(3, qm))
+	})
+
+	t.Run("zero cap disables enforcement", func(t *testing.T) {
+		session := NewMemorySession("c", testNS)
+		session.SetMaxQueue(0)
+
+		msg := &Message{Topic: "t"}
+		for i := uint16(1); i <= 100; i++ {
+			assert.True(t, session.AddPendingMessage(i, msg))
+		}
+	})
+}
+
 func TestMemorySessionStore(t *testing.T) {
 	t.Run("create and get", func(t *testing.T) {
 		store := NewMemorySessionStore()
