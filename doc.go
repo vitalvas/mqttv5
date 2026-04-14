@@ -91,8 +91,8 @@
 // A reference implementation is provided with MemorySession and MemorySessionStore:
 //
 //	store := mqttv5.NewMemorySessionStore()
-//	session := mqttv5.NewMemorySession("client-id")
-//	store.Create(session)
+//	session := mqttv5.NewMemorySession("client-id", mqttv5.DefaultNamespace)
+//	store.Create(mqttv5.DefaultNamespace, session)
 //
 // Sessions track subscriptions, pending messages, and packet IDs:
 //

@@ -25,13 +25,15 @@ All options for configuring an MQTT server/broker.
 | `WithServerAuthz(authz)` | nil | Authorizer interface |
 | `WithTLSIdentityMapper(mapper)` | nil | TLS certificate identity mapper |
 | `WithNamespaceValidator(fn)` | default | Namespace validation function |
+| `WithAuthTimeout(d)` | 15s | Deadline for auth/authz callbacks (0 disables) |
 
 ## Limits
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `WithServerMaxPacketSize(size)` | 4MB | Maximum packet size |
-| `WithMaxConnections(n)` | 0 | Max connections (0 unlimited) |
+| `WithMaxConnections(n)` | 10000 | Max concurrent connections (0 disables the cap) |
+| `WithServerWriteTimeout(d)` | 30s | Per-packet server-side write deadline (0 disables) |
 | `WithServerReceiveMaximum(n)` | 65535 | Max inflight QoS 1/2 |
 | `WithServerTopicAliasMax(n)` | 0 | Max topic aliases |
 | `WithServerKeepAlive(sec)` | 0 | Override client keep-alive |
