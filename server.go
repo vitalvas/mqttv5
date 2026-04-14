@@ -1139,6 +1139,20 @@ func (s *Server) handleConnection(conn net.Conn) {
 		s.wills.CancelPending(clientKey)
 	}
 
+	// Restore subscriptions from session before CONNACK. Once we announce
+	// SessionPresent=true the client is entitled to assume its prior
+	// subscriptions are active, so they must be live in the subscription
+	// manager before any publisher can race ahead of us.
+	if sessionPresent {
+		session := client.Session()
+		if session != nil {
+			for _, sub := range session.Subscriptions() {
+				s.subs.Subscribe(clientID, namespace, sub)
+				s.config.metrics.SubscriptionAdded()
+			}
+		}
+	}
+
 	// Build CONNACK with all properties
 	connack := s.buildConnack(sessionPresent, authResult, assignedClientID, effectiveKeepAlive)
 
@@ -1158,17 +1172,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 	// Callbacks
 	for _, fn := range s.config.onConnect {
 		fn(client)
-	}
-
-	// Restore subscriptions from session
-	if sessionPresent {
-		session := client.Session()
-		if session != nil {
-			for _, sub := range session.Subscriptions() {
-				s.subs.Subscribe(clientID, namespace, sub)
-				s.config.metrics.SubscriptionAdded()
-			}
-		}
 	}
 
 	// Restore and resend inflight QoS messages from session
