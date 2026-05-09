@@ -12,7 +12,7 @@
 //   - Complete properties system (42 property identifiers)
 //   - QoS 0, 1, 2 message flows with state machines
 //   - Topic matching with wildcard support (+, #)
-//   - Transport: TCP, TLS, WebSocket, WSS, Unix Socket, QUIC
+//   - Transport: TCP, TLS, WebSocket, WSS, Unix Socket, QUIC (opt-in via -tags quic)
 //   - Pluggable interfaces for session, authentication, and clustering
 //
 // # Packet Types

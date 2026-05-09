@@ -1,4 +1,7 @@
+//go:build quic
+
 // Package main demonstrates MQTT v5.0 communication over QUIC transport.
+// Build with: go build -tags quic ./examples/quic_transport
 package main
 
 import (

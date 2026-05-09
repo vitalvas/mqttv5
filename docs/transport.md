@@ -13,6 +13,8 @@ Supported transport protocols for MQTT v5.0 connections.
 | Unix Socket | `unix:///path/to/sock` | `NewUnixListener(...)` | No | N/A |
 | QUIC | `quic://host:port` | `NewQUICListener(...)` | Yes | N/A |
 
+QUIC requires the `quic` build tag (see [QUIC](#quic) below).
+
 ## TCP
 
 ```go
@@ -93,6 +95,16 @@ srv := mqttv5.NewServer(mqttv5.WithListener(listener))
 ## QUIC
 
 QUIC requires TLS 1.3 with ALPN protocol "mqtt".
+
+QUIC support is opt-in via the `quic` build tag to avoid pulling the
+`github.com/quic-go/quic-go` dependency into builds that don't need it.
+Without the tag, `mqttv5.Dial("quic://...")` and `mqttv5.NewQUICListener(...)`
+return `mqttv5.ErrQUICNotEnabled`.
+
+```bash
+go build -tags quic ./...
+go test  -tags quic ./...
+```
 
 ```go
 // Client

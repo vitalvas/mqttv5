@@ -1,18 +1,16 @@
+//go:build quic
+
 package mqttv5
 
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/quic-go/quic-go"
 )
-
-// ErrTLSRequired is returned when TLS configuration is required but not provided.
-var ErrTLSRequired = errors.New("TLS configuration is required for QUIC")
 
 // QUICConn wraps a QUIC stream to implement net.Conn.
 type QUICConn struct {

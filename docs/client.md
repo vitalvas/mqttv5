@@ -195,6 +195,9 @@ client, _ := mqttv5.Dial(
 
 ### QUIC
 
+Requires the `quic` build tag (`go build -tags quic`); otherwise `Dial` returns
+`mqttv5.ErrQUICNotEnabled`. See [transport.md](transport.md#quic).
+
 ```go
 client, _ := mqttv5.Dial(
     mqttv5.WithServers("quic://localhost:8883"),

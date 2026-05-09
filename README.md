@@ -15,7 +15,7 @@ Implements the [MQTT Version 5.0](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqt
 - Multi-tenancy with namespace isolation
 - Message interceptors (producer/consumer)
 - Broker bridging with P2MP support
-- Transport: TCP, TLS, WebSocket, WSS, Unix Socket, QUIC
+- Transport: TCP, TLS, WebSocket, WSS, Unix Socket, QUIC (opt-in via `-tags quic`)
 - Pluggable authentication and authorization
 - mTLS with certificate identity mapping
 - Session persistence interface
@@ -169,6 +169,14 @@ client, _ := mqttv5.Dial(
 ```
 
 ### QUIC
+
+QUIC support is opt-in to keep the `github.com/quic-go/quic-go` dependency out
+of default builds. Build (and test) with `-tags quic`; without it, the QUIC
+constructors return `mqttv5.ErrQUICNotEnabled`.
+
+```bash
+go build -tags quic ./...
+```
 
 ```go
 client, _ := mqttv5.Dial(

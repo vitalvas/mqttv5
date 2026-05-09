@@ -1,4 +1,7 @@
+//go:build quic
+
 // Package main demonstrates an MQTT v5.0 client connecting via QUIC transport.
+// Build with: go build -tags quic ./examples/quic_client
 package main
 
 import (
