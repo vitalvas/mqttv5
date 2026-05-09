@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/vitalvas/mqttv5/compare/v0.6.0...v0.7.0) (2026-05-09)
+
+
+### Features
+
+* make QUIC transport opt-in via build tag ([64aa90d](https://github.com/vitalvas/mqttv5/commit/64aa90d3b71715c5f7e4d9458184f40a43ab0700))
+
 ## [0.6.0](https://github.com/vitalvas/mqttv5/compare/v0.5.1...v0.6.0) (2026-04-14)
 
 
