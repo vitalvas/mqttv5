@@ -70,6 +70,29 @@ All options for configuring an MQTT client.
 |--------|---------|-------------|
 | `WithEnhancedAuthentication(auth)` | - | SASL-style authenticator |
 
+### SCRAM
+
+`NewClientSCRAMAuthenticator(hash, username, password)` returns a
+`ClientEnhancedAuthenticator` that performs SCRAM-SHA-1, SCRAM-SHA-256, or
+SCRAM-SHA-512. The client verifies the server's signature on success; a
+mismatch fails the connection with `ErrSCRAMInvalidServerSignature`.
+
+```go
+auth := mqttv5.NewClientSCRAMAuthenticator(
+    mqttv5.SCRAMHashSHA256,
+    "alice",
+    "alice-password",
+)
+
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("tcp://localhost:1883"),
+    mqttv5.WithEnhancedAuthentication(auth),
+)
+```
+
+See [SCRAM documentation](scram.md) for mechanism choice, credential storage,
+and the full handshake.
+
 ## Events
 
 | Option | Default | Description |

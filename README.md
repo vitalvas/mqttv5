@@ -265,6 +265,48 @@ srv := mqttv5.NewServer(
 )
 ```
 
+## SCRAM Enhanced Authentication
+
+Mutual challenge-response authentication over the MQTT v5 AUTH packet.
+Passwords never travel over the wire; both peers prove knowledge of the
+credentials. SCRAM-SHA-1, SCRAM-SHA-256, and SCRAM-SHA-512 are supported.
+
+### Broker
+
+```go
+lookup := mqttv5.SCRAMCredentialLookupFunc(
+    func(_ context.Context, username string) (*mqttv5.SCRAMCredentials, error) {
+        return userStore[username], nil
+    },
+)
+
+auth := mqttv5.NewSCRAMAuthenticator(lookup, mqttv5.SCRAMHashSHA256)
+
+srv := mqttv5.NewServer(
+    mqttv5.WithListener(listener),
+    mqttv5.WithEnhancedAuth(auth),
+)
+```
+
+Pre-compute credentials when a user is created (`ComputeSCRAMCredentials`); the
+broker stores only `StoredKey`, `ServerKey`, salt, and iteration count.
+
+### Client
+
+```go
+auth := mqttv5.NewClientSCRAMAuthenticator(
+    mqttv5.SCRAMHashSHA256, "alice", "alice-password",
+)
+
+client, _ := mqttv5.Dial(
+    mqttv5.WithServers("tcp://localhost:1883"),
+    mqttv5.WithEnhancedAuthentication(auth),
+)
+```
+
+See [SCRAM documentation](docs/scram.md) for mechanism choice, credential
+storage, migration, and the full handshake.
+
 ## Authorization
 
 Called on every PUBLISH and SUBSCRIBE operation to check if the action is allowed:

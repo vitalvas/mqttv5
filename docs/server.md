@@ -153,6 +153,49 @@ srv := mqttv5.NewServer(
 )
 ```
 
+### SCRAM Authentication
+
+`NewSCRAMAuthenticator(lookup, hashes...)` performs SCRAM-SHA-1, SCRAM-SHA-256,
+or SCRAM-SHA-512 over the MQTT v5 AUTH packet exchange. The lookup callback
+returns pre-computed credentials for a username; passwords never reach the
+broker.
+
+```go
+lookup := mqttv5.SCRAMCredentialLookupFunc(
+    func(_ context.Context, username string) (*mqttv5.SCRAMCredentials, error) {
+        creds, ok := userStore[username]
+        if !ok {
+            return nil, nil
+        }
+        return creds, nil
+    },
+)
+
+auth := mqttv5.NewSCRAMAuthenticator(
+    lookup,
+    mqttv5.SCRAMHashSHA256,
+    mqttv5.SCRAMHashSHA512,
+)
+
+srv := mqttv5.NewServer(
+    mqttv5.WithListener(listener),
+    mqttv5.WithEnhancedAuth(auth),
+)
+```
+
+Compute and store credentials once when a user is created:
+
+```go
+salt, _ := mqttv5.GenerateSalt()
+creds := mqttv5.ComputeSCRAMCredentials(
+    mqttv5.SCRAMHashSHA256, "user-password", salt, 4096,
+)
+creds.Namespace = "team-alpha" // optional tenant assignment
+```
+
+See [SCRAM documentation](scram.md) for the full handshake, mechanism choice,
+and security properties.
+
 ### Authorization
 
 ```go

@@ -379,6 +379,267 @@ func GenerateSalt() ([]byte, error) {
 // ErrSCRAMInvalidCredentials is returned when SCRAM credentials are invalid.
 var ErrSCRAMInvalidCredentials = errors.New("invalid SCRAM credentials")
 
+// ErrSCRAMInvalidServerSignature is returned when the server-final-message
+// signature (v=...) does not match the value the client computed, indicating
+// the server cannot prove knowledge of the user's credentials.
+var ErrSCRAMInvalidServerSignature = errors.New("invalid SCRAM server signature")
+
+// ErrSCRAMProtocol is returned when the server sends a SCRAM message that
+// cannot be parsed or violates the protocol (wrong nonce, missing fields).
+var ErrSCRAMProtocol = errors.New("SCRAM protocol error")
+
+// clientScramStep tracks where the client is in the SCRAM exchange.
+type clientScramStep int
+
+const (
+	clientScramStepStart clientScramStep = iota
+	clientScramStepFinal
+	clientScramStepDone
+)
+
+// clientScramState carries data between client-side SCRAM exchanges.
+type clientScramState struct {
+	step                    clientScramStep
+	clientNonce             string
+	clientFirstBare         string
+	expectedServerSignature []byte
+}
+
+// ClientSCRAMAuthenticator implements client-side SCRAM enhanced authentication.
+// It handles all SCRAM protocol details; users only need to provide the hash
+// algorithm, username, and password. Supports SCRAM-SHA-1, SCRAM-SHA-256, and
+// SCRAM-SHA-512.
+//
+// The ServerSignature returned in the server-final-message is verified against
+// the value derived from the supplied password; a mismatch aborts the exchange.
+type ClientSCRAMAuthenticator struct {
+	hashType SCRAMHash
+	username string
+	password string
+	nonceFn  func() (string, error)
+}
+
+// NewClientSCRAMAuthenticator creates a client-side SCRAM authenticator that
+// announces a single mechanism in CONNECT.
+//
+// Examples:
+//
+//	NewClientSCRAMAuthenticator(SCRAMHashSHA256, "alice", "secret")
+//	NewClientSCRAMAuthenticator(SCRAMHashSHA512, "admin", "topsecret")
+//	NewClientSCRAMAuthenticator(SCRAMHashSHA1, "legacy", "legacypass")
+func NewClientSCRAMAuthenticator(hashType SCRAMHash, username, password string) *ClientSCRAMAuthenticator {
+	return &ClientSCRAMAuthenticator{
+		hashType: hashType,
+		username: username,
+		password: password,
+		nonceFn:  generateScramNonce,
+	}
+}
+
+// AuthMethod returns the SCRAM mechanism name (e.g., "SCRAM-SHA-256").
+func (c *ClientSCRAMAuthenticator) AuthMethod() string {
+	return c.hashType.String()
+}
+
+// AuthStart builds the client-first-message that goes into the CONNECT packet.
+func (c *ClientSCRAMAuthenticator) AuthStart(_ context.Context) (*ClientEnhancedAuthResult, error) {
+	if c.username == "" {
+		return nil, fmt.Errorf("scram: username is required")
+	}
+
+	clientNonce, err := c.nonceFn()
+	if err != nil {
+		return nil, err
+	}
+
+	clientFirstBare := fmt.Sprintf("n=%s,r=%s", c.username, clientNonce)
+	clientFirst := fmt.Sprintf("n,,%s", clientFirstBare)
+
+	return &ClientEnhancedAuthResult{
+		Done:     false,
+		AuthData: []byte(clientFirst),
+		State: &clientScramState{
+			step:            clientScramStepStart,
+			clientNonce:     clientNonce,
+			clientFirstBare: clientFirstBare,
+		},
+	}, nil
+}
+
+// AuthContinue handles the server-first-message and the server-final-message.
+func (c *ClientSCRAMAuthenticator) AuthContinue(_ context.Context, authCtx *ClientEnhancedAuthContext) (*ClientEnhancedAuthResult, error) {
+	state, ok := authCtx.State.(*clientScramState)
+	if !ok || state == nil {
+		return nil, fmt.Errorf("%w: missing state", ErrSCRAMProtocol)
+	}
+
+	switch state.step {
+	case clientScramStepStart:
+		return c.handleServerFirst(state, authCtx.AuthData)
+	case clientScramStepFinal:
+		return c.handleServerFinal(state, authCtx.AuthData)
+	case clientScramStepDone:
+		return nil, fmt.Errorf("%w: unexpected continuation after success", ErrSCRAMProtocol)
+	default:
+		return nil, fmt.Errorf("%w: unknown step", ErrSCRAMProtocol)
+	}
+}
+
+// handleServerFirst parses server-first-message, computes the client proof,
+// and emits client-final-message.
+func (c *ClientSCRAMAuthenticator) handleServerFirst(state *clientScramState, data []byte) (*ClientEnhancedAuthResult, error) {
+	serverFirst := string(data)
+	serverNonce, saltB64, iterations, err := parseScramServerFirst(serverFirst)
+	if err != nil {
+		return nil, err
+	}
+
+	if !strings.HasPrefix(serverNonce, state.clientNonce) {
+		return nil, fmt.Errorf("%w: server nonce does not extend client nonce", ErrSCRAMProtocol)
+	}
+
+	salt, err := base64.StdEncoding.DecodeString(saltB64)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid salt: %v", ErrSCRAMProtocol, err)
+	}
+
+	hashFunc := c.hashType.hashFunc()
+	keySize := c.hashType.keySize()
+
+	saltedPassword := pbkdf2.Key([]byte(c.password), salt, iterations, keySize, hashFunc)
+
+	clientKeyHMAC := hmac.New(hashFunc, saltedPassword)
+	clientKeyHMAC.Write([]byte("Client Key"))
+	clientKey := clientKeyHMAC.Sum(nil)
+
+	h := hashFunc()
+	h.Write(clientKey)
+	storedKey := h.Sum(nil)
+
+	// "biws" is the base64 of "n,," — the GS2 header without channel binding.
+	clientFinalWithoutProof := fmt.Sprintf("c=biws,r=%s", serverNonce)
+	authMessage := fmt.Sprintf("%s,%s,%s", state.clientFirstBare, serverFirst, clientFinalWithoutProof)
+
+	clientSigHMAC := hmac.New(hashFunc, storedKey)
+	clientSigHMAC.Write([]byte(authMessage))
+	clientSignature := clientSigHMAC.Sum(nil)
+
+	clientProof := make([]byte, len(clientKey))
+	for i := range clientKey {
+		clientProof[i] = clientKey[i] ^ clientSignature[i]
+	}
+
+	serverKeyHMAC := hmac.New(hashFunc, saltedPassword)
+	serverKeyHMAC.Write([]byte("Server Key"))
+	serverKey := serverKeyHMAC.Sum(nil)
+
+	serverSigHMAC := hmac.New(hashFunc, serverKey)
+	serverSigHMAC.Write([]byte(authMessage))
+	expectedServerSignature := serverSigHMAC.Sum(nil)
+
+	clientFinal := fmt.Sprintf("%s,p=%s", clientFinalWithoutProof, base64.StdEncoding.EncodeToString(clientProof))
+
+	state.step = clientScramStepFinal
+	state.expectedServerSignature = expectedServerSignature
+
+	return &ClientEnhancedAuthResult{
+		Done:     false,
+		AuthData: []byte(clientFinal),
+		State:    state,
+	}, nil
+}
+
+// handleServerFinal verifies the server signature from the server-final-message.
+func (c *ClientSCRAMAuthenticator) handleServerFinal(state *clientScramState, data []byte) (*ClientEnhancedAuthResult, error) {
+	serverSignature, err := parseScramServerFinal(string(data))
+	if err != nil {
+		return nil, err
+	}
+
+	if !hmac.Equal(serverSignature, state.expectedServerSignature) {
+		return nil, ErrSCRAMInvalidServerSignature
+	}
+
+	state.step = clientScramStepDone
+	state.expectedServerSignature = nil
+
+	return &ClientEnhancedAuthResult{
+		Done:  true,
+		State: state,
+	}, nil
+}
+
+// parseScramServerFirst extracts nonce, salt (base64), and iteration count from
+// the server-first-message: r=<nonce>,s=<salt>,i=<iterations>.
+func parseScramServerFirst(msg string) (nonce, saltB64 string, iterations int, err error) {
+	var hasNonce, hasSalt, hasIter bool
+	for _, part := range strings.Split(msg, ",") {
+		if len(part) < 2 {
+			continue
+		}
+		switch part[:2] {
+		case "r=":
+			nonce = part[2:]
+			hasNonce = true
+		case "s=":
+			saltB64 = part[2:]
+			hasSalt = true
+		case "i=":
+			iterations, err = parseScramIterations(part[2:])
+			if err != nil {
+				return "", "", 0, err
+			}
+			hasIter = true
+		}
+	}
+	if !hasNonce || !hasSalt || !hasIter {
+		return "", "", 0, fmt.Errorf("%w: server-first-message missing required field", ErrSCRAMProtocol)
+	}
+	if iterations <= 0 {
+		return "", "", 0, fmt.Errorf("%w: server-first-message iteration count must be positive", ErrSCRAMProtocol)
+	}
+	return nonce, saltB64, iterations, nil
+}
+
+// parseScramServerFinal extracts the server signature from server-final-message:
+// v=<signature> on success, or e=<error> on failure.
+func parseScramServerFinal(msg string) ([]byte, error) {
+	for _, part := range strings.Split(msg, ",") {
+		if len(part) < 2 {
+			continue
+		}
+		switch part[:2] {
+		case "v=":
+			sig, err := base64.StdEncoding.DecodeString(part[2:])
+			if err != nil {
+				return nil, fmt.Errorf("%w: invalid server signature encoding: %v", ErrSCRAMProtocol, err)
+			}
+			return sig, nil
+		case "e=":
+			return nil, fmt.Errorf("%w: server error: %s", ErrSCRAMProtocol, part[2:])
+		}
+	}
+	return nil, fmt.Errorf("%w: server-final-message missing v=", ErrSCRAMProtocol)
+}
+
+// parseScramIterations parses the iteration count from server-first-message.
+func parseScramIterations(s string) (int, error) {
+	if s == "" {
+		return 0, fmt.Errorf("%w: empty iteration count", ErrSCRAMProtocol)
+	}
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("%w: non-numeric iteration count %q", ErrSCRAMProtocol, s)
+		}
+		n = n*10 + int(r-'0')
+		if n > 1<<30 {
+			return 0, fmt.Errorf("%w: iteration count too large", ErrSCRAMProtocol)
+		}
+	}
+	return n, nil
+}
+
 // parseScramClientFirst extracts username and nonce from client-first-message.
 func parseScramClientFirst(msg string) (username, nonce string) {
 	for _, part := range strings.Split(msg, ",") {
