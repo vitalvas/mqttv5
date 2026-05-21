@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/vitalvas/mqttv5/compare/v0.7.0...v0.8.0) (2026-05-21)
+
+
+### Features
+
+* add client-side SCRAM enhanced authentication ([ae03f7b](https://github.com/vitalvas/mqttv5/commit/ae03f7bd8cd8c5faa41bcd15e547276a383473fc))
+
 ## [0.7.0](https://github.com/vitalvas/mqttv5/compare/v0.6.0...v0.7.0) (2026-05-09)
 
 
