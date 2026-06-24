@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.1](https://github.com/vitalvas/mqttv5/compare/v0.8.0...v0.8.1) (2026-06-24)
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/quic-go/quic-go to v0.60.0 ([5568194](https://github.com/vitalvas/mqttv5/commit/5568194a5bca03ae6a4b0b4ab7f9e8be28a67db0))
+* **deps:** update module github.com/vitalvas/kasper to v0.22.1 ([306bf86](https://github.com/vitalvas/mqttv5/commit/306bf86c303048b6e56d1dd6f932316095b515b1))
+* **deps:** update module golang.org/x/crypto to v0.53.0 ([196d355](https://github.com/vitalvas/mqttv5/commit/196d355b38c11d6ebf40c996228d2ed2a02ba948))
+* **deps:** update module golang.org/x/net to v0.56.0 ([f7f6969](https://github.com/vitalvas/mqttv5/commit/f7f69699c6a1357eb7be33a6375242bc32e2c70a))
+* update deps ([1743dde](https://github.com/vitalvas/mqttv5/commit/1743ddeb41c09c2e7bae9baf5595290328c2e3f4))
+
 ## [0.8.0](https://github.com/vitalvas/mqttv5/compare/v0.7.0...v0.8.0) (2026-05-21)
 
 
