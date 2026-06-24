@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/quic-go/quic-go v0.60.0
 	github.com/stretchr/testify v1.11.1
-	github.com/vitalvas/kasper v0.22.1
+	github.com/vitalvas/kasper v0.24.0
 	golang.org/x/crypto v0.53.0
 	golang.org/x/net v0.56.0
 	golang.org/x/time v0.15.0
