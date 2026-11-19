@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0](https://github.com/vitalvas/mqttv5/compare/v0.9.0...v1.0.0) (2026-11-19)
+
+
+### Miscellaneous Chores
+
+* release 1.0.0 ([abf7ad5](https://github.com/vitalvas/mqttv5/commit/abf7ad5aee16f85957173e4718ae535ba09af37e))
+
 ## [0.9.0](https://github.com/vitalvas/mqttv5/compare/v0.8.1...v0.9.0) (2026-11-19)
 
 
