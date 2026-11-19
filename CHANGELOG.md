@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/vitalvas/mqttv5/compare/v0.8.1...v0.9.0) (2026-11-19)
+
+
+### Features
+
+* migrate module path to go.vitalvas.com and target Go 1.27 ([797579a](https://github.com/vitalvas/mqttv5/commit/797579afac57eadf78218a1b2d7013188a2ec04d))
+
 ## [0.8.1](https://github.com/vitalvas/mqttv5/compare/v0.8.0...v0.8.1) (2026-06-24)
 
 
