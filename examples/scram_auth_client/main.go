@@ -4,7 +4,7 @@
 // SCRAM (Salted Challenge Response Authentication Mechanism) lets the client
 // prove knowledge of the password without ever sending it to the broker.
 // The broker, in turn, proves it knows the stored credentials by signing the
-// session — so authentication is mutual.
+// session - so authentication is mutual.
 //
 // Pair this example with the scram_auth_broker example to see the full
 // exchange in action.
@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 func main() {

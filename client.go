@@ -309,7 +309,7 @@ func (c *Client) connect(ctx context.Context) (bool, error) {
 			}
 		}
 
-		// Any other error — fail immediately
+		// Any other error - fail immediately
 		c.cancel()
 		return false, err
 	}
@@ -420,7 +420,7 @@ func (c *Client) tryConnectVersion(ctx context.Context, version ProtocolVersion)
 	// Initialize outbound packet size limit to our configured max
 	c.outboundMaxPacketSize = c.options.maxPacketSize
 
-	// Apply CONNACK properties (v5 only — v3.1.1 CONNACK has no properties)
+	// Apply CONNACK properties (v5 only - v3.1.1 CONNACK has no properties)
 	if version == ProtocolV5 {
 		if err := c.applyConnackProperties(connack); err != nil {
 			c.conn.Close()
@@ -1384,7 +1384,7 @@ func (c *Client) handleUnsuback(pkt *UnsubackPacket) {
 	// Release packet ID
 	_ = c.packetIDMgr.Release(pkt.PacketID)
 
-	// v3.1.1 UNSUBACK has no per-topic reason codes — treat all as success
+	// v3.1.1 UNSUBACK has no per-topic reason codes - treat all as success
 	if len(pkt.ReasonCodes) == 0 {
 		c.subscriptionsMu.Lock()
 		for _, filter := range filters {

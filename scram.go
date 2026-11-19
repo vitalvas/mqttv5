@@ -516,7 +516,7 @@ func (c *ClientSCRAMAuthenticator) handleServerFirst(state *clientScramState, da
 	h.Write(clientKey)
 	storedKey := h.Sum(nil)
 
-	// "biws" is the base64 of "n,," — the GS2 header without channel binding.
+	// "biws" is the base64 of "n,," - the GS2 header without channel binding.
 	clientFinalWithoutProof := fmt.Sprintf("c=biws,r=%s", serverNonce)
 	authMessage := fmt.Sprintf("%s,%s,%s", state.clientFirstBare, serverFirst, clientFinalWithoutProof)
 

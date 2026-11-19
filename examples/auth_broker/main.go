@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 func main() {

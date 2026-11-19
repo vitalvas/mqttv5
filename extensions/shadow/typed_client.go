@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 // ErrTypedClientClosed is returned when operations are attempted on a closed TypedClient.

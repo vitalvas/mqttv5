@@ -93,7 +93,7 @@ func decodePacketV311(reader io.Reader, header FixedHeader) (Packet, error) {
 		}
 		return pkt, pkt.Validate()
 	case PacketUNSUBACK:
-		// Skip Validate() — v3.1.1 UNSUBACK has no reason codes
+		// Skip Validate() - v3.1.1 UNSUBACK has no reason codes
 		if header.RemainingLength != 2 {
 			return nil, ErrProtocolViolation
 		}
@@ -378,7 +378,7 @@ func decodePublishV311(r io.Reader, header FixedHeader, p *PublishPacket) (int, 
 		p.PacketID = uint16(idBuf[0])<<8 | uint16(idBuf[1])
 	}
 
-	// No properties in v3.1.1 — remaining bytes are payload
+	// No properties in v3.1.1 - remaining bytes are payload
 	payloadLen := int(header.RemainingLength) - totalRead
 	if payloadLen > 0 {
 		p.Payload = make([]byte, payloadLen)
@@ -409,7 +409,7 @@ func encodePublishV311(w io.Writer, p *PublishPacket, maxSize uint32) (int, erro
 		buf.Write([]byte{byte(p.PacketID >> 8), byte(p.PacketID)})
 	}
 
-	// No properties — payload directly
+	// No properties - payload directly
 	buf.Write(p.Payload)
 
 	header := FixedHeader{
@@ -551,7 +551,7 @@ func decodeSubackV311(r io.Reader, header FixedHeader, p *SubackPacket) (int, er
 	}
 	p.PacketID = uint16(idBuf[0])<<8 | uint16(idBuf[1])
 
-	// No properties — return codes follow immediately
+	// No properties - return codes follow immediately
 	p.ReasonCodes = nil
 	for totalRead < int(header.RemainingLength) {
 		var rcBuf [1]byte
@@ -584,7 +584,7 @@ func encodeSubackV311(w io.Writer, p *SubackPacket) (int, error) {
 	var buf bytes.Buffer
 	buf.Write([]byte{byte(p.PacketID >> 8), byte(p.PacketID)})
 
-	// No properties — return codes directly
+	// No properties - return codes directly
 	for _, rc := range p.ReasonCodes {
 		buf.WriteByte(reasonCodeToV311SubReturn(rc))
 	}

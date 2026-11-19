@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 // mockServerClient implements ServerClient for testing.

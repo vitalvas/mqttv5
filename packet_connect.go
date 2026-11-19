@@ -276,7 +276,7 @@ func (p *ConnectPacket) Decode(r io.Reader, header FixedHeader) (int, error) {
 		return totalRead, ErrInvalidProtocolName
 	}
 
-	// Protocol Version — accept both v3.1.1 (4) and v5 (5)
+	// Protocol Version - accept both v3.1.1 (4) and v5 (5)
 	var versionBuf [1]byte
 	n, err = io.ReadFull(r, versionBuf[:])
 	totalRead += n

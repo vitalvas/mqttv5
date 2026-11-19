@@ -61,7 +61,7 @@ func readPacketV5(r io.Reader, maxSize uint32) (Packet, int, error) {
 	// Check max size - MQTT v5 Maximum Packet Size is total packet (fixed header + remaining).
 	// When the caller passes 0 ("no user-specified cap"), fall back to the
 	// default packet-size limit so that a malicious peer cannot force the
-	// server to allocate up to MaxPacketSizeProtocol (≈256MB) per packet.
+	// server to allocate up to MaxPacketSizeProtocol (~256MB) per packet.
 	effectiveMax := maxSize
 	if effectiveMax == 0 {
 		effectiveMax = MaxPacketSizeDefault

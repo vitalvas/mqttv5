@@ -1,7 +1,7 @@
 package filedelivery
 
 import (
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 // CheckAccess verifies whether a client is authorized to perform an action on a stream topic.

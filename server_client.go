@@ -21,8 +21,8 @@ type ServerClient struct {
 	topicAliases          *TopicAliasManager
 	qos1Tracker           *QoS1Tracker
 	qos2Tracker           *QoS2Tracker
-	flowControl           *FlowController // outbound flow control (server → client)
-	inboundFlowControl    *FlowController // inbound flow control (client → server)
+	flowControl           *FlowController // outbound flow control (server -> client)
+	inboundFlowControl    *FlowController // inbound flow control (client -> server)
 	properties            *ConnectPacket  // original connect properties
 	connected             atomic.Bool
 	cleanDisconnect       atomic.Bool // true if DISCONNECT packet was received

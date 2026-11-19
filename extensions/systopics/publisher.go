@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 // Publisher periodically publishes broker statistics to $SYS topics.

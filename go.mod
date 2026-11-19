@@ -1,21 +1,18 @@
-module github.com/vitalvas/mqttv5
+module go.vitalvas.com/mqttv5
 
-go 1.25.0
+go 1.27.0
 
 require (
-	github.com/quic-go/quic-go v0.60.0
-	github.com/stretchr/testify v1.11.1
-	github.com/vitalvas/kasper v0.24.0
-	golang.org/x/crypto v0.53.0
-	golang.org/x/net v0.56.0
-	golang.org/x/time v0.15.0
+	github.com/quic-go/quic-go v0.65.0
+	github.com/stretchr/testify v1.12.1
+	go.vitalvas.com/kasper v1.1.0
+	golang.org/x/crypto v0.59.0
+	golang.org/x/net v0.63.0
+	golang.org/x/time v0.16.0
 )
 
 require (
-	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/kr/text v0.2.0 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 )

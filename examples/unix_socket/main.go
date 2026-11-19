@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 const socketPath = "/tmp/mqtt_example.sock"

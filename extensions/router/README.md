@@ -5,7 +5,7 @@ Message router with MQTT wildcard support and conditional filtering.
 ## Installation
 
 ```bash
-go get github.com/vitalvas/mqttv5/extensions/router
+go get go.vitalvas.com/mqttv5/extensions/router
 ```
 
 ## Quick Start

@@ -3,7 +3,7 @@ package systopics
 import (
 	"strings"
 
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 const sysPrefix = "$SYS/"

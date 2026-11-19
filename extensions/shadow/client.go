@@ -3,7 +3,7 @@ package shadow
 import (
 	"encoding/json"
 
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 // MQTTClient defines the interface required for shadow client operations.

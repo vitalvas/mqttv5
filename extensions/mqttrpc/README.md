@@ -14,7 +14,7 @@ and response topic properties as defined in MQTT v5.0 specification Section 4.10
 ## Installation
 
 ```bash
-go get github.com/vitalvas/mqttv5/extensions/rpc
+go get go.vitalvas.com/mqttv5/extensions/rpc
 ```
 
 ## Usage
@@ -29,8 +29,8 @@ import (
     "fmt"
     "time"
 
-    "github.com/vitalvas/mqttv5"
-    "github.com/vitalvas/mqttv5/extensions/rpc" // package mqttrpc
+    "go.vitalvas.com/mqttv5"
+    "go.vitalvas.com/mqttv5/extensions/rpc" // package mqttrpc
 )
 
 func main() {
@@ -142,7 +142,7 @@ import (
     "encoding/json"
     "net"
 
-    "github.com/vitalvas/mqttv5"
+    "go.vitalvas.com/mqttv5"
 )
 
 func main() {

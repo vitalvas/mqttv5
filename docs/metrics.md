@@ -63,7 +63,7 @@ import (
     "net/http"
     "os"
 
-    "github.com/vitalvas/mqttv5"
+    "go.vitalvas.com/mqttv5"
 )
 
 func main() {
@@ -101,7 +101,7 @@ import (
     "net"
     "testing"
 
-    "github.com/vitalvas/mqttv5"
+    "go.vitalvas.com/mqttv5"
 )
 
 func TestWithMetrics(t *testing.T) {
@@ -147,7 +147,7 @@ import (
     "os"
     "strings"
 
-    "github.com/vitalvas/mqttv5"
+    "go.vitalvas.com/mqttv5"
 )
 
 func main() {
@@ -217,7 +217,7 @@ import (
 
     "github.com/prometheus/client_golang/prometheus"
     "github.com/prometheus/client_golang/prometheus/promhttp"
-    "github.com/vitalvas/mqttv5"
+    "go.vitalvas.com/mqttv5"
 )
 
 // mqttCollector dynamically collects all mqtt_ expvar metrics.

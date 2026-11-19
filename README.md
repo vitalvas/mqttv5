@@ -32,7 +32,7 @@ Implements the [MQTT Version 5.0](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqt
 ## Installation
 
 ```bash
-go get github.com/vitalvas/mqttv5
+go get go.vitalvas.com/mqttv5
 ```
 
 ## Quick Start
@@ -44,7 +44,7 @@ package main
 
 import (
     "fmt"
-    "github.com/vitalvas/mqttv5"
+    "go.vitalvas.com/mqttv5"
 )
 
 func main() {
@@ -80,7 +80,7 @@ package main
 import (
     "log"
     "net"
-    "github.com/vitalvas/mqttv5"
+    "go.vitalvas.com/mqttv5"
 )
 
 func main() {

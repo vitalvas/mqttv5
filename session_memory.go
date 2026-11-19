@@ -49,7 +49,7 @@ func NewMemorySession(clientID, namespace string) *MemorySession {
 
 // SetMaxQueue sets the per-queue cap. Zero disables the cap. The cap is
 // enforced separately for pending messages, QoS 1 inflight, and QoS 2
-// inflight — each queue may hold up to the cap.
+// inflight - each queue may hold up to the cap.
 func (s *MemorySession) SetMaxQueue(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

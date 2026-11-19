@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/vitalvas/kasper/websocket"
+	"go.vitalvas.com/kasper/websocket"
 )
 
 const (

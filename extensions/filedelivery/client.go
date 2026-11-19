@@ -10,7 +10,7 @@ import (
 	"hash/crc32"
 	"sync"
 
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 // ErrClientClosed is returned when operations are attempted on a closed Client.

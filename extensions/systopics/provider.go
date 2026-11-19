@@ -3,7 +3,7 @@ package systopics
 import (
 	"time"
 
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 // Broker defines the interface for reading broker statistics and publishing messages.

@@ -1288,7 +1288,7 @@ func (s *Server) clientLoop(client *ServerClient, logger Logger) {
 			}
 		}
 
-		// Disconnect callbacks — fired last so the client is fully torn down
+		// Disconnect callbacks - fired last so the client is fully torn down
 		// (removed from the server map AND its session has been reconciled)
 		// by the time observers see the signal.
 		for _, fn := range s.config.onDisconnect {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 // sanitizeTopicSegment percent-encodes MQTT-unsafe characters in a string

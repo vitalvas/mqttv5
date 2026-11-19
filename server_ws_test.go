@@ -13,7 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/vitalvas/kasper/websocket"
+	"go.vitalvas.com/kasper/websocket"
 )
 
 // encodePacket encodes an MQTT packet to bytes for WebSocket testing

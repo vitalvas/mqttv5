@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 // ServerClient defines the interface for server-side client interactions.

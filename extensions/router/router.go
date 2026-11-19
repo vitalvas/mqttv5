@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"sync"
 
-	"github.com/vitalvas/mqttv5"
+	"go.vitalvas.com/mqttv5"
 )
 
 // Handler processes an MQTT message.
